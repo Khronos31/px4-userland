@@ -1,16 +1,17 @@
 # Source provenance and rights record
 
-`px4-userland` was developed as a standalone product and is intended to become a standalone repository, but it
-currently remains in the GitHub fork network and contains derivative portions. This document preserves the
-engineering provenance that was previously visible partly through the GitHub fork relationship. It is not a
-legal opinion and does not replace the notices in individual source files or the terms in [`LICENSE`](LICENSE).
+`px4-userland` is an independent standalone repository containing derivative portions.
+This document preserves the engineering provenance that was previously visible partly through the GitHub
+fork relationship. It is not a legal opinion and does not replace the notices in individual source files or the
+terms in [`LICENSE`](LICENSE).
 
 ## Repository lineage
 
 - Direct source: [`tsukumijima/px4_drv`](https://github.com/tsukumijima/px4_drv), snapshot commit
   `9eedea8c502875a788697984b93b50032339b9aa`.
 - Original upstream: [`nns779/px4_drv`](https://github.com/nns779/px4_drv).
-- Current product: `Khronos31/px4-userland`, intended standalone Linux/Android/macOS userland product for PLEX PX-Q3U4.
+- Current product: `Khronos31/px4-userland`, an independent standalone repository for a Linux/Android/macOS userland
+  product for PLEX PX-Q3U4.
 - License for this project and its derivative portions: [`GPL-2.0-only`](LICENSE).
 
 Git author names and commit history are evidence about repository activity; they are not, by themselves, a list of
@@ -81,6 +82,9 @@ no evidence that its SHA-256 representation was transcribed from the legacy `dri
 technical claim is limited to the standard FIPS SHA-256 constants and processing.
 
 ## Fork-network separation
+
+GitHub fork-network separation is complete: `Khronos31/px4-userland` is an independent repository with no parent
+relationship, and `main` is its default branch.
 
 Removing the GitHub fork relationship does not change copyright, license, derivative-work, or corresponding-source
 obligations. The fork badge is provenance metadata, not a substitute for file notices, this mapping, `LICENSE`, or
