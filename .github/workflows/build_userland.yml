@@ -1,0 +1,91 @@
+# SPDX-License-Identifier: GPL-2.0-only
+name: portable userland foundation
+
+on:
+  pull_request:
+    paths:
+      - CMakeLists.txt
+      - userland/**
+      - scripts/**
+      - .github/workflows/build_userland.yml
+  push:
+    paths:
+      - CMakeLists.txt
+      - userland/**
+      - scripts/**
+      - .github/workflows/build_userland.yml
+  workflow_dispatch:
+
+jobs:
+  ubuntu-glibc:
+    name: Ubuntu glibc
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y cmake ninja-build g++ pkg-config libusb-1.0-0-dev
+      - name: Build and test
+        run: |
+          cmake -S . -B build-userland -G Ninja -DPX4_BUILD_TESTS=ON
+          cmake --build build-userland
+          ctest --test-dir build-userland --output-on-failure
+
+  alpine-musl:
+    name: Alpine musl
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test in Alpine
+        run: >-
+          docker run --rm
+          -v "$GITHUB_WORKSPACE:/src"
+          -w /src
+          alpine:3.20
+          sh -euxc
+          'apk add --no-cache cmake ninja-build g++ pkgconf libusb-dev;
+          cmake -S . -B build-userland -G Ninja -DPX4_BUILD_TESTS=ON;
+          cmake --build build-userland;
+          ctest --test-dir build-userland --output-on-failure'
+
+  macos:
+    name: macOS
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Ninja
+        run: brew install ninja libusb pkgconf
+      - name: Build and test
+        run: |
+          export PKG_CONFIG_PATH="$(brew --prefix libusb)/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+          cmake -S . -B build-userland -G Ninja -DPX4_BUILD_TESTS=ON
+          cmake --build build-userland
+          ctest --test-dir build-userland --output-on-failure
+
+  android-api-24:
+    name: Android API 24 compile checks
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: aarch64
+            abi: arm64-v8a
+          - name: armv7a
+            abi: armeabi-v7a
+    steps:
+      - uses: actions/checkout@v4
+      - uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r27d
+          add-to-path: false
+      - name: Install Android build tools
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y cmake ninja-build
+      - name: Build Android px4-ts-probe
+        env:
+          ABI: ${{ matrix.abi }}
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          work="$(mktemp -d /tmp/px4-userland-android-XXXXXX)"
+          trap 'find "$work" -depth -delete' EXIT
+          scripts/build-android.sh --abi "$ABI" --output "$work/output"

@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# px4-userland pcsc-lite reader template. Replace all @...@ placeholders.
+FRIENDLYNAME "PLEX PX-Q3U4 Internal Card Reader"
+DEVICENAME   px4-userland:runtime=@PX4_RUNTIME_DIR@:device=@PX4_BASE_SERIAL@:access=user
+LIBPATH      @PX4_IFD_LIBRARY@
+CHANNELID    0
