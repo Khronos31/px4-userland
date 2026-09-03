@@ -1,33 +1,14 @@
-.tmp_versions/
-Module.symvers
-modules.order
+# General compiler artifacts
 *.o
-*.rc
-*.ko
-*.o.cmd
-*.ko.cmd
-*.symvers.cmd
-*.mod.cmd
-*.mod
-*.mod.c
-*.mod.o
+*.a
+*.so
+*.d
 
-/driver/revision.h
-/fwtool/fwtool
-
-fwtool/*.bin
-*.sys
-*.zip
-
-*.obj
-*.exe
-*.deb
-
+# IDE and local settings
 .vscode/
-!.vscode/c_cpp_properties.json
 /.vs/
-
 .codex*
 
+# CMake and Android build output
 /build-userland*/
 /build-android-*/

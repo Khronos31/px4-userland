@@ -1,12 +1,13 @@
 # px4-userland 仕様
 
-Status: Frozen v0.4 (2026-09-03)
+Status: Frozen v0.5 (2026-09-03)
 
 本書の`MUST`、`MUST NOT`、`SHOULD`は規範要件を示す。実機観測で前提の誤りが判明した場合も暗黙に
 実装だけを変えず、本書のversionと変更理由を更新してから実装する。
 
-v0.4では製品対象をLinux（カーネルドライバを導入できない環境を含む）、AndroidのTermuxおよびAPK経路、
-macOSへ限定した。Windows runtime、adapter、実機受入、配布物、Windows build-only gateは対象から外した。
+v0.5では、GPL/LGPLのrelease contractを明確化し、v0.4からのlegacy source cleanupを完了した。製品対象は
+Linux（カーネルドライバを導入できない環境を含む）、AndroidのTermuxおよびAPK経路、macOSに限定する。Windows
+runtime、adapter、実機受入、配布物、Windows build-only gateは対象から外した。
 対象に残る4 runtime経路では、Q3U4のチューナーと内蔵カードリーダーの両方を成立条件とする。
 
 ## 1. Objective
@@ -371,7 +372,17 @@ queue overflow、sync/TEI/drop検出を0にしない。stdoutはTSだけ、全�
 - ad-hoc APKはUSB permission、2 fdの対応付け、8 receiver、card APDU、detach/reconnectを検証できればよく、
   製品UI、自動更新、配布署名、ストア公開を要件にしない。APKはrelease artifactへ含めない。
 
-### 7.3 macOS
+### 7.3 Linux/macOS native linkage
+
+- Linux/macOSのrelease binaryは、host-provided dynamic libusbおよびsystem PC/SC依存を意図する。Linux releaseは
+  Siano-styleのmusl-dynamic artifactとし、既存のglibc native buildはCI/dev用に限定する。
+- Linux x86_64 musl ELFは`readelf -l`/`readelf -d`で、interpreterが`/lib/ld-musl-x86_64.so.1`、`NEEDED`に
+  `libusb-1.0.so.0`と`libc.musl-x86_64.so.1`があることを検証する。macOS Mach-Oは`otool -L`でhost-provided
+  dynamic libusbを検証し、各出力をrelease evidenceへ保存する。staticになっていたbinaryはdynamic releaseとして出さない。
+- libusb、pcsc-lite、その他のhost dependencyをstaticまたはbundleした場合は、Androidと同等のexact source、license、
+  notice、build/relink obligationsへ切り替える。
+
+### 7.4 macOS
 
 - libusbで列挙・claimできることを前提とし、DriverKit/kextを要求しない。
 - hardware未確認の場合はrelease metadataへ明記する。
@@ -386,17 +397,16 @@ queue overflow、sync/TEI/drop検出を0にしない。stdoutはTSだけ、全�
 - unit/integration/hardware test tools
 - CMake、CI、license、README、仕様・検証記録
 
-v0.4のscope cleanupでは旧Windows専用source、build、package、試験記録とfirmware extraction projectを削除した。
-参照由来は9節に残し、削除したsourceの復元点はfork初期commit `9eedea8c502875a788697984b93b50032339b9aa`とする。
+v0.5のscope cleanupでは旧Windows専用source、build、package、試験記録とfirmware extraction projectを削除した。
+参照由来は9節に残し、削除したsourceはdirect sourceの`tsukumijima/px4_drv` snapshot commit
+`9eedea8c502875a788697984b93b50032339b9aa`から復元できる。
 
-以下はportable replacementの検証後に別incrementで削除する。
+以下はv0.5で削除済みであり、repository end stateに含めない。
 
 - Linux kernel module、chardev、ioctl ABI、DKMS、Debian DKMS package
 - tracked firmware、firmwareを含むpackage素材
 - Q3U4以外のdevice implementationとpackage definition
 - 旧px4_drvの導入文書、kernel build文書、非対象機種の利用文書
-
-削除は機能抽出より先に行わない。各portable replacementの自動試験または実機試験がgreenになった単位で削除する。
 
 ## 9. Prior-art classification
 
@@ -496,8 +506,30 @@ TermuxとAPKは同一ハードウェアでも別runtime経路として個別に�
 | `px4-userland-<version>-android-armv7a.tar.gz` | Android API 24+、Bionic armv7a、Termux/Google TV用 |
 
 各archiveは該当platformの`px4d`、`px4-ts`、`px4ctl`、利用可能なnative card adapter、GPL license、READMEを含む。
-Android版libusbはstatic linkとし、Linux musl archiveをAndroid用として流用しない。firmware、APK、HAOS add-on、
-mirakcはどのrelease artifactにも含めない。glibc Linux buildはCI対象だが、別archiveとして配布しない。
+Android版libusbはstatic linkとし、Linux artifactはmusl-dynamic/Siano-style（musl runtime loader + shared libusb）、
+macOSはhost-provided dynamic dependencyを意図する。firmware、APK、HAOS add-on、mirakcはどのrelease artifactにも
+含めない。Linux/musl static releaseは将来の別artifactであり、現行の一般releaseには含めない。glibc native buildは
+CI/dev用であり、Linux release artifactではない。
+
+Android binary release gateは次の全項目を満たすまで未完成とする。
+
+1. 各Android binary archiveのrootにGPL license (`LICENSE`)、libusb LGPL license/COPYING、static libusb 1.0.28と
+   NDK runtimeを明示するprominent plain-text notice、`THIRD_PARTY_NOTICES.md`、`README.md`を含める。
+2. 同じGitHub Release pageにcorresponding-source archiveをbinary archiveと同行させ、exact px4-userland source、
+   binaryに使ったexact libusb source、各sourceの検証hash、build/relink instructionsを含める。GitHub自動source
+   archiveだけでは、downloaded libusb sourceがないためこの要件を満たさない。
+3. Android static libusbはLGPL-2.1-or-laterのままとし、LGPL-2.1 §6(d) routeで、同じ場所から§6(a)のsource-and-relink
+   materialsへアクセスできるようにする。完全なGPL-2.0-only px4-userland sourceから再ビルドできるため、application
+   `.o`をrelinkable deliverableとして別途必須とはしない。
+   libusbをLGPL §3によりGPL化したとは主張しない。
+4. NDK r27の`libc++_static`/`libc++abi`について、Apache-2.0 WITH LLVM-exceptionのterms、`NOTICE`、
+   `NOTICE.toolchain`をreleaseへ含め、実際にlinkされたarchive member inventoryをartifactごとに保存する。
+5. Linux/macOS binaryは、それぞれ`readelf -d`/`otool -L`でdynamic libusbを検証する。staticまたはbundleされた
+   dependencyがあれば、Android同等のexact source/license/notice/build obligationsへ切り替える。
+6. Future Linux/musl static releaseは、使用した各dependencyのexact source、license text、notice、build instructions
+   とstatic member inventoryをreleaseへ含める。これは現行Android gateとは別の将来release gateである。
+
+このgateは現時点で未実装であり、`px4-userland`の一般releaseは未完成である。
 
 ## 11. Implementation increments
 
@@ -520,7 +552,7 @@ mirakcはどのrelease artifactにも含めない。glibc Linux buildはCI対象
 - 実機試験は既存PX-S1UD/mirakc/EPGStationの稼働経路を変更しない隔離コマンドで行う。
 - HA Core、アドオン、mirakcを自動で再起動しない。
 - 既存テストを変更して失敗を隠さない。
-- 実装はLunaが行い、Solが仕様、increment、acceptance、diff、test evidenceをレビューする。
 
 実装失敗時は、作業branchを破棄せず失敗証拠を保存し、直前のgreen commitへ戻す。
-fork開始時点の完全な復元点は`9eedea8c502875a788697984b93b50032339b9aa`であり、削除したlegacy sourceはgit履歴から復元できる。
+削除したlegacy sourceは、direct sourceの`tsukumijima/px4_drv` snapshot commit
+`9eedea8c502875a788697984b93b50032339b9aa`から復元できる。

@@ -20,14 +20,12 @@
 - Preserve glibc, musl, Bionic API 24+, and macOS portability. Keep platform APIs outside the portable core.
 - Use fixed-width integers and checked lengths at USB, firmware, IPC, ATR, APDU, and TS boundaries.
 - Preserve existing tests. Do not change expectations, fixtures, mocks, or skips merely to make a failure pass; add tests for new behavior.
-- Do not delete the remaining legacy Linux kernel/DKMS/package tree until its portable replacement is green and a separate cleanup increment explicitly authorizes deletion.
+- Do not reintroduce Linux kernel modules, chardev/ioctl interfaces, DKMS/Debian packaging, legacy udev rules, Windows artifacts, or non-Q3U4 implementations.
 - Physical USB changes, card insertion/removal, antenna changes, power changes, and other hardware operations require user confirmation before execution.
 - Preserve existing dirty-tree work. Use `apply_patch` for edits and do not reset, checkout, or broadly reformat unrelated files.
 - Do not run `git add`, `git commit`, or `git push` unless the user explicitly requests that operation.
 - Create public issues only for unresolved problems known at publication time; do not create preventive placeholder issues.
 
-## Agent coordination
+## Handoff requirements
 
-- Luna implements bounded increments; Sol owns orchestration, specification review, and hardware-operation coordination.
-- Luna reports required physical actions to Sol and waits. Luna must not run `beep`, `vibe`, `zap`, or other user notifications.
 - Report changed files, commands run, results, and unverified scope at the end of each increment.

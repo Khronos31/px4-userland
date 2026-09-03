@@ -1,9 +1,11 @@
 # px4-userland
 
-`px4-userland`は、PLEX PX-Q3U4の8チューナーと内蔵ICカードリーダーを、カーネルモジュールなしで扱うための
-libusbベースのユーザー空間実装です。現在は開発中であり、一般向けreleaseはまだ完成していません。
+PLEX PX-Q3U4（`0511:084a`）の8チューナーと内蔵ICカードリーダーを、カーネルモジュールなしで扱うlibusbベースの
+ユーザー空間実装です。現在は開発中で、一般向けreleaseは未完成です。
 
-対応機種はPX-Q3U4 (`0511:084a`) だけです。チップやUSB IDが近い他製品は、動作しても未確認・非対応として扱います。
+対象はLinux、Android/Termux、Androidのad-hoc試験経路、macOSです。Windowsはここではサポートしていません。
+Windows利用者は、Windows対応の事実上の標準である[`tsukumijima/px4_drv`](https://github.com/tsukumijima/px4_drv)を
+利用してください。これは別製品・別interfaceであり、px4-userlandのCLI/IPC/configとは互換性がありません。
 
 ## Target matrix
 
@@ -15,24 +17,12 @@ libusbベースのユーザー空間実装です。現在は開発中であり�
 | macOS | development | tuner + internal card reader |
 | Windows | unsupported | Use [`tsukumijima/px4_drv`](https://github.com/tsukumijima/px4_drv) |
 
-Windows向けの`tsukumijima/px4_drv`は別製品・別interfaceです。`px4-userland`のCLI、IPC、設定との互換代替ではありません。
+Android binary releaseのsource、notice、static/dynamic dependency検証ゲートは
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)に定義しています。一般向けreleaseは、このengineering distribution
+contractを満たす対応するsource archiveと検証記録が揃うまで行いません。
 
-Android APKはAndroid USB Host経路の実機検証に使うad-hoc試験器具であり、`px4-userland`の配布物には含めません。
+IT930x firmwareは同梱しません。利用者が別途用意したfirmware pathをruntimeで指定します。ダウンロード、抽出、変換は
+プロジェクトの対象外です。
 
-## Firmware
-
-IT930x firmwareはライセンスを確認できないため、ソース、archive、release artifactへ同梱しません。
-runtimeでは利用者が別途用意したfirmware pathを明示します。ダウンロード、vendor driverからの抽出、変換も
-このプロジェクトの対象外です。
-
-## Development
-
-固定仕様と受入条件は[SPEC.md](SPEC.md)を参照してください。portable coreはC++17、USB accessはlibusb-1.0、
-local IPCはfilesystem Unix domain socketを使用します。Linux/glibc、Linux/musl、Android/Bionic、macOSを対象とし、
-Q3U4のtunerとinternal card readerを同じ長寿命processから所有する構成です。
-
-## License and provenance
-
-License: [GPL-2.0-only](LICENSE). Source derivation and file-level notices are recorded in
-[PROVENANCE.md](PROVENANCE.md); third-party and release-bundle obligations are tracked in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+仕様と受入条件は[SPEC.md](SPEC.md)、GPL-2.0-onlyは[LICENSE](LICENSE)、source derivationとfile-level noticesは
+[PROVENANCE.md](PROVENANCE.md)に記録しています。
