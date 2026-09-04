@@ -585,6 +585,20 @@ Result<void> It930xController::write_register(std::uint32_t reg, std::uint8_t va
     return write_registers(reg, ByteView{&value, 1U});
 }
 
+Result<void> It930xController::set_q3u4_lnb_power(bool on) noexcept
+{
+    std::lock_guard<std::mutex> lock(transaction_mutex_);
+    if (q3u4_lnb_disconnected_) {
+        return Result<void>::failure(Error::DISCONNECTED);
+    }
+    const auto result = write_q3u4_register_locked(
+        static_cast<std::uint32_t>(Q3U4Register::gpio11_output), on ? 1U : 0U);
+    if (!result && result.error() == Error::DISCONNECTED) {
+        q3u4_lnb_disconnected_ = true;
+    }
+    return result;
+}
+
 Result<void> It930xController::initialize_card_uart() noexcept
 {
     std::lock_guard<std::mutex> lock(transaction_mutex_);
@@ -838,6 +852,16 @@ Result<void> It930xController::set_q3u4_backend_power(bool on, Q3U4Delay& delay)
 {
     std::lock_guard<std::mutex> lock(transaction_mutex_);
     const auto requested_state = on ? Q3U4BackendPowerState::on : Q3U4BackendPowerState::off;
+    const auto terminal_disconnect = [this](const Result<void>& result) noexcept {
+        if (!result && result.error() == Error::DISCONNECTED) {
+            q3u4_backend_power_state_ = Q3U4BackendPowerState::disconnected;
+            return true;
+        }
+        return false;
+    };
+    if (q3u4_backend_power_state_ == Q3U4BackendPowerState::disconnected) {
+        return Result<void>::failure(Error::DISCONNECTED);
+    }
     if (q3u4_backend_power_state_ == requested_state) {
         return Result<void>::success();
     }
@@ -845,12 +869,21 @@ Result<void> It930xController::set_q3u4_backend_power(bool on, Q3U4Delay& delay)
     if (on) {
         const auto reset = write_q3u4_register_locked(Q3U4Register::gpio7_output, 0U);
         if (!reset) {
+            if (terminal_disconnect(reset)) {
+                return Result<void>::failure(Error::DISCONNECTED);
+            }
             // A failed transaction may have reached the device before its
             // response failed, so restore both lines even for this first step.
             const auto cleanup_backend =
                 write_q3u4_register_locked(Q3U4Register::gpio2_output, 0U);
+            if (terminal_disconnect(cleanup_backend)) {
+                return Result<void>::failure(Error::DISCONNECTED);
+            }
             const auto cleanup_reset =
                 write_q3u4_register_locked(Q3U4Register::gpio7_output, 1U);
+            if (terminal_disconnect(cleanup_reset)) {
+                return Result<void>::failure(Error::DISCONNECTED);
+            }
             q3u4_backend_power_state_ =
                 cleanup_backend && cleanup_reset ? Q3U4BackendPowerState::off
                                                   : Q3U4BackendPowerState::unknown;
@@ -860,10 +893,19 @@ Result<void> It930xController::set_q3u4_backend_power(bool on, Q3U4Delay& delay)
 
         const auto backend = write_q3u4_register_locked(Q3U4Register::gpio2_output, 1U);
         if (!backend) {
+            if (terminal_disconnect(backend)) {
+                return Result<void>::failure(Error::DISCONNECTED);
+            }
             const auto cleanup_backend =
                 write_q3u4_register_locked(Q3U4Register::gpio2_output, 0U);
+            if (terminal_disconnect(cleanup_backend)) {
+                return Result<void>::failure(Error::DISCONNECTED);
+            }
             const auto cleanup_reset =
                 write_q3u4_register_locked(Q3U4Register::gpio7_output, 1U);
+            if (terminal_disconnect(cleanup_reset)) {
+                return Result<void>::failure(Error::DISCONNECTED);
+            }
             q3u4_backend_power_state_ =
                 cleanup_backend && cleanup_reset ? Q3U4BackendPowerState::off
                                                   : Q3U4BackendPowerState::unknown;
@@ -877,16 +919,25 @@ Result<void> It930xController::set_q3u4_backend_power(bool on, Q3U4Delay& delay)
     Error first_error = Error::OK;
     const auto backend = write_q3u4_register_locked(Q3U4Register::gpio2_output, 0U);
     if (!backend) {
+        if (terminal_disconnect(backend)) {
+            return Result<void>::failure(Error::DISCONNECTED);
+        }
         first_error = backend.error();
     }
     // GPIO 7 is the reset/standby line and is always restored, even if GPIO 2
     // failed.  GPIO 11 is intentionally not part of backend power control.
     const auto reset = write_q3u4_register_locked(Q3U4Register::gpio7_output, 1U);
+    if (terminal_disconnect(reset)) {
+        return Result<void>::failure(Error::DISCONNECTED);
+    }
     if (first_error == Error::OK && !reset) {
         first_error = reset.error();
     }
-    q3u4_backend_power_state_ = first_error == Error::OK ? Q3U4BackendPowerState::off
-                                                          : Q3U4BackendPowerState::unknown;
+    q3u4_backend_power_state_ = first_error == Error::OK
+                                     ? Q3U4BackendPowerState::off
+                                     : (first_error == Error::DISCONNECTED
+                                            ? Q3U4BackendPowerState::disconnected
+                                            : Q3U4BackendPowerState::unknown);
     return first_error == Error::OK ? Result<void>::success()
                                     : Result<void>::failure(first_error);
 }
@@ -1111,6 +1162,7 @@ Result<FirmwareLoadResult> It930xController::initialize_q3u4(
             return Result<FirmwareLoadResult>::failure(verified.error());
         }
         q3u4_backend_power_state_ = Q3U4BackendPowerState::off;
+        q3u4_lnb_disconnected_ = false;
         return Result<FirmwareLoadResult>::success(FirmwareLoadResult{true, version.value(), true});
     }
     const auto loaded = load_firmware_image_locked(image);
@@ -1126,6 +1178,7 @@ Result<FirmwareLoadResult> It930xController::initialize_q3u4(
         return Result<FirmwareLoadResult>::failure(verified.error());
     }
     q3u4_backend_power_state_ = Q3U4BackendPowerState::off;
+    q3u4_lnb_disconnected_ = false;
     return Result<FirmwareLoadResult>::success(
         FirmwareLoadResult{loaded.value().already_loaded, loaded.value().firmware_version, true});
 }

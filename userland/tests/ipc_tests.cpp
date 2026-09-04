@@ -936,6 +936,18 @@ bool test_malformed_payloads()
     CHECK(!expect_valid_payload(MessageType::TUNE, MessageKind::request,
                                 "00 00 00 00 00 00 00 00 03 00 00 00 00 00 00 00 00 "
                                 "ff ff ff ff 80 8d 5b 00 00 88 13 00 00"));
+    const auto semantic_tune = bytes(
+        "00 00 00 00 00 00 00 00 01 50 c3 00 00 00 00 00 00 "
+        "ff ff ff ff 00 00 00 00 00 63 00 00 00");
+    // Semantic-invalid fields are deliberately accepted by the wire codec;
+    // TunerService returns INVALID_ARGUMENT while keeping the connection.
+    CHECK(decode_tune_request_payload(view(semantic_tune)));
+    CHECK(validate_payload(MessageType::TUNE, MessageKind::request,
+                           view(semantic_tune)));
+    const auto wire_invalid_lnb = bytes(
+        "00 00 00 00 00 00 00 00 01 50 c3 00 00 00 00 00 00 "
+        "ff ff ff ff 00 00 00 00 01 64 00 00 00");
+    CHECK(!decode_tune_request_payload(view(wire_invalid_lnb)));
     CHECK(!expect_valid_payload(MessageType::CARD_CONNECT, MessageKind::request, "03"));
     CHECK(!expect_valid_payload(MessageType::CARD_RECONNECT, MessageKind::request,
                                 "00 00 00 00 00 00 00 00 01 02"));

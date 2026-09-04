@@ -5,8 +5,14 @@
 #include "px4/firmware.h"
 #include "px4/it930x.h"
 #include "px4/libusb_transport.h"
+#include "px4/posix_tuner_nonce.h"
+#include "px4/q3u4_stream.h"
+#include "px4/tuner_service.h"
 
 #include "q3u4_frontend.h"
+#include "q3u4_lnb_power.h"
+#include "q3u4_card_backend.h"
+#include "q3u4_tuner_backend.h"
 #include "q3u4_power.h"
 #include "px4d_args.h"
 
@@ -36,9 +42,11 @@ void usage() noexcept
     std::printf(
         "usage:\n"
         "  px4d --device BASE_SERIAL --firmware PATH "
-        "[--runtime-dir PATH] [--group]\n"
+        "[--runtime-dir PATH] [--group] [--allow-lnb-power]\n"
         "  px4d --fd FD --fd FD [--device BASE_SERIAL] --firmware PATH "
-        "[--runtime-dir PATH] [--group]\n");
+        "[--runtime-dir PATH] [--group] [--allow-lnb-power]\n"
+        "\n"
+        "  --allow-lnb-power  permit explicit ISDB-S 15 V requests; default off\n");
 }
 
 int exit_status(Error error) noexcept
@@ -65,7 +73,9 @@ int exit_status(Error error) noexcept
     return 70;
 }
 
-class DaemonTime final : public CardTime, public Q3U4Delay {
+class DaemonTime final : public CardTime,
+                         public Q3U4FrontendDelay,
+                         public TunerServiceTime {
 public:
     std::uint64_t monotonic_ms() noexcept override
     {
@@ -78,34 +88,6 @@ public:
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(milliseconds));
     }
-};
-
-class DeviceOneCardBackend final : public CardServiceBackend {
-public:
-    DeviceOneCardBackend(It930xController& controller,
-                         It930xBackendPower& power,
-                         Q3U4Delay& delay) noexcept
-        : controller_(controller), power_(power), delay_(delay)
-    {
-    }
-
-    Result<void> set_power(bool on) noexcept override
-    {
-        return power_.set_backend_power(on, delay_);
-    }
-    Result<void> initialize_uart() noexcept override
-    {
-        return controller_.initialize_card_uart();
-    }
-    Result<bool> detect_card() noexcept override
-    {
-        return controller_.detect_card();
-    }
-
-private:
-    It930xController& controller_;
-    It930xBackendPower& power_;
-    Q3U4Delay& delay_;
 };
 
 bool install_signal_handlers() noexcept
@@ -179,12 +161,33 @@ int main(int argc, char** argv)
     }
 
     DaemonTime time;
+    It930xBridgeI2cMaster dev1_i2c(dev1);
+    It930xBridgeI2cMaster dev2_i2c(dev2);
     It930xBackendPower dev1_power(dev1);
-    DeviceOneCardBackend backend(dev1, dev1_power, time);
+    It930xBackendPower dev2_power(dev2);
+    It930xPsbPurger dev1_purger(dev1);
+    It930xPsbPurger dev2_purger(dev2);
+    Q3U4FrontendEnclosure enclosure(dev1_i2c, dev2_i2c, dev1_power,
+                                    dev2_power, time, &dev1_purger, &dev2_purger);
+    Q3U4CardBackend backend(dev1, enclosure);
     It930xCardHardware card_hardware(dev1);
     CardSession card_session(card_hardware, time);
     NativeCardProtocolSession protocol(card_session);
     CardService card_service(backend, protocol);
+    It930xLnbPower dev1_lnb(dev1);
+    It930xLnbPower dev2_lnb(dev2);
+    Q3U4LnbPowerCoordinator lnb_power(
+        dev1_lnb, dev2_lnb, arguments.allow_lnb_power);
+    Q3U4FrontendTunerBackend tuner_backend(enclosure, lnb_power);
+    PosixTunerNonceSource nonce_source;
+    const auto stream = Q3U4StreamDataPlane::create(runtime.value()->dev1(),
+                                                    runtime.value()->dev2());
+    if (!stream) {
+        std::fprintf(stderr, "stream data plane: %s\n", error_string(stream.error()));
+        return exit_status(stream.error());
+    }
+    TunerService tuner_service(tuner_backend, nonce_source, time, nullptr, nullptr,
+                               stream.value().get());
 
     const char* runtime_directory = arguments.runtime_directory.empty() ?
                                         nullptr : arguments.runtime_directory.c_str();
@@ -192,7 +195,8 @@ int main(int argc, char** argv)
         runtime_directory, base_serial.c_str(), kControlEndpointName,
         arguments.group ? EndpointAccess::shared_group : EndpointAccess::private_user};
     auto server = PosixControlServer::create(
-        endpoint, card_service, base_serial, true, 0x03U);
+        endpoint, card_service, tuner_service, base_serial, true, 0x03U,
+        stream.value().get());
     if (!server) {
         std::fprintf(stderr, "control endpoint: %s\n", error_string(server.error()));
         return exit_status(server.error());

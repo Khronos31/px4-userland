@@ -356,7 +356,7 @@ bool test_acceptance()
     sink.selected_packets = 2000U;
     sink.selected_bytes = 2000U * TaggedTsDemux::kPacketSize;
     sink.output_bytes = sink.selected_bytes;
-    TaggedTsDemux::Counters demux{sink.output_bytes, 2000U, 17U, 0U, 751U};
+    TaggedTsDemux::Counters demux{sink.output_bytes, 2000U, 17U, 0U, 0U, 751U};
     const auto accepted = evaluate_ts_probe_acceptance(2U, sink, demux);
     TS_PROBE_CHECK(accepted.accepted && accepted.failure_count == 0U);
 
@@ -367,7 +367,7 @@ bool test_acceptance()
     satellite_sink.output_bytes = satellite_sink.selected_bytes;
     const auto satellite_accepted = evaluate_ts_probe_acceptance(
         2U, satellite_sink,
-        TaggedTsDemux::Counters{satellite_sink.output_bytes, 2000U, 0U, 0U, 0U}, 0U);
+        TaggedTsDemux::Counters{satellite_sink.output_bytes, 2000U, 0U, 0U, 0U, 0U}, 0U);
     TS_PROBE_CHECK(satellite_accepted.accepted);
 
     Writer satellite_writer;

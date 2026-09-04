@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "px4/control_client.h"
+#include "px4ctl_format.h"
 
 #include <array>
 #include <charconv>
@@ -325,18 +326,8 @@ int main(int argc, char** argv)
             if (!decoded) {
                 operation_error = decoded.error();
             } else {
-                std::printf("serial=%.*s ready=%s usb-present-mask=0x%02x\n",
-                            static_cast<int>(decoded.value().serial_utf8.size),
-                            reinterpret_cast<const char*>(decoded.value().serial_utf8.data),
-                            decoded.value().ready != 0U ? "yes" : "no",
-                            static_cast<unsigned int>(decoded.value().usb_present_mask));
-                for (const ReceiverRecord& receiver : decoded.value().receivers) {
-                    std::printf("receiver=%u device=%u local=%u system=%s state=free\n",
-                                static_cast<unsigned int>(receiver.global_id),
-                                static_cast<unsigned int>(receiver.dev_id),
-                                static_cast<unsigned int>(receiver.local_id),
-                                receiver.system == System::ISDB_T ? "ISDB-T" : "ISDB-S");
-                }
+                const std::string output = tools::format_list(decoded.value());
+                std::fwrite(output.data(), 1U, output.size(), stdout);
             }
         }
     } else if (arguments.command == Command::status) {
@@ -347,10 +338,10 @@ int main(int argc, char** argv)
             const auto decoded = decode_status_response_payload(
                 ByteView{response.value().payload.data(), response.value().payload.size()});
             if (!decoded) operation_error = decoded.error();
-            else std::printf("ready=%s card-present=%s card-initialized=%s\n",
-                             decoded.value().ready != 0U ? "yes" : "no",
-                             decoded.value().card_present != 0U ? "yes" : "no",
-                             decoded.value().card_initialized != 0U ? "yes" : "no");
+            else {
+                const std::string output = tools::format_status(decoded.value());
+                std::fwrite(output.data(), 1U, output.size(), stdout);
+            }
         }
     } else if (arguments.command == Command::card_status) {
         const auto response = empty_request(*client.value(), MessageType::CARD_STATUS);

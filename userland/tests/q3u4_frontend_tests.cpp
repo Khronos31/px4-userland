@@ -9,12 +9,16 @@
 
 #include "q3u4_frontend.h"
 
+#include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <deque>
 #include <initializer_list>
+#include <mutex>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -93,10 +97,12 @@ class Delay final : public Q3U4FrontendDelay {
 public:
     void sleep_ms(std::uint32_t milliseconds) noexcept override
     {
+        std::lock_guard<std::mutex> lock(mutex);
         delays.push_back(milliseconds);
     }
 
     std::vector<std::uint32_t> delays;
+    std::mutex mutex;
 };
 
 class Power final : public Q3U4BackendPower {
@@ -115,6 +121,75 @@ public:
     std::vector<bool> states;
     std::deque<Error> outcomes;
 };
+
+class CoordinatorBackend final : public Q3U4BackendPower {
+public:
+    Result<void> set_backend_power(bool on, Q3U4Delay&) noexcept override
+    {
+        states.push_back(on);
+        if (!outcomes.empty()) {
+            const auto outcome = outcomes.front();
+            outcomes.pop_front();
+            if (outcome != Error::OK) return Result<void>::failure(outcome);
+        }
+        return Result<void>::success();
+    }
+
+    std::vector<bool> states;
+    std::deque<Error> outcomes;
+};
+
+class Purger final : public Q3U4PsbPurger {
+public:
+    Result<void> purge() noexcept override
+    {
+        ++calls;
+        if (outcomes.empty()) return Result<void>::success();
+        const Error outcome = outcomes.front();
+        outcomes.pop_front();
+        return outcome == Error::OK ? Result<void>::success()
+                                    : Result<void>::failure(outcome);
+    }
+
+    std::size_t calls = 0U;
+    std::deque<Error> outcomes;
+};
+
+bool check_enclosure_power(const Q3U4FrontendEnclosure& enclosure,
+                           std::uint8_t receiver_mask,
+                           Q3U4PowerState dev1,
+                           Q3U4PowerState dev2)
+{
+    const auto snapshot = enclosure.power_snapshot();
+    return snapshot.receiver_mask == receiver_mask &&
+           !snapshot.card_acquired &&
+           snapshot.backend_state[0] == dev1 &&
+           snapshot.backend_state[1] == dev2;
+}
+
+bool check_enclosure_power_and_card(const Q3U4FrontendEnclosure& enclosure,
+                                    std::uint8_t receiver_mask,
+                                    bool card,
+                                    Q3U4PowerState dev1,
+                                    Q3U4PowerState dev2)
+{
+    const auto snapshot = enclosure.power_snapshot();
+    return snapshot.receiver_mask == receiver_mask &&
+           snapshot.card_acquired == card &&
+           snapshot.backend_state[0] == dev1 &&
+           snapshot.backend_state[1] == dev2;
+}
+
+bool no_bridge_address_since(const Bridge& bridge, std::size_t first_batch,
+                             std::uint8_t address)
+{
+    for (std::size_t index = first_batch; index < bridge.batches.size(); ++index) {
+        for (const auto& operation : bridge.batches[index]) {
+            if (operation.address == address) return false;
+        }
+    }
+    return true;
+}
 
 std::size_t find_batch_index(
     const Bridge& bridge, std::uint8_t address,
@@ -489,6 +564,22 @@ bool test_q3u4_satellite_open_tune_slot_and_capture()
     const auto after_close = bridge.requests_seen;
     FRONTEND_LIFECYCLE_CHECK(frontend.close());
     FRONTEND_LIFECYCLE_CHECK(bridge.requests_seen == after_close);
+
+    // TSID zero is a valid direct selection. Capture readiness must use an
+    // explicit selection flag rather than treating the value as a sentinel.
+    Bridge direct_bridge;
+    Bridge unused_bridge;
+    CoordinatorBackend direct_power;
+    CoordinatorBackend unused_power;
+    Q3U4FrontendEnclosure enclosure(direct_bridge, unused_bridge, direct_power,
+                                    unused_power, delay);
+    FRONTEND_LIFECYCLE_CHECK(enclosure.open_satellite(0U));
+    direct_bridge.queue_read({0U, 0U, 0x01U});
+    FRONTEND_LIFECYCLE_CHECK(enclosure.tune_satellite(0U, 1049480U));
+    FRONTEND_LIFECYCLE_CHECK(
+        enclosure.select_satellite_tsid_with_timeout(0U, 0U, 100U));
+    FRONTEND_LIFECYCLE_CHECK(enclosure.start_satellite_capture(0U));
+    FRONTEND_LIFECYCLE_CHECK(enclosure.close_receiver(0U));
     return true;
 }
 
@@ -527,6 +618,29 @@ bool test_q3u4_satellite_failure_stages_and_cleanup()
                                  "satellite_slot_tmcc");
         FRONTEND_LIFECYCLE_CHECK(bridge.requests_seen > before);
         FRONTEND_LIFECYCLE_CHECK(frontend.close());
+    }
+
+    {
+        Bridge bridge;
+        Bridge unused_bridge;
+        CoordinatorBackend power;
+        CoordinatorBackend unused_power;
+        Delay delay;
+        Q3U4FrontendEnclosure enclosure(bridge, unused_bridge, power,
+                                        unused_power, delay);
+        FRONTEND_LIFECYCLE_CHECK(enclosure.open_satellite(0U));
+        bridge.queue_read({0U, 0U, 0x01U});
+        FRONTEND_LIFECYCLE_CHECK(enclosure.tune_satellite(0U, 1049480U));
+        for (std::size_t count = 0U; count < 5U; ++count)
+            bridge.queue_read({0U, 0U});
+        bridge.queue_read({0x12U, 0x34U});
+        const auto before_select = delay.delays.size();
+        const auto failed = enclosure.select_satellite_slot_with_timeout(0U, 3U, 100U);
+        FRONTEND_LIFECYCLE_CHECK(!failed && failed.error() == Error::TIMEOUT);
+        // Five TMCC waits plus five TSID read-back waits share the 100 ms
+        // budget; the verification stage must not receive another 100 ms.
+        FRONTEND_LIFECYCLE_CHECK(delay.delays.size() - before_select == 10U);
+        FRONTEND_LIFECYCLE_CHECK(enclosure.close_receiver(0U));
     }
 
     {
@@ -590,6 +704,340 @@ bool test_q3u4_satellite_failure_stages_and_cleanup()
     return true;
 }
 
+bool test_q3u4_enclosure_mapping_and_state_contract()
+{
+    for (std::uint8_t global = 0U; global < 8U; ++global) {
+        const auto mapping = Q3U4FrontendEnclosure::map_receiver(global);
+        FRONTEND_LIFECYCLE_CHECK(mapping);
+        FRONTEND_LIFECYCLE_CHECK(mapping.value().global_receiver == global);
+        FRONTEND_LIFECYCLE_CHECK(mapping.value().local_receiver == global % 4U);
+        FRONTEND_LIFECYCLE_CHECK(mapping.value().bridge ==
+                                 (global < 4U ? Q3U4Bridge::dev1 : Q3U4Bridge::dev2));
+        FRONTEND_LIFECYCLE_CHECK(mapping.value().system ==
+                                 (global % 4U < 2U ? Tc90522System::isdb_s
+                                                   : Tc90522System::isdb_t));
+    }
+    const auto invalid = Q3U4FrontendEnclosure::map_receiver(8U);
+    FRONTEND_LIFECYCLE_CHECK(!invalid && invalid.error() == Error::INVALID_ARGUMENT);
+
+    Bridge dev1_bridge;
+    Bridge dev2_bridge;
+    CoordinatorBackend dev1_power;
+    CoordinatorBackend dev2_power;
+    Delay delay;
+    Q3U4FrontendEnclosure enclosure(dev1_bridge, dev2_bridge, dev1_power,
+                                     dev2_power, delay);
+
+    // Exercise the production card-power seam without opening a frontend:
+    // card-only powers device 1, a receiver couples both bridges, and closing
+    // either side never removes the other logical user.
+    FRONTEND_LIFECYCLE_CHECK(enclosure.acquire_card());
+    FRONTEND_LIFECYCLE_CHECK(check_enclosure_power_and_card(
+        enclosure, 0U, true, Q3U4PowerState::on, Q3U4PowerState::off));
+    FRONTEND_LIFECYCLE_CHECK(enclosure.open_terrestrial(2U));
+    FRONTEND_LIFECYCLE_CHECK(check_enclosure_power_and_card(
+        enclosure, 0x04U, true, Q3U4PowerState::on, Q3U4PowerState::on));
+    FRONTEND_LIFECYCLE_CHECK(enclosure.close_receiver(2U));
+    FRONTEND_LIFECYCLE_CHECK(check_enclosure_power_and_card(
+        enclosure, 0U, true, Q3U4PowerState::on, Q3U4PowerState::off));
+    FRONTEND_LIFECYCLE_CHECK(enclosure.release_card());
+    FRONTEND_LIFECYCLE_CHECK(check_enclosure_power(enclosure, 0U,
+                                                   Q3U4PowerState::off,
+                                                   Q3U4PowerState::off));
+
+    FRONTEND_LIFECYCLE_CHECK(!enclosure.tune_terrestrial(2U, 527143U));
+    FRONTEND_LIFECYCLE_CHECK(!enclosure.open_satellite(2U));
+    FRONTEND_LIFECYCLE_CHECK(enclosure.open_terrestrial(2U));
+    FRONTEND_LIFECYCLE_CHECK(enclosure.receiver_state(2U) == Q3U4ReceiverState::open);
+    const auto duplicate = enclosure.open_terrestrial(2U);
+    FRONTEND_LIFECYCLE_CHECK(!duplicate && duplicate.error() == Error::BUSY);
+    const auto wrong_system = enclosure.tune_satellite(2U, 1049480U);
+    FRONTEND_LIFECYCLE_CHECK(!wrong_system && wrong_system.error() == Error::UNSUPPORTED);
+    const auto early_capture = enclosure.start_terrestrial_capture(2U);
+    FRONTEND_LIFECYCLE_CHECK(!early_capture && early_capture.error() == Error::NOT_READY);
+    const auto early_stop = enclosure.stop_terrestrial_capture(2U);
+    FRONTEND_LIFECYCLE_CHECK(!early_stop && early_stop.error() == Error::NOT_READY);
+    FRONTEND_LIFECYCLE_CHECK(enclosure.close_receiver(2U));
+    const auto duplicate_close = enclosure.close_receiver(2U);
+    FRONTEND_LIFECYCLE_CHECK(!duplicate_close && duplicate_close.error() == Error::INVALID_ARGUMENT);
+    FRONTEND_LIFECYCLE_CHECK(check_enclosure_power(enclosure, 0U,
+                                                   Q3U4PowerState::off,
+                                                   Q3U4PowerState::off));
+    return true;
+}
+
+bool test_q3u4_same_bank_multi_open_and_reopen()
+{
+    Bridge dev1_bridge;
+    Bridge dev2_bridge;
+    CoordinatorBackend dev1_power;
+    CoordinatorBackend dev2_power;
+    Delay delay;
+    Q3U4FrontendEnclosure enclosure(dev1_bridge, dev2_bridge, dev1_power,
+                                     dev2_power, delay);
+
+    FRONTEND_LIFECYCLE_CHECK(enclosure.open_terrestrial(2U));
+    const auto after_first_open = dev1_bridge.batches.size();
+    FRONTEND_LIFECYCLE_CHECK(enclosure.open_terrestrial(3U));
+    FRONTEND_LIFECYCLE_CHECK(check_enclosure_power(enclosure, 0x0cU,
+                                                   Q3U4PowerState::on,
+                                                   Q3U4PowerState::on));
+    FRONTEND_LIFECYCLE_CHECK(enclosure.receiver_state(2U) == Q3U4ReceiverState::open);
+    FRONTEND_LIFECYCLE_CHECK(enclosure.receiver_state(3U) == Q3U4ReceiverState::open);
+    // A second open wakes/configures only local receiver 3; local receiver 2
+    // and the bank-wide S0/T0 setup are untouched.
+    FRONTEND_LIFECYCLE_CHECK(no_bridge_address_since(dev1_bridge, after_first_open,
+                                                     0x10U));
+
+    const auto before_close = dev1_bridge.batches.size();
+    FRONTEND_LIFECYCLE_CHECK(enclosure.close_receiver(3U));
+    FRONTEND_LIFECYCLE_CHECK(no_bridge_address_since(dev1_bridge, before_close,
+                                                     0x10U));
+    FRONTEND_LIFECYCLE_CHECK(enclosure.receiver_state(2U) == Q3U4ReceiverState::open);
+    FRONTEND_LIFECYCLE_CHECK(enclosure.receiver_state(3U) == Q3U4ReceiverState::closed);
+    FRONTEND_LIFECYCLE_CHECK(check_enclosure_power(enclosure, 0x04U,
+                                                   Q3U4PowerState::on,
+                                                   Q3U4PowerState::on));
+    FRONTEND_LIFECYCLE_CHECK(enclosure.close_receiver(2U));
+    FRONTEND_LIFECYCLE_CHECK(check_enclosure_power(enclosure, 0U,
+                                                   Q3U4PowerState::off,
+                                                   Q3U4PowerState::off));
+
+    const auto before_reopen = dev1_bridge.batches.size();
+    FRONTEND_LIFECYCLE_CHECK(enclosure.open_terrestrial(3U));
+    FRONTEND_LIFECYCLE_CHECK(enclosure.receiver_state(3U) == Q3U4ReceiverState::open);
+    FRONTEND_LIFECYCLE_CHECK(find_batch_index_after(
+        dev1_bridge, before_reopen, 0x11U,
+        {{0x07U, 0x31U}, {0x08U, 0x77U}}) != static_cast<std::size_t>(-1));
+    FRONTEND_LIFECYCLE_CHECK(enclosure.close_receiver(3U));
+    return true;
+}
+
+bool test_q3u4_all_close_orders()
+{
+    std::array<std::uint8_t, 4U> order{{0U, 1U, 2U, 3U}};
+    do {
+        Bridge dev1_bridge;
+        Bridge dev2_bridge;
+        CoordinatorBackend dev1_power;
+        CoordinatorBackend dev2_power;
+        Delay delay;
+        Q3U4FrontendEnclosure enclosure(dev1_bridge, dev2_bridge, dev1_power,
+                                         dev2_power, delay);
+        FRONTEND_LIFECYCLE_CHECK(enclosure.open_satellite(0U));
+        FRONTEND_LIFECYCLE_CHECK(enclosure.open_satellite(1U));
+        FRONTEND_LIFECYCLE_CHECK(enclosure.open_terrestrial(2U));
+        FRONTEND_LIFECYCLE_CHECK(enclosure.open_terrestrial(3U));
+        FRONTEND_LIFECYCLE_CHECK(check_enclosure_power(enclosure, 0x0fU,
+                                                       Q3U4PowerState::on,
+                                                       Q3U4PowerState::on));
+        std::array<bool, 4U> closed{};
+        for (const auto global : order) {
+            FRONTEND_LIFECYCLE_CHECK(enclosure.close_receiver(global));
+            closed[global] = true;
+            for (std::uint8_t survivor = 0U; survivor < 4U; ++survivor) {
+                FRONTEND_LIFECYCLE_CHECK(
+                    enclosure.receiver_state(survivor) ==
+                    (closed[survivor] ? Q3U4ReceiverState::closed
+                                      : Q3U4ReceiverState::open));
+            }
+        }
+        FRONTEND_LIFECYCLE_CHECK(check_enclosure_power(enclosure, 0U,
+                                                       Q3U4PowerState::off,
+                                                       Q3U4PowerState::off));
+    } while (std::next_permutation(order.begin(), order.end()));
+    return true;
+}
+
+bool test_q3u4_cross_bank_eight_open_and_close()
+{
+    Bridge dev1_bridge;
+    Bridge dev2_bridge;
+    CoordinatorBackend dev1_power;
+    CoordinatorBackend dev2_power;
+    Delay delay;
+    Q3U4FrontendEnclosure enclosure(dev1_bridge, dev2_bridge, dev1_power,
+                                     dev2_power, delay);
+    std::array<std::thread, 8U> workers;
+    std::array<Error, 8U> errors{};
+    for (std::size_t index = 0U; index < workers.size(); ++index) {
+        workers[index] = std::thread([&, index]() {
+            const auto global = static_cast<std::uint8_t>(index);
+            errors[index] = global % 4U < 2U
+                ? enclosure.open_satellite(global).error()
+                : enclosure.open_terrestrial(global).error();
+        });
+    }
+    for (auto& worker : workers) worker.join();
+    for (const auto error : errors) FRONTEND_LIFECYCLE_CHECK(error == Error::OK);
+    FRONTEND_LIFECYCLE_CHECK(check_enclosure_power(enclosure, 0xffU,
+                                                   Q3U4PowerState::on,
+                                                   Q3U4PowerState::on));
+    for (std::uint8_t global = 0U; global < 8U; ++global)
+        FRONTEND_LIFECYCLE_CHECK(enclosure.receiver_state(global) == Q3U4ReceiverState::open);
+
+    for (std::uint8_t index = 0U; index < 8U; ++index) {
+        const auto global = static_cast<std::uint8_t>((index * 5U) % 8U);
+        FRONTEND_LIFECYCLE_CHECK(enclosure.close_receiver(global));
+    }
+    FRONTEND_LIFECYCLE_CHECK(check_enclosure_power(enclosure, 0U,
+                                                   Q3U4PowerState::off,
+                                                   Q3U4PowerState::off));
+    return true;
+}
+
+bool test_q3u4_bank_failure_boundaries()
+{
+    {
+        Bridge dev1_bridge;
+        Bridge dev2_bridge;
+        CoordinatorBackend dev1_power;
+        CoordinatorBackend dev2_power;
+        Delay delay;
+        Q3U4FrontendEnclosure enclosure(dev1_bridge, dev2_bridge, dev1_power,
+                                         dev2_power, delay);
+        dev1_power.outcomes.push_back(Error::TIMEOUT);
+        const auto failed = enclosure.open_terrestrial(2U);
+        FRONTEND_LIFECYCLE_CHECK(!failed && failed.error() == Error::TIMEOUT);
+        FRONTEND_LIFECYCLE_CHECK(dev1_bridge.batches.empty() && dev2_bridge.batches.empty());
+        FRONTEND_LIFECYCLE_CHECK(check_enclosure_power(enclosure, 0U,
+                                                       Q3U4PowerState::off,
+                                                       Q3U4PowerState::off));
+    }
+
+    {
+        Bridge dev1_bridge;
+        Bridge dev2_bridge;
+        CoordinatorBackend dev1_power;
+        CoordinatorBackend dev2_power;
+        Delay delay;
+        Q3U4FrontendEnclosure enclosure(dev1_bridge, dev2_bridge, dev1_power,
+                                         dev2_power, delay);
+        dev1_bridge.fail_at = 0U;
+        const auto failed = enclosure.open_terrestrial(2U);
+        FRONTEND_LIFECYCLE_CHECK(!failed && failed.error() == Error::USB_IO);
+        FRONTEND_LIFECYCLE_CHECK(enclosure.receiver_state(2U) == Q3U4ReceiverState::closed);
+        FRONTEND_LIFECYCLE_CHECK(check_enclosure_power(enclosure, 0U,
+                                                       Q3U4PowerState::off,
+                                                       Q3U4PowerState::off));
+    }
+
+    {
+        Bridge dev1_bridge;
+        Bridge dev2_bridge;
+        CoordinatorBackend dev1_power;
+        CoordinatorBackend dev2_power;
+        Delay delay;
+        Q3U4FrontendEnclosure enclosure(dev1_bridge, dev2_bridge, dev1_power,
+                                         dev2_power, delay);
+        FRONTEND_LIFECYCLE_CHECK(enclosure.open_terrestrial(2U));
+        const auto wake = find_batch_index(
+            dev1_bridge, 0x10U,
+            {{0xb0U, 0xa0U}, {0xb2U, 0x3dU}, {0xb3U, 0x25U}, {0xb4U, 0x8bU},
+             {0xb5U, 0x4bU}, {0xb6U, 0x3fU}, {0xb7U, 0xffU}, {0xb8U, 0xc0U},
+             {0x1fU, 0x00U}, {0x75U, 0x00U}});
+        FRONTEND_LIFECYCLE_CHECK(wake != static_cast<std::size_t>(-1));
+        FRONTEND_LIFECYCLE_CHECK(enclosure.close_receiver(2U));
+        const auto before = dev1_bridge.batches.size();
+        dev1_bridge.fail_at = before;
+        const auto reopened = enclosure.open_terrestrial(2U);
+        FRONTEND_LIFECYCLE_CHECK(!reopened && reopened.error() == Error::USB_IO);
+        FRONTEND_LIFECYCLE_CHECK(enclosure.receiver_state(2U) == Q3U4ReceiverState::closed);
+        FRONTEND_LIFECYCLE_CHECK(enclosure.close_receiver(2U).error() ==
+                                 Error::INVALID_ARGUMENT);
+    }
+
+    {
+        Bridge dev1_bridge;
+        Bridge dev2_bridge;
+        CoordinatorBackend dev1_power;
+        CoordinatorBackend dev2_power;
+        Delay delay;
+        Q3U4FrontendEnclosure enclosure(dev1_bridge, dev2_bridge, dev1_power,
+                                         dev2_power, delay);
+        FRONTEND_LIFECYCLE_CHECK(enclosure.open_terrestrial(2U));
+        FRONTEND_LIFECYCLE_CHECK(enclosure.tune_terrestrial(2U, 527143U));
+        dev1_bridge.fail_at = dev1_bridge.batches.size();
+        const auto pins = enclosure.start_terrestrial_capture(2U);
+        FRONTEND_LIFECYCLE_CHECK(!pins && pins.error() == Error::USB_IO);
+        FRONTEND_LIFECYCLE_CHECK(enclosure.receiver_state(2U) == Q3U4ReceiverState::tuned);
+        dev1_bridge.fail_at = static_cast<std::size_t>(-1);
+        FRONTEND_LIFECYCLE_CHECK(enclosure.close_receiver(2U));
+    }
+
+    {
+        Bridge dev1_bridge;
+        Bridge dev2_bridge;
+        CoordinatorBackend dev1_power;
+        CoordinatorBackend dev2_power;
+        Delay delay;
+        Q3U4FrontendEnclosure enclosure(dev1_bridge, dev2_bridge, dev1_power,
+                                         dev2_power, delay);
+        FRONTEND_LIFECYCLE_CHECK(enclosure.open_terrestrial(2U));
+        FRONTEND_LIFECYCLE_CHECK(enclosure.tune_terrestrial(2U, 527143U));
+        FRONTEND_LIFECYCLE_CHECK(enclosure.start_terrestrial_capture(2U));
+        dev1_bridge.fail_at = dev1_bridge.batches.size();
+        const auto closed = enclosure.close_receiver(2U);
+        FRONTEND_LIFECYCLE_CHECK(!closed && closed.error() == Error::USB_IO);
+        FRONTEND_LIFECYCLE_CHECK(enclosure.receiver_state(2U) == Q3U4ReceiverState::closed);
+        FRONTEND_LIFECYCLE_CHECK(check_enclosure_power(enclosure, 0U,
+                                                       Q3U4PowerState::off,
+                                                       Q3U4PowerState::off));
+    }
+    return true;
+}
+
+bool test_q3u4_first_capture_purges_psb()
+{
+    Bridge dev1_bridge;
+    Bridge dev2_bridge;
+    CoordinatorBackend dev1_power;
+    CoordinatorBackend dev2_power;
+    Delay delay;
+    Purger dev1_purger;
+    Purger dev2_purger;
+    Q3U4FrontendEnclosure enclosure(dev1_bridge, dev2_bridge, dev1_power,
+                                     dev2_power, delay, &dev1_purger,
+                                     &dev2_purger);
+
+    FRONTEND_LIFECYCLE_CHECK(enclosure.open_terrestrial(2U));
+    FRONTEND_LIFECYCLE_CHECK(enclosure.open_terrestrial(3U));
+    FRONTEND_LIFECYCLE_CHECK(enclosure.tune_terrestrial(2U, 527143U));
+    FRONTEND_LIFECYCLE_CHECK(enclosure.tune_terrestrial(3U, 527143U));
+    FRONTEND_LIFECYCLE_CHECK(enclosure.start_terrestrial_capture(2U));
+    FRONTEND_LIFECYCLE_CHECK(dev1_purger.calls == 1U && dev2_purger.calls == 0U);
+    FRONTEND_LIFECYCLE_CHECK(enclosure.start_terrestrial_capture(3U));
+    FRONTEND_LIFECYCLE_CHECK(dev1_purger.calls == 1U);
+    FRONTEND_LIFECYCLE_CHECK(enclosure.stop_terrestrial_capture(2U));
+    FRONTEND_LIFECYCLE_CHECK(enclosure.stop_terrestrial_capture(3U));
+    FRONTEND_LIFECYCLE_CHECK(enclosure.start_terrestrial_capture(2U));
+    FRONTEND_LIFECYCLE_CHECK(dev1_purger.calls == 2U);
+    FRONTEND_LIFECYCLE_CHECK(enclosure.stop_terrestrial_capture(2U));
+    FRONTEND_LIFECYCLE_CHECK(enclosure.close_receiver(2U));
+    FRONTEND_LIFECYCLE_CHECK(enclosure.close_receiver(3U));
+
+    Bridge failed_dev1_bridge;
+    Bridge failed_dev2_bridge;
+    CoordinatorBackend failed_dev1_power;
+    CoordinatorBackend failed_dev2_power;
+    Purger failed_purger;
+    failed_purger.outcomes.push_back(Error::USB_IO);
+    Q3U4FrontendEnclosure failed(failed_dev1_bridge, failed_dev2_bridge,
+                                 failed_dev1_power, failed_dev2_power, delay,
+                                 &failed_purger, nullptr);
+    FRONTEND_LIFECYCLE_CHECK(failed.open_terrestrial(2U));
+    FRONTEND_LIFECYCLE_CHECK(failed.tune_terrestrial(2U, 527143U));
+    const std::size_t before_pin = failed_dev1_bridge.requests_seen;
+    const auto start = failed.start_terrestrial_capture(2U);
+    FRONTEND_LIFECYCLE_CHECK(!start && start.error() == Error::USB_IO);
+    FRONTEND_LIFECYCLE_CHECK(failed_dev1_bridge.requests_seen == before_pin);
+    FRONTEND_LIFECYCLE_CHECK(failed.receiver_state(2U) == Q3U4ReceiverState::tuned);
+    FRONTEND_LIFECYCLE_CHECK(std::string_view(failed.bank(Q3U4Bridge::dev1)
+                                                  .diagnostic_stage()) == "psb_purge");
+    FRONTEND_LIFECYCLE_CHECK(failed.close_receiver(2U));
+    return true;
+}
+
 }  // namespace
 
 bool run_q3u4_frontend_tests()
@@ -603,5 +1051,11 @@ bool run_q3u4_frontend_tests()
            test_q3u4_capture_lifecycle() &&
            test_q3u4_capture_stop_retry_and_cleanup() &&
            test_q3u4_satellite_open_tune_slot_and_capture() &&
-           test_q3u4_satellite_failure_stages_and_cleanup();
+           test_q3u4_satellite_failure_stages_and_cleanup() &&
+           test_q3u4_enclosure_mapping_and_state_contract() &&
+           test_q3u4_same_bank_multi_open_and_reopen() &&
+           test_q3u4_all_close_orders() &&
+           test_q3u4_cross_bank_eight_open_and_close() &&
+           test_q3u4_bank_failure_boundaries() &&
+           test_q3u4_first_capture_purges_psb();
 }

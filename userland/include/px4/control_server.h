@@ -4,21 +4,25 @@
 
 #include "px4/card_service.h"
 #include "px4/posix_ipc.h"
+#include "px4/tuner_service.h"
 
 #include <memory>
 #include <string_view>
 
 namespace px4::userland::ipc::posix {
 
-// POSIX control-plane engine used by px4d and socket integration tests. USB
-// ownership remains outside this class; CardService calls are serialized by
-// poll_once's single-threaded dispatch.
+// POSIX control-plane engine used by px4d and socket integration tests. The
+// poll thread owns sockets, protocol state, responses, events, and leases;
+// finite CardService/TunerService calls run on private topology-specific
+// worker lanes. Same-bridge tuner operations remain serialized by the bank.
 class PosixControlServer final {
 public:
     static Result<std::unique_ptr<PosixControlServer>> create(
         const EndpointConfig& endpoint, CardService& card_service,
+        TunerService& tuner_service,
         std::string_view base_serial, bool ready = true,
-        std::uint8_t usb_present_mask = 0x03U) noexcept;
+        std::uint8_t usb_present_mask = 0x03U,
+        TunerStreamControl* stream_control = nullptr) noexcept;
 
     ~PosixControlServer() noexcept;
     PosixControlServer(const PosixControlServer&) = delete;
@@ -30,6 +34,7 @@ public:
     Result<void> poll_once(Timeout timeout) noexcept;
     Result<void> shutdown() noexcept;
     const char* endpoint_path() const noexcept;
+    const char* stream_endpoint_path() const noexcept;
     std::size_t connection_count() const noexcept;
 
 private:

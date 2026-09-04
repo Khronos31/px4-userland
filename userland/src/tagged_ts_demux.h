@@ -24,12 +24,14 @@ public:
 
     using PacketSink = Result<void> (*)(void*, std::size_t receiver_index,
                                         ByteView packet) noexcept;
+    using InvalidTagObserver = void (*)(void*, std::uint8_t wire_sync) noexcept;
 
     struct Counters final {
         std::size_t input_bytes_accepted;
         std::size_t emitted_packets;
         std::size_t discarded_sync_search_bytes;
         std::size_t invalid_tag_packets;
+        std::size_t sync_loss_events;
         std::size_t buffered_bytes;
     };
 
@@ -49,8 +51,13 @@ public:
     // counts advance only after a successful sink call. Non-empty input that
     // would exceed kPendingCapacity is rejected with SLOW_CONSUMER and is not
     // copied; this also protects a failed/backlogged stream from overflow.
-    // PacketSink must be non-null, including for an empty retry push.
-    Result<void> push(ByteView input, PacketSink sink, void* context) noexcept;
+    // PacketSink must be non-null, including for an empty retry push.  The
+    // optional observer receives aligned wire packets with the high-bit TEI
+    // marker before those packets are discarded; it never changes the sink
+    // failure/retry contract.
+    Result<void> push(ByteView input, PacketSink sink, void* context,
+                      InvalidTagObserver observer = nullptr,
+                      void* observer_context = nullptr) noexcept;
 
     // Discards parser state and all buffered bytes, and resets every counter.
     void reset() noexcept;
@@ -58,7 +65,10 @@ public:
     Counters counters() const noexcept;
 
 private:
-    static bool is_tagged_sync(std::uint8_t value) noexcept;
+    // A wire sync byte identifies packet alignment even when its high bit is
+    // the receiver-local TEI marker.  Only the four ordinary tags are
+    // emitted; TEI and unknown tags are consumed as whole packets.
+    static bool is_packet_boundary(std::uint8_t value) noexcept;
     void compact_pending() noexcept;
     bool acquire_sync() noexcept;
     void discard_bytes(std::size_t count) noexcept;
@@ -72,6 +82,7 @@ private:
     std::size_t emitted_packets_ = 0U;
     std::size_t discarded_sync_search_bytes_ = 0U;
     std::size_t invalid_tag_packets_ = 0U;
+    std::size_t sync_loss_events_ = 0U;
 };
 
 }  // namespace px4::userland

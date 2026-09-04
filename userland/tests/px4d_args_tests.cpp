@@ -48,6 +48,7 @@ bool test_valid_modes()
 {
     const Px4dArguments native = parse(native_arguments());
     PX4D_CHECK(native.valid && !native.help && !native.group);
+    PX4D_CHECK(!native.allow_lnb_power);
     PX4D_CHECK(native.device == "00001205000960");
     PX4D_CHECK(native.firmware == "firmware.bin" &&
                native.runtime_directory == "/tmp/px4d");
@@ -66,6 +67,11 @@ bool test_valid_modes()
     const Px4dArguments filtered_result = parse(filtered);
     PX4D_CHECK(filtered_result.valid && filtered_result.group &&
                filtered_result.device == "00001205000960");
+
+    Arguments lnb = native_arguments();
+    lnb.push_back("--allow-lnb-power");
+    const Px4dArguments lnb_result = parse(lnb);
+    PX4D_CHECK(lnb_result.valid && lnb_result.allow_lnb_power);
 
     Arguments limits = fd_arguments();
     limits[2U] = "0";
@@ -144,6 +150,11 @@ bool test_device_and_general_rejections()
     Arguments unknown = native_arguments();
     unknown.push_back("--unknown");
     PX4D_CHECK(!parse(unknown).valid);
+
+    Arguments duplicate_lnb = native_arguments();
+    duplicate_lnb.insert(duplicate_lnb.end(),
+                         {"--allow-lnb-power", "--allow-lnb-power"});
+    PX4D_CHECK(!parse(duplicate_lnb).valid);
 
     const Arguments help{"px4d", "--help"};
     const Px4dArguments help_result = parse(help);

@@ -259,7 +259,10 @@ public:
     void bytes(ByteView value) noexcept
     {
         if (value.size != 0U) {
-            std::memcpy(output_.data + offset_, value.data, value.size);
+            // encode_frame permits an in-place payload staging buffer.  Keep
+            // that documented-safe by handling overlapping source/output
+            // ranges here.
+            std::memmove(output_.data + offset_, value.data, value.size);
             offset_ += value.size;
         }
     }
@@ -774,7 +777,12 @@ Result<TuneRequestPayload> decode_tune_request_payload(ByteView input) noexcept
         return malformed<TuneRequestPayload>();
     }
     value.system = static_cast<System>(system);
-    if (!valid_tune(value)) {
+    // Wire decoding separates structural/protocol validity from semantic
+    // tune validation.  The control service owns the latter so a well-formed
+    // request with an out-of-range timeout or parameter combination can
+    // receive INVALID_ARGUMENT without poisoning the connection.
+    if (!valid_system(value.system) ||
+        (value.lnb_voltage != 0U && value.lnb_voltage != 15U)) {
         return malformed<TuneRequestPayload>();
     }
     return Result<TuneRequestPayload>::success(value);

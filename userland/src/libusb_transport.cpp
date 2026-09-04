@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstring>
 #if defined(__linux__) || defined(__ANDROID__)
 #include <fcntl.h>
@@ -49,6 +50,13 @@ public:
         }
     }
 
+    explicit ApiGateLock(RuntimeApiGate* gate) noexcept : mutex_(gate)
+    {
+        if (mutex_ != nullptr) {
+            mutex_->lock();
+        }
+    }
+
     ~ApiGateLock() noexcept
     {
         if (mutex_ != nullptr) {
@@ -60,7 +68,27 @@ public:
     ApiGateLock& operator=(const ApiGateLock&) = delete;
 
 private:
-    std::mutex* mutex_;
+    RuntimeApiGate* mutex_;
+};
+
+class CommandEventGateLock final {
+public:
+    explicit CommandEventGateLock(Q3U4RuntimeState* state) noexcept
+        : gate_(state == nullptr ? nullptr : &state->event_gate)
+    {
+        if (gate_ != nullptr) gate_->lock_command();
+    }
+
+    ~CommandEventGateLock() noexcept
+    {
+        if (gate_ != nullptr) gate_->unlock();
+    }
+
+    CommandEventGateLock(const CommandEventGateLock&) = delete;
+    CommandEventGateLock& operator=(const CommandEventGateLock&) = delete;
+
+private:
+    RuntimeEventGate* gate_;
 };
 
 LibusbApi::TransferStatus transfer_status(libusb_transfer_status status) noexcept
@@ -654,6 +682,13 @@ Result<std::unique_ptr<LibusbTransport>> NativeEnumerator::open_and_claim(
 
 struct LibusbTransport::StreamState final {
     enum class SlotStatus : std::uint8_t { allocated, submitted, completed };
+    struct ReadyBlock final {
+        std::unique_ptr<std::uint8_t[]> buffer;
+        bool ready = false;
+        Error error = Error::OK;
+        int actual_length = 0;
+        std::uint64_t submission_order = 0U;
+    };
     struct Slot final {
         StreamState* state = nullptr;
         LibusbApi::Transfer transfer = nullptr;
@@ -661,13 +696,27 @@ struct LibusbTransport::StreamState final {
         SlotStatus status = SlotStatus::allocated;
         Error error = Error::OK;
         int actual_length = 0;
+        std::uint64_t submission_order = 0U;
     };
 
     std::unique_ptr<Slot[]> slots;
+    std::unique_ptr<ReadyBlock[]> ready;
+    std::recursive_mutex* gate = nullptr;
+    std::condition_variable_any* changed = nullptr;
+    LibusbApi* api = nullptr;
+    LibusbApi::Handle handle = nullptr;
+    std::uint8_t endpoint = 0U;
     std::size_t count = 0U;
     std::size_t transfer_size = 0U;
     std::size_t outstanding = 0U;
     Slot* delivered = nullptr;
+    ReadyBlock* delivered_ready = nullptr;
+    std::uint64_t next_submission_order = 0U;
+    std::uint64_t next_delivery_order = 0U;
+    bool deferred_error_valid = false;
+    Error deferred_error = Error::OK;
+    std::uint64_t deferred_error_order = 0U;
+    bool resubmit_failed = false;
     bool stopping = false;
 };
 
@@ -713,10 +762,14 @@ void LibusbTransport::on_transfer(LibusbApi::Transfer transfer,
                                   int actual_length, void* context) noexcept
 {
     auto* slot = static_cast<StreamState::Slot*>(context);
-    if (slot == nullptr || slot->state == nullptr || slot->status != StreamState::SlotStatus::submitted) {
+    if (slot == nullptr || slot->state == nullptr || slot->state->gate == nullptr) {
         return;
     }
     StreamState& state = *slot->state;
+    const std::lock_guard<std::recursive_mutex> lock(*state.gate);
+    if (slot->status != StreamState::SlotStatus::submitted) {
+        return;
+    }
     if (slot->transfer != transfer || state.outstanding == 0U) {
         if (state.outstanding != 0U) {
             --state.outstanding;
@@ -741,19 +794,72 @@ void LibusbTransport::on_transfer(LibusbApi::Transfer transfer,
             slot->error = Error::USB_IO;
         }
     }
+    if (state.stopping) {
+        slot->status = StreamState::SlotStatus::allocated;
+        state.changed->notify_all();
+        return;
+    }
     slot->status = StreamState::SlotStatus::completed;
+    if (slot->error != Error::OK) {
+        state.resubmit_failed = true;
+        state.changed->notify_all();
+        return;
+    }
+
+    StreamState::ReadyBlock* ready = nullptr;
+    if (!state.resubmit_failed) {
+        for (std::size_t index = 0U; index < state.count; ++index) {
+            if (!state.ready[index].ready && state.delivered_ready != &state.ready[index]) {
+                ready = &state.ready[index];
+                break;
+            }
+        }
+    }
+    if (ready == nullptr) {
+        // The bounded callback backlog is full.  Preserve this completion in
+        // its transfer slot and let wait_stream resubmit it after delivery.
+        state.changed->notify_all();
+        return;
+    }
+
+    ready->buffer.swap(slot->buffer);
+    ready->ready = true;
+    ready->error = slot->error;
+    ready->actual_length = slot->actual_length;
+    ready->submission_order = slot->submission_order;
+    state.api->fill_bulk_transfer(slot->transfer, state.handle, state.endpoint,
+                                  slot->buffer.get(),
+                                  static_cast<int>(state.transfer_size),
+                                  on_transfer, slot, 0U);
+    slot->status = StreamState::SlotStatus::submitted;
+    slot->submission_order = state.next_submission_order++;
+    ++state.outstanding;
+    const int submit_result = state.api->submit_transfer(slot->transfer);
+    if (submit_result != 0) {
+        --state.outstanding;
+        slot->status = StreamState::SlotStatus::allocated;
+        state.resubmit_failed = true;
+        state.deferred_error_valid = true;
+        state.deferred_error = map_libusb_error(submit_result);
+        state.deferred_error_order = slot->submission_order;
+    }
+    state.changed->notify_all();
 }
 
 LibusbTransport::~LibusbTransport() noexcept
 {
+    // Command-gate before stream-gate is the only operation taking both.
+    // Callbacks take only stream-gate, so a synchronous command may dispatch
+    // one without creating a lock cycle.
     ApiGateLock lock(runtime_state_);
+    std::unique_lock<std::recursive_mutex> stream_lock(stream_gate_);
     if (stream_active_) {
-        (void)cancel_and_drain_locked();
+        (void)cancel_and_drain_locked(stream_lock);
     }
-    if (stream_ != nullptr && !abandoned_) {
+    if (stream_ != nullptr && !abandoned_.load()) {
         destroy_stream_locked();
     }
-    if (abandoned_) {
+    if (abandoned_.load()) {
         return;
     }
     if (claimed_ && handle_ != nullptr) {
@@ -767,7 +873,7 @@ LibusbTransport::~LibusbTransport() noexcept
 
 bool LibusbTransport::stream_active() const noexcept
 {
-    ApiGateLock lock(runtime_state_);
+    const std::lock_guard<std::recursive_mutex> lock(stream_gate_);
     return stream_active_;
 }
 
@@ -797,10 +903,12 @@ Result<std::size_t> LibusbTransport::bulk_read(std::uint8_t endpoint, MutableByt
         return failure(Error::BUFFER_TOO_SMALL);
     }
     ApiGateLock lock(runtime_state_);
-    if (abandoned_ || (runtime_state_ != nullptr && runtime_state_->abandoned)) {
+    if (abandoned_.load() ||
+        (runtime_state_ != nullptr && runtime_state_->abandoned.load())) {
         return failure(Error::USB_IO);
     }
     int transferred = 0;
+    const CommandEventGateLock event_lock(runtime_state_);
     const int result = api_->bulk_transfer(handle_, endpoint, output.data,
                                            static_cast<int>(output.size), &transferred,
                                            timeout.milliseconds);
@@ -837,10 +945,12 @@ Result<std::size_t> LibusbTransport::bulk_write(std::uint8_t endpoint, ByteView 
         return Result<std::size_t>::failure(Error::BUFFER_TOO_SMALL);
     }
     ApiGateLock lock(runtime_state_);
-    if (abandoned_ || (runtime_state_ != nullptr && runtime_state_->abandoned)) {
+    if (abandoned_.load() ||
+        (runtime_state_ != nullptr && runtime_state_->abandoned.load())) {
         return Result<std::size_t>::failure(Error::USB_IO);
     }
     int transferred = 0;
+    const CommandEventGateLock event_lock(runtime_state_);
     const int result = api_->bulk_transfer(handle_, endpoint,
                                            const_cast<std::uint8_t*>(input.data),
                                            static_cast<int>(input.size), &transferred,
@@ -856,13 +966,16 @@ Result<std::size_t> LibusbTransport::bulk_write(std::uint8_t endpoint, ByteView 
 
 Result<void> LibusbTransport::start_stream(const StreamConfig& config) noexcept
 {
+    constexpr std::size_t kMaxStreamTransfers = 64U;
     if (config.endpoint != kTsInEndpoint || config.transfer_size == 0U ||
         config.transfer_size > kMaxStreamTransfer || config.transfer_count == 0U ||
+        config.transfer_count > kMaxStreamTransfers ||
         config.transfer_count > std::numeric_limits<std::size_t>::max() / sizeof(StreamState::Slot)) {
         return Result<void>::failure(Error::INVALID_ARGUMENT);
     }
-    ApiGateLock lock(runtime_state_);
-    if (abandoned_ || (runtime_state_ != nullptr && runtime_state_->abandoned)) {
+    std::unique_lock<std::recursive_mutex> lock(stream_gate_);
+    if (abandoned_.load() ||
+        (runtime_state_ != nullptr && runtime_state_->abandoned.load())) {
         return Result<void>::failure(Error::USB_IO);
     }
     if (stream_active_) {
@@ -873,13 +986,28 @@ Result<void> LibusbTransport::start_stream(const StreamConfig& config) noexcept
         return Result<void>::failure(Error::INTERNAL);
     }
     state->slots.reset(new (std::nothrow) StreamState::Slot[config.transfer_count]);
-    if (!state->slots) {
+    state->ready.reset(new (std::nothrow) StreamState::ReadyBlock[config.transfer_count]);
+    if (!state->slots || !state->ready) {
         return Result<void>::failure(Error::INTERNAL);
     }
     state->count = config.transfer_count;
     state->transfer_size = config.transfer_size;
+    state->gate = &stream_gate_;
+    state->changed = &stream_changed_;
+    state->api = api_;
+    state->handle = handle_;
+    state->endpoint = config.endpoint;
     stream_ = std::move(state);
     stream_active_ = true;
+
+    for (std::size_t index = 0U; index < config.transfer_count; ++index) {
+        stream_->ready[index].buffer.reset(
+            new (std::nothrow) std::uint8_t[config.transfer_size]);
+        if (!stream_->ready[index].buffer) {
+            (void)cancel_and_drain_locked(lock);
+            return Result<void>::failure(Error::INTERNAL);
+        }
+    }
 
     for (std::size_t index = 0U; index < config.transfer_count; ++index) {
         StreamState::Slot& slot = stream_->slots[index];
@@ -887,7 +1015,7 @@ Result<void> LibusbTransport::start_stream(const StreamConfig& config) noexcept
         slot.buffer.reset(new (std::nothrow) std::uint8_t[config.transfer_size]);
         slot.transfer = api_->alloc_transfer();
         if (!slot.buffer || slot.transfer == nullptr) {
-            (void)cancel_and_drain_locked();
+            (void)cancel_and_drain_locked(lock);
             return Result<void>::failure(Error::INTERNAL);
         }
         api_->fill_bulk_transfer(slot.transfer, handle_, config.endpoint, slot.buffer.get(),
@@ -895,12 +1023,19 @@ Result<void> LibusbTransport::start_stream(const StreamConfig& config) noexcept
         // Publish the slot before submit: a fake or real libusb backend may dispatch
         // completion synchronously from submit_transfer.
         slot.status = StreamState::SlotStatus::submitted;
+        slot.submission_order = stream_->next_submission_order++;
         ++stream_->outstanding;
-        const int submit_result = api_->submit_transfer(slot.transfer);
+        int submit_result = 0;
+        {
+            const ApiGateLock api_lock(runtime_state_ == nullptr
+                                           ? nullptr
+                                           : &runtime_state_->stream_api_gate);
+            submit_result = api_->submit_transfer(slot.transfer);
+        }
         if (submit_result != 0) {
             --stream_->outstanding;
             slot.status = StreamState::SlotStatus::allocated;
-            (void)cancel_and_drain_locked();
+            (void)cancel_and_drain_locked(lock);
             return Result<void>::failure(map_libusb_error(submit_result));
         }
     }
@@ -909,8 +1044,11 @@ Result<void> LibusbTransport::start_stream(const StreamConfig& config) noexcept
 
 Result<StreamEvent> LibusbTransport::wait_stream(Timeout timeout) noexcept
 {
-    ApiGateLock lock(runtime_state_);
+    std::unique_lock<std::recursive_mutex> lock(stream_gate_);
     if (!stream_active_ || stream_ == nullptr) {
+        return Result<StreamEvent>::failure(Error::NOT_READY);
+    }
+    if (stream_->stopping) {
         return Result<StreamEvent>::failure(Error::NOT_READY);
     }
     if (stream_->delivered != nullptr) {
@@ -920,8 +1058,15 @@ Result<StreamEvent> LibusbTransport::wait_stream(Timeout timeout) noexcept
             return Result<StreamEvent>::failure(Error::INTERNAL);
         }
         slot.status = StreamState::SlotStatus::submitted;
+        slot.submission_order = stream_->next_submission_order++;
         ++stream_->outstanding;
-        const int submit_result = api_->submit_transfer(slot.transfer);
+        int submit_result = 0;
+        {
+            const ApiGateLock api_lock(runtime_state_ == nullptr
+                                           ? nullptr
+                                           : &runtime_state_->stream_api_gate);
+            submit_result = api_->submit_transfer(slot.transfer);
+        }
         if (submit_result != 0) {
             --stream_->outstanding;
             slot.status = StreamState::SlotStatus::completed;
@@ -931,16 +1076,20 @@ Result<StreamEvent> LibusbTransport::wait_stream(Timeout timeout) noexcept
         }
         stream_->delivered = nullptr;
     }
+    if (stream_->delivered_ready != nullptr) {
+        stream_->delivered_ready->ready = false;
+        stream_->delivered_ready = nullptr;
+    }
 
     auto completed = [this]() noexcept -> Result<StreamEvent> {
         for (std::size_t index = 0U; index < stream_->count; ++index) {
             StreamState::Slot& slot = stream_->slots[index];
-            if (slot.status != StreamState::SlotStatus::completed) {
+            if (slot.status != StreamState::SlotStatus::completed ||
+                slot.submission_order != stream_->next_delivery_order)
                 continue;
-            }
-            if (slot.error != Error::OK) {
+            ++stream_->next_delivery_order;
+            if (slot.error != Error::OK)
                 return Result<StreamEvent>::failure(slot.error);
-            }
             stream_->delivered = &slot;
             const StreamEventKind kind = static_cast<std::size_t>(slot.actual_length) <
                                                  stream_->transfer_size
@@ -949,16 +1098,69 @@ Result<StreamEvent> LibusbTransport::wait_stream(Timeout timeout) noexcept
             return Result<StreamEvent>::success(StreamEvent{
                 kind, slot.buffer.get(), static_cast<std::size_t>(slot.actual_length)});
         }
+        for (std::size_t index = 0U; index < stream_->count; ++index) {
+            StreamState::ReadyBlock& ready = stream_->ready[index];
+            if (!ready.ready || ready.submission_order != stream_->next_delivery_order)
+                continue;
+            ++stream_->next_delivery_order;
+            if (ready.error != Error::OK)
+                return Result<StreamEvent>::failure(ready.error);
+            stream_->delivered_ready = &ready;
+            const StreamEventKind kind = static_cast<std::size_t>(ready.actual_length) <
+                                                 stream_->transfer_size
+                                             ? StreamEventKind::short_transfer
+                                             : StreamEventKind::data;
+            return Result<StreamEvent>::success(StreamEvent{
+                kind, ready.buffer.get(), static_cast<std::size_t>(ready.actual_length)});
+        }
+        if (stream_->deferred_error_valid &&
+            stream_->deferred_error_order == stream_->next_delivery_order) {
+            stream_->deferred_error_valid = false;
+            ++stream_->next_delivery_order;
+            return Result<StreamEvent>::failure(stream_->deferred_error);
+        }
         return Result<StreamEvent>::failure(Error::NOT_FOUND);
+    };
+
+    const auto completion_available = [this]() noexcept {
+        if (!stream_active_ || stream_ == nullptr || stream_->stopping) return true;
+        for (std::size_t index = 0U; index < stream_->count; ++index) {
+            if ((stream_->slots[index].status == StreamState::SlotStatus::completed &&
+                 stream_->slots[index].submission_order == stream_->next_delivery_order) ||
+                (stream_->ready[index].ready &&
+                 stream_->ready[index].submission_order == stream_->next_delivery_order))
+                return true;
+        }
+        return stream_->deferred_error_valid &&
+               stream_->deferred_error_order == stream_->next_delivery_order;
     };
 
     Result<StreamEvent> result = completed();
     if (result || result.error() != Error::NOT_FOUND) {
         return result;
     }
-    const int event_result = api_->handle_events(context_, timeout.milliseconds);
+    // Never hold stream state while entering libusb's event handler.  A
+    // synchronous card/control transfer may currently be the sole event
+    // handler and dispatch this stream's callback.  Runtime transports then
+    // wait on the callback condition instead of becoming opaque libusb event
+    // waiters, so each bridge pump wakes as soon as its own URB completes.
+    lock.unlock();
+    int event_result = 0;
+    if (runtime_state_ == nullptr || runtime_state_->event_gate.try_lock_stream()) {
+        event_result = api_->handle_events(context_, timeout.milliseconds);
+        if (runtime_state_ != nullptr) runtime_state_->event_gate.unlock();
+        lock.lock();
+    } else {
+        lock.lock();
+        (void)stream_changed_.wait_for(
+            lock, std::chrono::milliseconds(timeout.milliseconds),
+            completion_available);
+    }
     if (event_result != 0) {
         return Result<StreamEvent>::failure(map_libusb_error(event_result));
+    }
+    if (!stream_active_ || stream_ == nullptr || stream_->stopping) {
+        return Result<StreamEvent>::failure(Error::NOT_READY);
     }
     result = completed();
     if (result.error() == Error::NOT_FOUND) {
@@ -969,11 +1171,12 @@ Result<StreamEvent> LibusbTransport::wait_stream(Timeout timeout) noexcept
 
 Result<void> LibusbTransport::cancel_and_drain() noexcept
 {
-    ApiGateLock lock(runtime_state_);
-    return cancel_and_drain_locked();
+    std::unique_lock<std::recursive_mutex> lock(stream_gate_);
+    return cancel_and_drain_locked(lock);
 }
 
-Result<void> LibusbTransport::cancel_and_drain_locked() noexcept
+Result<void> LibusbTransport::cancel_and_drain_locked(
+    std::unique_lock<std::recursive_mutex>& lock) noexcept
 {
     if (stream_ == nullptr) {
         stream_active_ = false;
@@ -984,6 +1187,9 @@ Result<void> LibusbTransport::cancel_and_drain_locked() noexcept
     for (std::size_t index = 0U; index < stream_->count; ++index) {
         StreamState::Slot& slot = stream_->slots[index];
         if (slot.status == StreamState::SlotStatus::submitted) {
+            const ApiGateLock api_lock(runtime_state_ == nullptr
+                                           ? nullptr
+                                           : &runtime_state_->stream_api_gate);
             const int result = api_->cancel_transfer(slot.transfer);
             if (result != 0 && result != LIBUSB_ERROR_NOT_FOUND && first_error == Error::OK) {
                 first_error = map_libusb_error(result);
@@ -995,7 +1201,13 @@ Result<void> LibusbTransport::cancel_and_drain_locked() noexcept
     std::size_t drain_event_calls = 0U;
     while (stream_->outstanding != 0U && drain_event_calls < kMaxDrainEventCalls) {
         // cancel callbackをevent処理で回収する前にfreeするとUAFになるため、outstandingを0まで待つ。
-        const int result = api_->handle_events(context_, 1000U);
+        lock.unlock();
+        int result = 0;
+        {
+            const CommandEventGateLock event_lock(runtime_state_);
+            result = api_->handle_events(context_, 1000U);
+        }
+        lock.lock();
         ++drain_event_calls;
         if (result != 0 && first_error == Error::OK) {
             first_error = map_libusb_error(result);
@@ -1007,9 +1219,9 @@ Result<void> LibusbTransport::cancel_and_drain_locked() noexcept
         // 到達を保証できる場合を除き、後から解放するとlibusb callbackがこれらを参照してUAFになる。
         stream_.release();
         stream_active_ = false;
-        abandoned_ = true;
+        abandoned_.store(true);
         if (runtime_state_ != nullptr) {
-            runtime_state_->abandoned = true;
+            runtime_state_->abandoned.store(true);
         }
         retained_fd_.release_without_close();
         if (first_error == Error::OK) {
@@ -1035,6 +1247,9 @@ void LibusbTransport::destroy_stream_locked() noexcept
     }
     for (std::size_t index = 0U; index < stream_->count; ++index) {
         if (stream_->slots[index].transfer != nullptr) {
+            const ApiGateLock api_lock(runtime_state_ == nullptr
+                                           ? nullptr
+                                           : &runtime_state_->stream_api_gate);
             api_->free_transfer(stream_->slots[index].transfer);
             stream_->slots[index].transfer = nullptr;
         }
@@ -1044,20 +1259,20 @@ void LibusbTransport::destroy_stream_locked() noexcept
 
 Result<void> LibusbTransport::cancel_stream() noexcept
 {
-    ApiGateLock lock(runtime_state_);
+    std::unique_lock<std::recursive_mutex> lock(stream_gate_);
     if (!stream_active_) {
         return Result<void>::success();
     }
-    return cancel_and_drain_locked();
+    return cancel_and_drain_locked(lock);
 }
 
 Result<void> LibusbTransport::stop_stream() noexcept
 {
-    ApiGateLock lock(runtime_state_);
+    std::unique_lock<std::recursive_mutex> lock(stream_gate_);
     if (!stream_active_) {
         return Result<void>::success();
     }
-    return cancel_and_drain_locked();
+    return cancel_and_drain_locked(lock);
 }
 
 bool NativeFdSyscalls::valid(int fd) noexcept
@@ -1355,8 +1570,7 @@ bool Q3U4Runtime::quarantined() const noexcept
     if (impl_ == nullptr || impl_->state_ == nullptr) {
         return false;
     }
-    ApiGateLock lock(impl_->state_.get());
-    return impl_->state_->abandoned;
+    return impl_->state_->abandoned.load();
 }
 
 Result<std::unique_ptr<Q3U4Runtime::Impl>> Q3U4Runtime::Impl::create(
@@ -1440,7 +1654,7 @@ Q3U4Runtime::Impl::~Impl() noexcept
     // transport-before-session/API invariant auditable and deterministic.
     transports_[1U].reset();
     transports_[0U].reset();
-    if (state_ != nullptr && state_->abandoned) {
+    if (state_ != nullptr && state_->abandoned.load()) {
         // A pending callback may still reach the leaked transfer state. Keep only the
         // API/context/gate graph alive; acquisition-time FdSyscalls is never callback-owned.
         state_.release();

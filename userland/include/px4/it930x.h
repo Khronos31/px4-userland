@@ -95,6 +95,9 @@ public:
     // Internal Q3U4 backend power operation.  It deliberately addresses only
     // GPIO 7 and GPIO 2; GPIO 11 belongs to the LNB path.
     Result<void> set_q3u4_backend_power(bool on, Q3U4Delay& delay) noexcept;
+    // Narrow Q3U4 LNB operation. GPIO 11 is the only register this authority
+    // may change: low is 0 V/off and high is 15 V/on.
+    Result<void> set_q3u4_lnb_power(bool on) noexcept;
     // Q3U4 exposes its internal card reader on device 1 only. Device 1 backend
     // power must already be enabled by the caller before using these bridge APIs.
     Result<void> initialize_card_uart() noexcept;
@@ -116,6 +119,7 @@ private:
         unknown,
         off,
         on,
+        disconnected,
     };
 
     Result<std::vector<std::uint8_t>> transact(std::uint16_t command,
@@ -146,6 +150,7 @@ private:
     // completed every required write. Unknown deliberately retries the full
     // requested sequence on the next call; this is the conservative policy.
     Q3U4BackendPowerState q3u4_backend_power_state_ = Q3U4BackendPowerState::unknown;
+    bool q3u4_lnb_disconnected_ = false;
 };
 
 }  // namespace px4::userland

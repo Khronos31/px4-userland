@@ -198,6 +198,38 @@ bool test_invalid_tags_are_consumed()
     return true;
 }
 
+struct TagObserverState final {
+    std::vector<std::uint8_t> wire_syncs;
+};
+
+void observe_invalid_tag(void* context, std::uint8_t wire_sync) noexcept
+{
+    auto& state = *static_cast<TagObserverState*>(context);
+    state.wire_syncs.push_back(wire_sync);
+}
+
+bool test_aligned_tei_observer_preserves_boundary()
+{
+    std::vector<std::uint8_t> input;
+    append_packet(input, make_packet(1U, 0x11U));
+    append_packet(input, make_packet(9U, 0x22U));
+    append_packet(input, make_packet(2U, 0x33U));
+    append_packet(input, make_packet(5U, 0x44U));
+    append_packet(input, make_packet(3U, 0x55U));
+
+    SinkState sink;
+    TagObserverState observer;
+    TaggedTsDemux demux;
+    DEMUX_CHECK(demux.push(ByteView{input.data(), input.size()}, record_packet, &sink,
+                           observe_invalid_tag, &observer));
+    DEMUX_CHECK((sink.receiver_indices == std::vector<std::size_t>{0U, 1U, 2U}));
+    DEMUX_CHECK((observer.wire_syncs == std::vector<std::uint8_t>{0x97U}));
+    DEMUX_CHECK(demux.counters().invalid_tag_packets == 2U);
+    DEMUX_CHECK(demux.counters().emitted_packets == 3U);
+    DEMUX_CHECK(demux.counters().buffered_bytes == 0U);
+    return true;
+}
+
 bool test_reset()
 {
     std::array<std::uint8_t, 3U> partial{0xa5U, 0xa5U, 0xa5U};
@@ -374,7 +406,8 @@ bool run_tagged_ts_demux_tests()
 {
     return test_aligned_tags_and_copy() && test_every_split_position() &&
            test_one_byte_feed() && test_garbage_false_sync_and_remainder() &&
-           test_invalid_tags_are_consumed() && test_reset() && test_sink_failure_retry() &&
+           test_invalid_tags_are_consumed() && test_aligned_tei_observer_preserves_boundary() &&
+           test_reset() && test_sink_failure_retry() &&
            test_full_transfer_stress() && test_sink_failure_after_many_successes() &&
            test_input_limits_and_bounded_garbage();
 }

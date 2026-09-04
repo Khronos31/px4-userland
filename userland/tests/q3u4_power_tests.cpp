@@ -13,9 +13,12 @@
 #include "q3u4_power.h"
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <mutex>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -140,6 +143,53 @@ public:
     std::vector<std::uint32_t> sleeps;
 };
 
+class FakeBackend final : public Q3U4BackendPower {
+public:
+    Result<void> set_backend_power(bool on, Q3U4Delay&) noexcept override
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        calls.push_back(on);
+        if (next_failure < failures.size()) {
+            const Error error = failures[next_failure++];
+            return Result<void>::failure(error);
+        }
+        state = on;
+        return Result<void>::success();
+    }
+
+    void fail_next(Error error)
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        failures.push_back(error);
+    }
+
+    std::vector<bool> calls_copy() const
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        return calls;
+    }
+
+    void clear_calls()
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        calls.clear();
+    }
+
+    mutable std::mutex mutex;
+    std::vector<bool> calls;
+    std::vector<Error> failures;
+    std::size_t next_failure = 0U;
+    bool state = false;
+};
+
+bool check_snapshot(const Q3U4PowerCoordinator& coordinator, std::uint8_t receivers,
+                    bool card, Q3U4PowerState dev1, Q3U4PowerState dev2)
+{
+    const auto snapshot = coordinator.snapshot();
+    return snapshot.receiver_mask == receivers && snapshot.card_acquired == card &&
+           snapshot.backend_state[0] == dev1 && snapshot.backend_state[1] == dev2;
+}
+
 }  // namespace
 
 bool run_q3u4_power_tests()
@@ -179,11 +229,56 @@ bool run_q3u4_power_tests()
         std::uint8_t sequence = 0U;
         expect_write(transport, sequence, kGpio7Output, 0U, MockOutcome::timeout);
         expect_write(transport, sequence, kGpio2Output, 0U, MockOutcome::disconnect);
-        expect_write(transport, sequence, kGpio7Output, 1U, MockOutcome::protocol_error);
         DelayRecorder delay;
         It930xController controller(transport, CommandPacingOptions{CommandPacingMode::no_delay});
         const auto result = controller.set_q3u4_backend_power(true, delay);
-        CHECK(!result && result.error() == Error::TIMEOUT);
+        CHECK(!result && result.error() == Error::DISCONNECTED);
+        // DISCONNECTED is terminal: do not issue the old recovery GPIO 7 write.
+        CHECK(!controller.set_q3u4_backend_power(false, delay));
+        CHECK(transport.remaining_expectations() == 0U);
+    }
+
+    {
+        MockTransport transport;
+        std::uint8_t sequence = 0U;
+        expect_write(transport, sequence, kGpio7Output, 0U, MockOutcome::disconnect);
+        DelayRecorder delay;
+        It930xController controller(transport, CommandPacingOptions{CommandPacingMode::no_delay});
+        const auto result = controller.set_q3u4_backend_power(true, delay);
+        CHECK(!result && result.error() == Error::DISCONNECTED);
+        CHECK(!controller.set_q3u4_backend_power(false, delay));
+        // A disconnected controller rejects later cleanup without another write.
+        CHECK(transport.remaining_expectations() == 0U);
+    }
+
+    {
+        MockTransport transport;
+        std::uint8_t sequence = 0U;
+        expect_write(transport, sequence, kGpio7Output, 0U);
+        expect_write(transport, sequence, kGpio2Output, 1U, MockOutcome::timeout);
+        expect_write(transport, sequence, kGpio2Output, 0U, MockOutcome::disconnect);
+        DelayRecorder delay;
+        It930xController controller(transport, CommandPacingOptions{CommandPacingMode::no_delay});
+        const auto result = controller.set_q3u4_backend_power(true, delay);
+        CHECK(!result && result.error() == Error::DISCONNECTED);
+        CHECK(!controller.set_q3u4_backend_power(false, delay));
+        // A disconnect during backend cleanup overrides the recoverable timeout.
+        CHECK(transport.remaining_expectations() == 0U);
+    }
+
+    {
+        MockTransport transport;
+        std::uint8_t sequence = 0U;
+        expect_write(transport, sequence, kGpio7Output, 0U);
+        expect_write(transport, sequence, kGpio2Output, 1U, MockOutcome::timeout);
+        expect_write(transport, sequence, kGpio2Output, 0U);
+        expect_write(transport, sequence, kGpio7Output, 1U, MockOutcome::disconnect);
+        DelayRecorder delay;
+        It930xController controller(transport, CommandPacingOptions{CommandPacingMode::no_delay});
+        const auto result = controller.set_q3u4_backend_power(true, delay);
+        CHECK(!result && result.error() == Error::DISCONNECTED);
+        CHECK(!controller.set_q3u4_backend_power(false, delay));
+        // A disconnect during reset cleanup also overrides the timeout.
         CHECK(transport.remaining_expectations() == 0U);
     }
 
@@ -206,13 +301,12 @@ bool run_q3u4_power_tests()
         MockTransport transport;
         std::uint8_t sequence = 0U;
         expect_write(transport, sequence, kGpio2Output, 0U, MockOutcome::disconnect);
-        expect_write(transport, sequence, kGpio7Output, 1U);
-        expect_write(transport, sequence, kGpio2Output, 0U);
-        expect_write(transport, sequence, kGpio7Output, 1U);
         DelayRecorder delay;
         It930xController controller(transport, CommandPacingOptions{CommandPacingMode::no_delay});
+        const auto result = controller.set_q3u4_backend_power(false, delay);
+        CHECK(!result && result.error() == Error::DISCONNECTED);
         CHECK(!controller.set_q3u4_backend_power(false, delay));
-        CHECK(controller.set_q3u4_backend_power(false, delay));
+        // Later release/cleanup must not retry either backend GPIO.
         CHECK(transport.remaining_expectations() == 0U);
     }
 
@@ -224,6 +318,20 @@ bool run_q3u4_power_tests()
         DelayRecorder delay;
         It930xController controller(transport, CommandPacingOptions{CommandPacingMode::no_delay});
         CHECK(!controller.set_q3u4_backend_power(false, delay));
+        CHECK(transport.remaining_expectations() == 0U);
+    }
+
+    {
+        MockTransport transport;
+        std::uint8_t sequence = 0U;
+        expect_write(transport, sequence, kGpio2Output, 0U, MockOutcome::timeout);
+        expect_write(transport, sequence, kGpio7Output, 1U, MockOutcome::disconnect);
+        DelayRecorder delay;
+        It930xController controller(transport, CommandPacingOptions{CommandPacingMode::no_delay});
+        const auto result = controller.set_q3u4_backend_power(false, delay);
+        CHECK(!result && result.error() == Error::DISCONNECTED);
+        CHECK(!controller.set_q3u4_backend_power(true, delay));
+        // DISCONNECTED on the final recovery step overrides the timeout.
         CHECK(transport.remaining_expectations() == 0U);
     }
 
@@ -374,6 +482,297 @@ bool run_q3u4_power_tests()
         const auto result = controller.purge_psb(Timeout{619U});
         CHECK(!result && result.error() == Error::PROTOCOL_ERROR);
         CHECK(transport.remaining_expectations() == 0U);
+    }
+
+    // The coupled matrix is independent of which bridge owns the receiver.
+    {
+        FakeBackend dev1;
+        FakeBackend dev2;
+        DelayRecorder delay;
+        Q3U4PowerCoordinator coordinator(dev1, dev2, delay);
+        CHECK(check_snapshot(coordinator, 0U, false, Q3U4PowerState::off,
+                             Q3U4PowerState::off));
+
+        CHECK(coordinator.acquire_receiver(0U));
+        CHECK(check_snapshot(coordinator, 0x01U, false, Q3U4PowerState::on,
+                             Q3U4PowerState::on));
+        CHECK(dev1.calls_copy() == std::vector<bool>{true});
+        CHECK(dev2.calls_copy() == std::vector<bool>{true});
+
+        CHECK(coordinator.acquire_receiver(4U));
+        CHECK(coordinator.release_receiver(0U));
+        CHECK(check_snapshot(coordinator, 0x10U, false, Q3U4PowerState::on,
+                             Q3U4PowerState::on));
+        CHECK(coordinator.release_receiver(4U));
+        CHECK(check_snapshot(coordinator, 0U, false, Q3U4PowerState::off,
+                             Q3U4PowerState::off));
+        CHECK((dev1.calls_copy() == std::vector<bool>{true, false}));
+        CHECK((dev2.calls_copy() == std::vector<bool>{true, false}));
+
+        CHECK(coordinator.acquire_receiver(0U));
+        CHECK(coordinator.acquire_receiver(4U));
+        CHECK(coordinator.release_receiver(4U));
+        CHECK(check_snapshot(coordinator, 0x01U, false, Q3U4PowerState::on,
+                             Q3U4PowerState::on));
+        CHECK(coordinator.release_receiver(0U));
+        CHECK(check_snapshot(coordinator, 0U, false, Q3U4PowerState::off,
+                             Q3U4PowerState::off));
+
+        CHECK(coordinator.acquire_card());
+        CHECK(check_snapshot(coordinator, 0U, true, Q3U4PowerState::on,
+                             Q3U4PowerState::off));
+        CHECK((dev1.calls_copy() == std::vector<bool>{true, false, true, false, true}));
+        CHECK((dev2.calls_copy() == std::vector<bool>{true, false, true, false}));
+        CHECK(coordinator.acquire_receiver(7U));
+        CHECK(check_snapshot(coordinator, 0x80U, true, Q3U4PowerState::on,
+                             Q3U4PowerState::on));
+        // Closing the card side first must leave the receiver's coupled
+        // backend power untouched.
+        CHECK(coordinator.release_card());
+        CHECK(check_snapshot(coordinator, 0x80U, false, Q3U4PowerState::on,
+                             Q3U4PowerState::on));
+        CHECK(coordinator.release_receiver(7U));
+        CHECK(check_snapshot(coordinator, 0U, false, Q3U4PowerState::off,
+                             Q3U4PowerState::off));
+    }
+
+    // Ownership validation is explicit and cannot underflow a counter.
+    {
+        FakeBackend dev1;
+        FakeBackend dev2;
+        DelayRecorder delay;
+        Q3U4PowerCoordinator coordinator(dev1, dev2, delay);
+        const auto invalid_acquire = coordinator.acquire_receiver(8U);
+        CHECK(!invalid_acquire && invalid_acquire.error() == Error::INVALID_ARGUMENT);
+        const auto missing_release = coordinator.release_receiver(0U);
+        CHECK(!missing_release && missing_release.error() == Error::INVALID_ARGUMENT);
+        CHECK(coordinator.acquire_receiver(0U));
+        const auto duplicate_acquire = coordinator.acquire_receiver(0U);
+        CHECK(!duplicate_acquire && duplicate_acquire.error() == Error::BUSY);
+        const auto other_missing_release = coordinator.release_receiver(1U);
+        CHECK(!other_missing_release && other_missing_release.error() == Error::INVALID_ARGUMENT);
+        CHECK(coordinator.release_receiver(0U));
+        const auto second_release = coordinator.release_receiver(0U);
+        CHECK(!second_release && second_release.error() == Error::INVALID_ARGUMENT);
+        CHECK(coordinator.acquire_card());
+        const auto duplicate_card = coordinator.acquire_card();
+        CHECK(!duplicate_card && duplicate_card.error() == Error::BUSY);
+        CHECK(coordinator.release_card());
+        const auto missing_card = coordinator.release_card();
+        CHECK(!missing_card && missing_card.error() == Error::INVALID_ARGUMENT);
+        const auto invalid_bridge = coordinator.disconnect(static_cast<Q3U4Bridge>(2U));
+        CHECK(!invalid_bridge && invalid_bridge.error() == Error::INVALID_ARGUMENT);
+    }
+
+    // Acquisition is transactional: every failed transition rolls the
+    // logical reference back, and a non-disconnect unknown state is retried.
+    {
+        FakeBackend dev1;
+        FakeBackend dev2;
+        DelayRecorder delay;
+        Q3U4PowerCoordinator coordinator(dev1, dev2, delay);
+        dev1.fail_next(Error::TIMEOUT);
+        const auto result = coordinator.acquire_receiver(0U);
+        CHECK(!result && result.error() == Error::TIMEOUT);
+        CHECK(check_snapshot(coordinator, 0U, false, Q3U4PowerState::off,
+                             Q3U4PowerState::off));
+        CHECK((dev1.calls_copy() == std::vector<bool>{true, false}));
+        CHECK(dev2.calls_copy().empty());
+    }
+
+    {
+        FakeBackend dev1;
+        FakeBackend dev2;
+        DelayRecorder delay;
+        Q3U4PowerCoordinator coordinator(dev1, dev2, delay);
+        dev2.fail_next(Error::USB_IO);
+        const auto result = coordinator.acquire_receiver(4U);
+        CHECK(!result && result.error() == Error::USB_IO);
+        CHECK(check_snapshot(coordinator, 0U, false, Q3U4PowerState::off,
+                             Q3U4PowerState::off));
+        CHECK((dev1.calls_copy() == std::vector<bool>{true, false}));
+        CHECK((dev2.calls_copy() == std::vector<bool>{true, false}));
+    }
+
+    // Releases always remove the logical owner, even when physical shutdown
+    // fails; the affected bridge remains unknown for a later retry.
+    {
+        FakeBackend dev1;
+        FakeBackend dev2;
+        DelayRecorder delay;
+        Q3U4PowerCoordinator coordinator(dev1, dev2, delay);
+        CHECK(coordinator.acquire_receiver(0U));
+        dev1.clear_calls();
+        dev2.clear_calls();
+        dev1.fail_next(Error::USB_IO);
+        const auto result = coordinator.release_receiver(0U);
+        CHECK(!result && result.error() == Error::USB_IO);
+        CHECK(check_snapshot(coordinator, 0U, false, Q3U4PowerState::unknown,
+                             Q3U4PowerState::on));
+        CHECK(dev1.calls_copy() == std::vector<bool>{false});
+        CHECK(dev2.calls_copy().empty());
+        CHECK(coordinator.reconcile());
+        CHECK(check_snapshot(coordinator, 0U, false, Q3U4PowerState::off,
+                             Q3U4PowerState::off));
+    }
+
+    {
+        FakeBackend dev1;
+        FakeBackend dev2;
+        DelayRecorder delay;
+        Q3U4PowerCoordinator coordinator(dev1, dev2, delay);
+        CHECK(coordinator.acquire_receiver(0U));
+        dev1.clear_calls();
+        dev2.clear_calls();
+        dev2.fail_next(Error::USB_IO);
+        const auto result = coordinator.release_receiver(0U);
+        CHECK(!result && result.error() == Error::USB_IO);
+        CHECK(check_snapshot(coordinator, 0U, false, Q3U4PowerState::off,
+                             Q3U4PowerState::unknown));
+        CHECK(dev1.calls_copy() == std::vector<bool>{false});
+        CHECK(dev2.calls_copy() == std::vector<bool>{false});
+        CHECK(coordinator.reconcile());
+        CHECK(check_snapshot(coordinator, 0U, false, Q3U4PowerState::off,
+                             Q3U4PowerState::off));
+    }
+
+    {
+        FakeBackend dev1;
+        FakeBackend dev2;
+        DelayRecorder delay;
+        Q3U4PowerCoordinator coordinator(dev1, dev2, delay);
+        dev1.fail_next(Error::TIMEOUT);
+        const auto acquire = coordinator.acquire_card();
+        CHECK(!acquire && acquire.error() == Error::TIMEOUT);
+        CHECK(check_snapshot(coordinator, 0U, false, Q3U4PowerState::off,
+                             Q3U4PowerState::off));
+        CHECK((dev1.calls_copy() == std::vector<bool>{true, false}));
+        CHECK(dev2.calls_copy().empty());
+
+        CHECK(coordinator.acquire_card());
+        dev1.clear_calls();
+        dev1.fail_next(Error::USB_IO);
+        const auto release = coordinator.release_card();
+        CHECK(!release && release.error() == Error::USB_IO);
+        CHECK(check_snapshot(coordinator, 0U, false, Q3U4PowerState::unknown,
+                             Q3U4PowerState::off));
+        CHECK(coordinator.reconcile());
+        CHECK(check_snapshot(coordinator, 0U, false, Q3U4PowerState::off,
+                             Q3U4PowerState::off));
+    }
+
+    // A disconnected bridge is terminal. Disconnect clears all logical
+    // references and the surviving bridge is not touched during that path.
+    {
+        FakeBackend dev1;
+        FakeBackend dev2;
+        DelayRecorder delay;
+        Q3U4PowerCoordinator coordinator(dev1, dev2, delay);
+        CHECK(coordinator.acquire_receiver(0U));
+        CHECK(coordinator.acquire_card());
+        dev1.clear_calls();
+        dev2.clear_calls();
+        CHECK(coordinator.disconnect(Q3U4Bridge::dev2));
+        CHECK(dev1.calls_copy().empty());
+        CHECK(dev2.calls_copy().empty());
+        CHECK(check_snapshot(coordinator, 0U, false, Q3U4PowerState::unknown,
+                             Q3U4PowerState::disconnected));
+        CHECK(!coordinator.release_receiver(0U));
+        CHECK(!coordinator.release_card());
+        const auto result = coordinator.acquire_receiver(4U);
+        CHECK(!result && result.error() == Error::DISCONNECTED);
+        const auto card_retry = coordinator.acquire_card();
+        CHECK(!card_retry && card_retry.error() == Error::DISCONNECTED);
+        const auto reconcile = coordinator.reconcile();
+        CHECK(!reconcile && reconcile.error() == Error::DISCONNECTED);
+        CHECK(dev1.calls_copy().empty());
+        CHECK(dev2.calls_copy().empty());
+    }
+
+    {
+        FakeBackend dev1;
+        FakeBackend dev2;
+        DelayRecorder delay;
+        Q3U4PowerCoordinator coordinator(dev1, dev2, delay);
+        CHECK(coordinator.acquire_receiver(0U));
+        dev1.clear_calls();
+        dev2.clear_calls();
+        CHECK(coordinator.disconnect(Q3U4Bridge::dev1));
+        CHECK(dev1.calls_copy().empty());
+        CHECK(dev2.calls_copy().empty());
+        CHECK(check_snapshot(coordinator, 0U, false, Q3U4PowerState::disconnected,
+                             Q3U4PowerState::unknown));
+        const auto result = coordinator.acquire_card();
+        CHECK(!result && result.error() == Error::DISCONNECTED);
+        CHECK(dev1.calls_copy().empty());
+    }
+
+    // An Error::DISCONNECTED returned by a backend has the same terminal
+    // effect as the explicit transport-loss path.
+    {
+        FakeBackend dev1;
+        FakeBackend dev2;
+        DelayRecorder delay;
+        Q3U4PowerCoordinator coordinator(dev1, dev2, delay);
+        dev2.fail_next(Error::DISCONNECTED);
+        const auto result = coordinator.acquire_receiver(4U);
+        CHECK(!result && result.error() == Error::DISCONNECTED);
+        CHECK(check_snapshot(coordinator, 0U, false, Q3U4PowerState::off,
+                             Q3U4PowerState::disconnected));
+        CHECK((dev1.calls_copy() == std::vector<bool>{true, false}));
+        CHECK((dev2.calls_copy() == std::vector<bool>{true}));
+
+        const auto retry = coordinator.acquire_receiver(0U);
+        CHECK(!retry && retry.error() == Error::DISCONNECTED);
+        CHECK((dev1.calls_copy() == std::vector<bool>{true, false}));
+        CHECK((dev2.calls_copy() == std::vector<bool>{true}));
+    }
+
+    // All eight IDs can be acquired and released concurrently. The barriers
+    // make each phase deterministic while exercising the coordinator mutex.
+    {
+        FakeBackend dev1;
+        FakeBackend dev2;
+        DelayRecorder delay;
+        Q3U4PowerCoordinator coordinator(dev1, dev2, delay);
+        for (std::size_t round = 0U; round < 32U; ++round) {
+            std::atomic<unsigned> ready{0U};
+            std::atomic<bool> go{false};
+            std::array<Error, 8U> acquire_errors{};
+            std::array<std::thread, 8U> workers;
+            for (std::size_t id = 0U; id < workers.size(); ++id) {
+                workers[id] = std::thread([&, id]() {
+                    ready.fetch_add(1U);
+                    while (!go.load()) std::this_thread::yield();
+                    acquire_errors[id] = coordinator.acquire_receiver(
+                        static_cast<std::uint8_t>(id)).error();
+                });
+            }
+            while (ready.load() != workers.size()) std::this_thread::yield();
+            go.store(true);
+            for (std::thread& worker : workers) worker.join();
+            for (const Error error : acquire_errors) CHECK(error == Error::OK);
+            CHECK(check_snapshot(coordinator, 0xffU, false, Q3U4PowerState::on,
+                                 Q3U4PowerState::on));
+
+            ready.store(0U);
+            go.store(false);
+            std::array<Error, 8U> release_errors{};
+            for (std::size_t id = 0U; id < workers.size(); ++id) {
+                workers[id] = std::thread([&, id]() {
+                    ready.fetch_add(1U);
+                    while (!go.load()) std::this_thread::yield();
+                    release_errors[id] = coordinator.release_receiver(
+                        static_cast<std::uint8_t>(id)).error();
+                });
+            }
+            while (ready.load() != workers.size()) std::this_thread::yield();
+            go.store(true);
+            for (std::thread& worker : workers) worker.join();
+            for (const Error error : release_errors) CHECK(error == Error::OK);
+            CHECK(check_snapshot(coordinator, 0U, false, Q3U4PowerState::off,
+                                 Q3U4PowerState::off));
+        }
     }
 
     return true;

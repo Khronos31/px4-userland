@@ -19,6 +19,7 @@ struct Px4dArguments final {
     bool valid = false;
     bool help = false;
     bool group = false;
+    bool allow_lnb_power = false;
     std::string device;
     std::string firmware;
     std::string runtime_directory;

@@ -59,6 +59,7 @@ Px4dArguments parse_px4d_arguments(int argc,
     bool have_device = false;
     bool have_firmware = false;
     bool have_runtime = false;
+    bool have_allow_lnb_power = false;
     for (int index = 1; index < argc; ++index) {
         if (argv[index] == nullptr) return invalid("null argument");
         const std::string_view option(argv[index]);
@@ -71,6 +72,13 @@ Px4dArguments parse_px4d_arguments(int argc,
         if (option == "--group") {
             if (result.group) return invalid("duplicate --group");
             result.group = true;
+            continue;
+        }
+        if (option == "--allow-lnb-power") {
+            if (have_allow_lnb_power)
+                return invalid("duplicate --allow-lnb-power");
+            have_allow_lnb_power = true;
+            result.allow_lnb_power = true;
             continue;
         }
         if (option != "--device" && option != "--firmware" &&

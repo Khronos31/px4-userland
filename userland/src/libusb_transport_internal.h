@@ -4,9 +4,11 @@
 
 #include "px4/libusb_transport.h"
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <array>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -156,9 +158,89 @@ private:
     std::vector<DeviceCandidate> candidates_;
 };
 
+// Serialize synchronous command transactions across the two Q3U4 bridges.
+// Stream submission and event handling deliberately do not take this gate:
+// libusb's wrapped event APIs arbitrate concurrent event handlers, while a
+// synchronous transfer is itself implemented through that event machinery.
+// Holding this application gate around stream replenishment would therefore
+// let a card command reap all stream URBs while preventing their resubmission.
+// The ticket policy keeps command callers fair.  At most a small,
+// process-bounded number of callers can be outstanding, so uint64_t ticket
+// ambiguity cannot occur in practice.
+class RuntimeApiGate final {
+public:
+    void lock() noexcept
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        const std::uint64_t ticket = next_ticket_++;
+        state_changed_.notify_all();
+        turn_.wait(lock, [this, ticket] { return serving_ticket_ == ticket; });
+    }
+
+    void unlock() noexcept
+    {
+        {
+            const std::lock_guard<std::mutex> lock(mutex_);
+            ++serving_ticket_;
+        }
+        turn_.notify_all();
+        state_changed_.notify_all();
+    }
+
+    // Internal observability used by the deterministic runtime serialization
+    // test.  This header is private and is not part of the installed API.
+    void wait_until_queued(std::size_t count) noexcept
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        state_changed_.wait(lock, [this, count] {
+            return static_cast<std::uint64_t>(next_ticket_ - serving_ticket_) > count;
+        });
+    }
+
+private:
+    std::mutex mutex_;
+    std::condition_variable turn_;
+    std::condition_variable state_changed_;
+    std::uint64_t next_ticket_ = 0U;
+    std::uint64_t serving_ticket_ = 0U;
+};
+
+// Exactly one thread may drive libusb's event loop for the shared context.
+// Synchronous transfers take this gate for their whole call because they
+// drive events internally.  Stream pumps only try-lock it; if a command or
+// the other pump is handling events, they wait on their transport callback
+// condition instead.  A queued command is given priority over a new pump
+// turn, bounding command latency without blocking URB consumption.
+class RuntimeEventGate final {
+public:
+    void lock_command() noexcept
+    {
+        command_waiters_.fetch_add(1U);
+        mutex_.lock();
+        command_waiters_.fetch_sub(1U);
+    }
+
+    bool try_lock_stream() noexcept
+    {
+        if (command_waiters_.load() != 0U) return false;
+        if (!mutex_.try_lock()) return false;
+        if (command_waiters_.load() == 0U) return true;
+        mutex_.unlock();
+        return false;
+    }
+
+    void unlock() noexcept { mutex_.unlock(); }
+
+private:
+    std::mutex mutex_;
+    std::atomic<unsigned int> command_waiters_{0U};
+};
+
 struct Q3U4RuntimeState final {
-    std::mutex api_gate;
-    bool abandoned = false;
+    RuntimeApiGate api_gate;
+    RuntimeApiGate stream_api_gate;
+    RuntimeEventGate event_gate;
+    std::atomic<bool> abandoned{false};
 };
 
 class LibusbTransport final : public Transport {
@@ -208,7 +290,8 @@ public:
 
 private:
     Result<void> cancel_and_drain() noexcept;
-    Result<void> cancel_and_drain_locked() noexcept;
+    Result<void> cancel_and_drain_locked(
+        std::unique_lock<std::recursive_mutex>& lock) noexcept;
     void destroy_stream() noexcept;
     void destroy_stream_locked() noexcept;
     static void on_transfer(LibusbApi::Transfer transfer,
@@ -221,8 +304,10 @@ private:
     Q3U4RuntimeState* runtime_state_;
     RetainedFd retained_fd_;
     bool claimed_;
+    mutable std::recursive_mutex stream_gate_;
+    std::condition_variable_any stream_changed_;
     bool stream_active_;
-    bool abandoned_;
+    std::atomic<bool> abandoned_;
     std::unique_ptr<StreamState> stream_;
 };
 

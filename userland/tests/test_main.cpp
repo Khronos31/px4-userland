@@ -57,14 +57,22 @@ bool run_px4d_args_tests();
 #if PX4_ENABLE_POSIX_IPC
 bool run_control_integration_tests();
 bool run_posix_ipc_tests();
+bool run_posix_tuner_nonce_tests();
+bool run_control_workers_tests();
+bool run_px4_ts_tests();
+bool run_px4ctl_format_tests();
 #endif
 bool run_q3u4_frontend_tests();
+bool run_q3u4_card_backend_tests();
 bool run_q3u4_power_tests();
+bool run_q3u4_lnb_power_tests();
+bool run_tuner_service_tests();
 bool run_r850_tests();
 bool run_rt710_tests();
 bool run_frontend_probe_tests();
 bool run_ts_probe_tests();
 bool run_tagged_ts_demux_tests();
+bool run_q3u4_stream_tests();
 
 #if PX4_ENABLE_LIBUSB && (defined(__linux__) || defined(__ANDROID__))
 #include <fcntl.h>
@@ -437,6 +445,34 @@ bool test_it930x_q3u4_power_state_after_initialization()
     CHECK(!failed_init && failed_init.error() == Error::TIMEOUT);
     CHECK(failed_controller.set_q3u4_backend_power(false, failed_delay));
     CHECK(failed.remaining_expectations() == 0U);
+    return true;
+}
+
+bool test_it930x_q3u4_lnb_gpio_authority()
+{
+    {
+        MockTransport transport;
+        std::uint8_t sequence = 0U;
+        expect_register_write(transport, sequence, 0xd8d3U, {1U});
+        expect_register_write(transport, sequence, 0xd8d3U, {0U});
+        It930xController controller(transport, kFastPacing);
+        CHECK(controller.set_q3u4_lnb_power(true));
+        CHECK(controller.set_q3u4_lnb_power(false));
+        CHECK(transport.remaining_expectations() == 0U);
+    }
+    {
+        MockTransport transport;
+        std::uint8_t sequence = 0U;
+        expect_register_write(transport, sequence, 0xd8d3U, {1U}, 0U,
+                              MockOutcome::disconnect);
+        It930xController controller(transport, kFastPacing);
+        const auto disconnected = controller.set_q3u4_lnb_power(true);
+        CHECK(!disconnected && disconnected.error() == Error::DISCONNECTED);
+        // Terminal transport loss suppresses every later GPIO 11 write.
+        const auto cleanup = controller.set_q3u4_lnb_power(false);
+        CHECK(!cleanup && cleanup.error() == Error::DISCONNECTED);
+        CHECK(transport.remaining_expectations() == 0U);
+    }
     return true;
 }
 
@@ -1351,6 +1387,9 @@ struct FakeHandle final {
 struct FakeTransfer final {
     LibusbApi::TransferCallback callback = nullptr;
     void* context = nullptr;
+    std::uint8_t* buffer = nullptr;
+    std::uint8_t marker = 0U;
+    std::uint64_t submission_order = 0U;
     bool submitted = false;
     bool callback_pending = false;
 };
@@ -1368,6 +1407,8 @@ public:
     FakeDevice* wrapped_device = nullptr;
     std::vector<FakeDevice*> wrapped_devices;
     bool complete_events = false;
+    bool complete_all_events = false;
+    bool complete_events_reverse = false;
     bool cancel_callbacks = true;
     bool cancel_returns_not_found = false;
     bool callback_after_not_found = false;
@@ -1423,6 +1464,22 @@ public:
     std::atomic<bool> block_lifecycle_api{false};
     std::atomic<bool> lifecycle_api_entered{false};
     std::atomic<bool> release_lifecycle_api{false};
+    bool dispatch_stream_callbacks_in_bulk = false;
+
+    void wait_for_bulk_stream_callbacks() noexcept
+    {
+        std::unique_lock<std::mutex> lock(bulk_stream_mutex_);
+        bulk_stream_changed_.wait(lock, [this] { return bulk_stream_callbacks_done_; });
+    }
+
+    void release_bulk_after_stream_callbacks() noexcept
+    {
+        {
+            const std::lock_guard<std::mutex> lock(bulk_stream_mutex_);
+            release_bulk_after_callbacks_ = true;
+        }
+        bulk_stream_changed_.notify_all();
+    }
 
     void record_lifecycle(const char* event) noexcept
     {
@@ -1659,6 +1716,24 @@ public:
                 std::memcpy(buffer, bulk_payload.data(), copy_size);
             }
         }
+        if (dispatch_stream_callbacks_in_bulk) {
+            // libusb synchronous transfers are implemented on top of the
+            // shared async event machinery.  Model a card command reaping all
+            // currently submitted stream URBs before that command completes.
+            for (FakeTransfer* transfer : transfers_) {
+                if (!transfer->submitted) continue;
+                transfer->submitted = false;
+                if (transfer->buffer != nullptr) transfer->buffer[0U] = transfer->marker;
+                ++callback_calls;
+                transfer->callback(static_cast<Transfer>(transfer), completion_status,
+                                   completion_length, transfer->context);
+            }
+            std::unique_lock<std::mutex> lock(bulk_stream_mutex_);
+            bulk_stream_callbacks_done_ = true;
+            bulk_stream_changed_.notify_all();
+            bulk_stream_changed_.wait(
+                lock, [this] { return release_bulk_after_callbacks_; });
+        }
         const int result = bulk_result;
         leave_bulk_gate();
         return result;
@@ -1670,14 +1745,18 @@ public:
         return new FakeTransfer;
     }
 
-    void fill_bulk_transfer(Transfer transfer, Handle, std::uint8_t, std::uint8_t*, int,
+    void fill_bulk_transfer(Transfer transfer, Handle, std::uint8_t, std::uint8_t* buffer, int,
                             TransferCallback callback, void* context,
                             unsigned int) noexcept override
     {
         auto* fake = static_cast<FakeTransfer*>(transfer);
         fake->callback = callback;
         fake->context = context;
-        transfers_.push_back(fake);
+        fake->buffer = buffer;
+        if (std::find(transfers_.begin(), transfers_.end(), fake) == transfers_.end()) {
+            fake->marker = static_cast<std::uint8_t>(transfers_.size() + 1U);
+            transfers_.push_back(fake);
+        }
     }
 
     int submit_transfer(Transfer transfer) noexcept override
@@ -1689,7 +1768,9 @@ public:
             leave_lifecycle_gate();
             return submit_result;
         }
-        static_cast<FakeTransfer*>(transfer)->submitted = true;
+        auto* fake = static_cast<FakeTransfer*>(transfer);
+        fake->submitted = true;
+        fake->submission_order = next_submission_order_++;
         leave_lifecycle_gate();
         return 0;
     }
@@ -1728,14 +1809,34 @@ public:
         enter_lifecycle_gate();
         ++event_calls;
         if (complete_events) {
-            for (const auto& transfer : transfers_) {
+            auto complete = [this](FakeTransfer* transfer) noexcept {
                 if (transfer->submitted || transfer->callback_pending) {
                     transfer->submitted = false;
                     transfer->callback_pending = false;
+                    if (transfer->buffer != nullptr) transfer->buffer[0U] = transfer->marker;
                     ++callback_calls;
                     transfer->callback(static_cast<Transfer>(transfer), completion_status,
                                        completion_length, transfer->context);
-                    break;
+                    return true;
+                }
+                return false;
+            };
+            if (complete_events_reverse) {
+                for (auto iterator = transfers_.rbegin(); iterator != transfers_.rend(); ++iterator) {
+                    if (complete(*iterator) && !complete_all_events) break;
+                }
+            } else if (!complete_all_events) {
+                FakeTransfer* next = nullptr;
+                for (FakeTransfer* transfer : transfers_) {
+                    if (!(transfer->submitted || transfer->callback_pending)) continue;
+                    if (next == nullptr ||
+                        transfer->submission_order < next->submission_order)
+                        next = transfer;
+                }
+                if (next != nullptr) (void)complete(next);
+            } else {
+                for (FakeTransfer* transfer : transfers_) {
+                    (void)complete(transfer);
                 }
             }
         }
@@ -1746,7 +1847,12 @@ public:
     void remember_transfer(Transfer transfer) { transfers_.push_back(static_cast<FakeTransfer*>(transfer)); }
 
 private:
+    std::mutex bulk_stream_mutex_;
+    std::condition_variable bulk_stream_changed_;
+    bool bulk_stream_callbacks_done_ = false;
+    bool release_bulk_after_callbacks_ = false;
     std::vector<FakeTransfer*> transfers_;
+    std::uint64_t next_submission_order_ = 0U;
 };
 
 class FakeFdSyscalls final : public FdSyscalls {
@@ -2058,6 +2164,29 @@ bool test_native_enumeration_filters_and_stream_lifecycle()
     CHECK(missing_serial_enumerator.discover(missing_serial_discovery));
     CHECK(missing_serial_discovery.candidates()[0].status == ObservationStatus::invalid_serial);
     CHECK(missing_serial_api.serial_calls == 1U);
+    return true;
+}
+
+bool test_stream_completion_submission_order()
+{
+    FakeApi api;
+    FakeDevice first = fake_device("00000000000016", 1U);
+    FakeDevice second = fake_device("00000000000016", 2U);
+    std::unique_ptr<LibusbTransport> transport;
+    CHECK(discover_fake(api, first, second, &transport));
+    api.complete_events = true;
+    api.complete_all_events = true;
+    api.complete_events_reverse = true;
+    api.completion_length = 4;
+    CHECK(transport->start_stream(StreamConfig{kTsInEndpoint, 8U, 3U}));
+
+    const auto first_completed = transport->wait_stream(Timeout{0U});
+    CHECK(first_completed && first_completed.value().data[0U] == 1U);
+    const auto second_completed = transport->wait_stream(Timeout{0U});
+    CHECK(second_completed && second_completed.value().data[0U] == 2U);
+    const auto third_completed = transport->wait_stream(Timeout{0U});
+    CHECK(third_completed && third_completed.value().data[0U] == 3U);
+    CHECK(transport->stop_stream());
     return true;
 }
 
@@ -2566,6 +2695,31 @@ bool test_runtime_fd_ownership_and_quarantine()
 
 bool test_runtime_context_serialization()
 {
+    RuntimeApiGate fair_gate;
+    fair_gate.lock();
+    std::array<int, 2U> acquisition_order{};
+    std::atomic<std::size_t> acquisition_count{0U};
+    std::thread first_waiter([&] {
+        fair_gate.lock();
+        const std::size_t index = acquisition_count.fetch_add(1U);
+        acquisition_order[index] = 1;
+        fair_gate.unlock();
+    });
+    fair_gate.wait_until_queued(1U);
+    std::thread second_waiter([&] {
+        fair_gate.lock();
+        const std::size_t index = acquisition_count.fetch_add(1U);
+        acquisition_order[index] = 2;
+        fair_gate.unlock();
+    });
+    fair_gate.wait_until_queued(2U);
+    fair_gate.unlock();
+    first_waiter.join();
+    second_waiter.join();
+    CHECK(acquisition_count.load() == 2U);
+    CHECK(acquisition_order[0U] == 1);
+    CHECK(acquisition_order[1U] == 2);
+
     auto api = std::unique_ptr<FakeApi>(new FakeApi);
     FakeApi* api_raw = api.get();
     FakeDevice first = fake_device("00000000000090", 1U);
@@ -2643,6 +2797,61 @@ bool test_runtime_context_serialization()
     return true;
 }
 
+bool test_command_event_dispatch_does_not_starve_stream_replenishment()
+{
+    auto api = std::unique_ptr<FakeApi>(new FakeApi);
+    FakeApi* api_raw = api.get();
+    FakeDevice first = fake_device("00000000000092", 1U);
+    FakeDevice second = fake_device("00000000000092", 2U);
+    api_raw->devices = {&first, &second};
+    auto runtime = RuntimeTestAccess::open_native(std::move(api));
+    CHECK(runtime);
+
+    constexpr std::size_t kTransfers = 6U;
+    api_raw->completion_length = 4;
+    CHECK(runtime.value()->dev1().start_stream(
+        StreamConfig{kTsInEndpoint, 8U, kTransfers}));
+    CHECK(api_raw->submit_calls == kTransfers);
+    api_raw->dispatch_stream_callbacks_in_bulk = true;
+
+    std::array<std::uint8_t, 1U> command{};
+    Result<std::size_t> command_result = Result<std::size_t>::failure(Error::INTERNAL);
+    std::thread command_thread([&] {
+        command_result = runtime.value()->dev1().bulk_read(
+            kCommandInEndpoint,
+            MutableByteView{command.data(), command.size()}, Timeout{100U});
+    });
+    api_raw->wait_for_bulk_stream_callbacks();
+
+    bool events_ok = true;
+    for (std::size_t index = 0U; index < kTransfers; ++index) {
+        const auto event = runtime.value()->dev1().wait_stream(Timeout{0U});
+        if (!event || event.value().size != 4U ||
+            event.value().data[0U] != static_cast<std::uint8_t>(index + 1U)) {
+            events_ok = false;
+            break;
+        }
+    }
+    // The next call returns the final delivered buffer before entering the
+    // event API.  Thus every stream URB has been resubmitted while the
+    // synchronous card-style bulk transaction remains blocked.
+    const auto after_replenishment = runtime.value()->dev1().wait_stream(Timeout{0U});
+    const std::size_t submit_calls_while_bulk_blocked = api_raw->submit_calls;
+    const std::size_t event_calls_while_bulk_blocked = api_raw->event_calls;
+    const int maximum_concurrency = api_raw->api_max_in_flight.load();
+
+    api_raw->release_bulk_after_stream_callbacks();
+    command_thread.join();
+    CHECK(events_ok);
+    CHECK(after_replenishment.error() == Error::TIMEOUT);
+    CHECK(submit_calls_while_bulk_blocked == kTransfers * 2U);
+    CHECK(event_calls_while_bulk_blocked == 0U);
+    CHECK(maximum_concurrency >= 2);
+    CHECK(command_result && command_result.value() == command.size());
+    CHECK(runtime.value()->dev1().cancel_stream());
+    return true;
+}
+
 #endif
 
 }  // namespace
@@ -2683,6 +2892,8 @@ int main(int argc, char** argv)
         {"it930x_q3u4_warm_initialization", test_it930x_q3u4_warm_initialization},
         {"it930x_q3u4_power_state_after_initialization",
          test_it930x_q3u4_power_state_after_initialization},
+        {"it930x_q3u4_lnb_gpio_authority",
+         test_it930x_q3u4_lnb_gpio_authority},
         {"it930x_q3u4_warm_failure_and_gate_cleanup",
          test_it930x_q3u4_warm_failure_and_gate_cleanup},
         {"it930x_probe_argument_parser", test_it930x_probe_argument_parser},
@@ -2701,23 +2912,34 @@ int main(int argc, char** argv)
 #if PX4_ENABLE_POSIX_IPC
         {"control_integration", run_control_integration_tests},
         {"posix_ipc_transport", run_posix_ipc_tests},
+        {"posix_tuner_nonce", run_posix_tuner_nonce_tests},
+        {"control_workers", run_control_workers_tests},
+        {"px4_ts", run_px4_ts_tests},
+        {"px4ctl_format", run_px4ctl_format_tests},
 #endif
         {"q3u4_frontend_lifecycle", run_q3u4_frontend_tests},
+        {"q3u4_card_backend", run_q3u4_card_backend_tests},
         {"q3u4_backend_power", run_q3u4_power_tests},
+        {"q3u4_lnb_power", run_q3u4_lnb_power_tests},
+        {"tuner_service", run_tuner_service_tests},
         {"r850_q3u4", run_r850_tests},
         {"rt710_q3u4", run_rt710_tests},
         {"frontend_probe", run_frontend_probe_tests},
         {"ts_probe", run_ts_probe_tests},
         {"tagged_ts_demux", run_tagged_ts_demux_tests},
+        {"q3u4_stream", run_q3u4_stream_tests},
 #if PX4_ENABLE_LIBUSB
         {"bulk_transport_and_mapping", test_bulk_transport_and_mapping},
         {"not_found_cancel_waits_for_callback", test_not_found_cancel_waits_for_callback},
         {"native_enumeration_filters_and_stream_lifecycle",
          test_native_enumeration_filters_and_stream_lifecycle},
+        {"stream_completion_submission_order", test_stream_completion_submission_order},
         {"fd_ownership_and_init_mode", test_fd_ownership_and_init_mode},
         {"fd_enclosure_batch", test_fd_enclosure_batch},
         {"runtime_native_transaction_and_ownership", test_runtime_native_transaction_and_ownership},
         {"runtime_context_serialization", test_runtime_context_serialization},
+        {"command_event_dispatch_does_not_starve_stream_replenishment",
+         test_command_event_dispatch_does_not_starve_stream_replenishment},
 #endif
     };
     for (const Test& test : tests) {

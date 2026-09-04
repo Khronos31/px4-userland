@@ -20,9 +20,9 @@ TaggedTsDemux::TaggedTsDemux() noexcept
 {
 }
 
-bool TaggedTsDemux::is_tagged_sync(std::uint8_t value) noexcept
+bool TaggedTsDemux::is_packet_boundary(std::uint8_t value) noexcept
 {
-    return (value & 0x8fU) == 0x07U;
+    return (value & 0x0fU) == 0x07U;
 }
 
 void TaggedTsDemux::compact_pending() noexcept
@@ -63,7 +63,8 @@ bool TaggedTsDemux::acquire_sync() noexcept
     for (std::size_t start = 0U; start <= last_start; ++start) {
         bool valid = true;
         for (std::size_t packet = 0U; packet < kSyncPacketCount; ++packet) {
-            if (!is_tagged_sync(pending_[pending_offset_ + start + (packet * kPacketSize)])) {
+            if (!is_packet_boundary(
+                    pending_[pending_offset_ + start + (packet * kPacketSize)])) {
                 valid = false;
                 break;
             }
@@ -81,7 +82,9 @@ bool TaggedTsDemux::acquire_sync() noexcept
     return false;
 }
 
-Result<void> TaggedTsDemux::push(ByteView input, PacketSink sink, void* context) noexcept
+Result<void> TaggedTsDemux::push(ByteView input, PacketSink sink, void* context,
+                                 InvalidTagObserver observer,
+                                 void* observer_context) noexcept
 {
     if (sink == nullptr || (input.size != 0U && input.data == nullptr) ||
         input.size > kMaxStreamTransfer) {
@@ -119,16 +122,20 @@ Result<void> TaggedTsDemux::push(ByteView input, PacketSink sink, void* context)
             return Result<void>::success();
         }
 
-        if (!is_tagged_sync(pending_[pending_offset_])) {
+        if (!is_packet_boundary(pending_[pending_offset_])) {
             synchronized_ = false;
+            ++sync_loss_events_;
             discard_bytes(1U);
             continue;
         }
 
+        const std::uint8_t wire_sync = pending_[pending_offset_];
         const std::uint8_t tag =
-            static_cast<std::uint8_t>(pending_[pending_offset_] >> 4U);
-        if (tag == 0U || tag > 4U) {
+            static_cast<std::uint8_t>((wire_sync >> 4U) & 0x07U);
+        if (tag == 0U || tag > 4U || (wire_sync & 0x80U) != 0U) {
             ++invalid_tag_packets_;
+            if ((wire_sync & 0x80U) != 0U && observer != nullptr)
+                observer(observer_context, wire_sync);
             consume_packet();
             continue;
         }
@@ -155,12 +162,13 @@ void TaggedTsDemux::reset() noexcept
     emitted_packets_ = 0U;
     discarded_sync_search_bytes_ = 0U;
     invalid_tag_packets_ = 0U;
+    sync_loss_events_ = 0U;
 }
 
 TaggedTsDemux::Counters TaggedTsDemux::counters() const noexcept
 {
     return Counters{input_bytes_accepted_, emitted_packets_, discarded_sync_search_bytes_,
-                    invalid_tag_packets_, pending_size_};
+                    invalid_tag_packets_, sync_loss_events_, pending_size_};
 }
 
 }  // namespace px4::userland

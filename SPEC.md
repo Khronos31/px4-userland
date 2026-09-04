@@ -1,10 +1,17 @@
 # px4-userland 仕様
 
-Status: Frozen v0.5 (2026-09-03)
+Status: Frozen v0.8 (2026-09-04)
 
 本書の`MUST`、`MUST NOT`、`SHOULD`は規範要件を示す。実機観測で前提の誤りが判明した場合も暗黙に
 実装だけを変えず、本書のversionと変更理由を更新してから実装する。
 
+v0.8では、`empty_intervals`の訂正でstream starvationを見逃さないよう、1秒以下の観測間隔と連続5秒以内の
+packet/byte進行を受入条件に追加した。これはwire semanticsの変更ではなく、v0.7のacceptance erratumを
+機械的に検証可能にする訂正であり、protocol minorは変更しない。
+v0.7では、実機長時間試験で確認した`empty_intervals`の意味をUSB待機のTIMEOUT/空completion回数と明記し、
+非zero値だけをTS integrity failureにしない受入条件へ訂正した。
+v0.6では、LNB 15Vを明示的に許可したdaemonだけが出力できる安全境界、GPIO完了が曖昧な場合の
+cleanup debt、片側USB切断時の生存bridge停止、無負荷電圧と負荷時能力を分ける受入条件を追加した。
 v0.5では、GPL/LGPLのrelease contractを明確化し、v0.4からのlegacy source cleanupを完了した。製品対象は
 Linux（カーネルドライバを導入できない環境を含む）、AndroidのTermuxおよびAPK経路、macOSに限定する。Windows
 runtime、adapter、実機受入、配布物、Windows build-only gateは対象から外した。
@@ -80,6 +87,8 @@ Q3U4は同一筐体内に2つのIT9305Eを持ち、各USBデバイス上で複�
 - `px4ctl`: デバイス一覧、状態、統計、カード状態、ATR、reset、APDU送受信を扱う診断・制御CLI。
 
 `px4d`はforeground動作を標準とし、自身でdaemonizeしない。プロセス監視は利用側へ委ねる。
+LNB 15Vは安全上の明示的opt-inとし、`px4d --allow-lnb-power`なしで受けた15V要求は、GPIOを書き込まず
+`UNSUPPORTED`で拒否する。0V要求と地上波利用はこのoptionに依存しない。
 
 ### 3.2 Internal layers
 
@@ -208,7 +217,15 @@ Androidではsystem PC/SCを前提とせず、portable IPCを利用する。
   必要なbackend powerを停止しない。
 - LNB powerはbridgeごとのGPIO 11と参照数で管理し、そのbridge上で15Vを要求する最後のISDB-S receiverを
   閉じたときだけ0Vへ戻す。
-- USB切断後はハードウェアへ追加の電源操作を送らず、logical referenceだけを解放する。
+- receiverごとに直前に成功したtuneのLNB要求を保持する。retuneでは新しい0V/15V要求をtune前に適用し、
+  後続のtune処理が失敗した場合は直前の要求へ戻す。参照の追加・削除とGPIO遷移はbridge単位で直列化する。
+- GPIO 11への書込みが成功応答なしで終わった場合、物理状態を推測して`off`または`on`と確定しない。
+  `DISCONNECTED`以外は`unknown`とcleanup debtを記録し、参照が0になったclose、shutdown、reconcileで
+  GPIO 11 lowを再試行する。`DISCONNECTED`となったbridgeには以後の電源操作を送らない。
+- 片側USB切断で筐体を停止する場合、切断したbridgeには追加書込みを行わない。接続が残る反対側bridgeは、
+  そのtransportを閉じる前にLNB参照を解放してGPIO 11 lowを試みる。失敗は成功扱いにしない。
+- 正常終了とSIGTERMでは、USB transportを閉じる前に両bridgeのLNBを0Vへ戻す。SIGKILL、host crash、
+  USB stack failureではcleanupを保証できないため、明示opt-inと再初期化時のGPIO 11 lowを安全境界とする。
 
 ### 5.3 ATR and T=1
 
@@ -324,6 +341,11 @@ HELLO responseのcapabilitiesはrequestとserver対応bitの積集合とする�
 - `TUNE` success: `u8 locked, i32 cnr_mdb`。C/N不明は`INT32_MIN`。
 - `STATS`およびfinal counters: 順に`u64 packets, bytes, sync_errors, tei_packets,
   continuity_errors, queue_drops, usb_errors, empty_intervals`。
+  `empty_intervals`はstream pumpがUSB完了を待った際のTIMEOUTまたは長さ0のcompletion回数であり、burst転送の
+  正常動作中にも増加し得るbridge単位の診断値とする。同一bridgeのactive receiverへ同じ増分が反映されるため、
+  receiver別starvationの判定には使用しない。非zeroであることだけをTS integrity failureにせず、受入ではpacket/byteの
+  進行と、sync/TEI/continuity/queue/USB counterを別に判定する。この明確化はwire semanticsの変更ではなく、
+  protocol minorを更新しない。
 - `CARD_STATUS` success: `u8 present, u8 initialized, u64 reader_generation, u8 atr_length,
   atr[atr_length]`。未初期化時のATR lengthは0。
 - `CARD_RESET` success: `u8 atr_length, atr[atr_length]`。
@@ -435,9 +457,11 @@ Linux・Android・macOSを対象にする既存実装は確認できなかった
 8. `smart_card_state_test`相当のATR、T=1、timeout、retry、APDU分割、抜去、再挿入試験が成功する。
 9. IPCの全messageについてgolden byte vector、malformed frame、version negotiation、権限、異常切断、
    slow-consumer/backpressure、CLI exit code試験が成功する。
-10. fuzzまたは境界値試験でUSB response lengthとIPC payload lengthの範囲外アクセスがない。
-11. `git ls-files`にfirmware binary、vendor driver binary、kernel module、DKMS、非Q3U4 device packageが残らない。
-12. 全派生source fileに`SPDX-License-Identifier: GPL-2.0-only`を付け、LICENSEがGPL-2.0を示す。
+10. stream counter試験で、正常TS中に`empty_intervals`だけが非zeroでも成功し、他のerror counterが0でも
+    packet/byteの進行が5秒停止した場合は失敗する。
+11. fuzzまたは境界値試験でUSB response lengthとIPC payload lengthの範囲外アクセスがない。
+12. `git ls-files`にfirmware binary、vendor driver binary、kernel module、DKMS、非Q3U4 device packageが残らない。
+13. 全派生source fileに`SPDX-License-Identifier: GPL-2.0-only`を付け、LICENSEがGPL-2.0を示す。
 
 ### 10.2 Q3U4 hardware acceptance on Linux
 
@@ -447,11 +471,15 @@ Linux・Android・macOSを対象にする既存実装は確認できなかった
 4. 両bridgeへそれぞれ`0x17`..`0x47`を注入するmockと実受信で、dev_id 1をreceiver 0..3、dev_id 2を
    receiver 4..7へ分配し、bridgeを跨いだ混入がない。
 5. 8 receiverを同時に30分captureできる。
-6. tune完了後の測定区間で、各streamのsync error、TEI、queue drop、empty intervalが0である。
+6. tune完了後の測定区間で各streamを1秒以下の間隔で観測し、任意の連続5秒窓の中でpacketとbyteの両方が
+   増加する。counterは単調非減少で、常に`bytes == packets * 188`を満たし、sync error、TEI、queue drop、
+   USB errorが0である。`empty_intervals`は6.4節の診断値として記録するが、非zeroだけでは失敗としない。
 7. continuity errorはdiscontinuity indicatorとtune境界を除外して計数し、測定区間で0である。
 8. 1 receiverの停止または再tuneが、他receiverのTSを停止・混入させない。
 9. receiverを片側だけ、両側、cardだけ、receiver+cardの順にopen/closeし、5.2節のbridge別power stateを満たす。
-10. LNB 0V/15Vとbridgeごとの複数ISDB-S receiverの参照数が正しく、最後の利用者のcloseでだけ停止する。
+10. `--allow-lnb-power`なしでは15V要求をGPIO書込みなしで拒否する。opt-in時はLNB 0V/15Vとbridgeごとの
+    複数ISDB-S receiverの参照数が正しく、最後の利用者のcloseでだけ停止する。GPIO応答喪失、通常終了、
+    SIGTERM、片側USB切断のcleanup規則は5.2節を満たす。
 11. card未挿入、挿入、ATR、reset、基本APDU、抜去、再挿入が成功する。
 12. 外付け標準readerで同じB-CASを使ったAPDU responseと、Q3U4内蔵readerのresponseが一致する。
 13. 8 receiverの同時capture中にcard APDUを反復し、APDU failureとTS error/dropが0である。
@@ -462,6 +490,9 @@ Linux・Android・macOSを対象にする既存実装は確認できなかった
     TS/card errorを生じない。
 18. stable release候補は8 receiver、反復APDU、定期的なretune/stop/reopenを含む72時間連続試験を3回行い、
     continuity、queue、sync、APDU errorが0で、RSSとhandle数に単調増加傾向がない。
+19. 壁設備と完全に分離した開放端で0V、15V、cleanup後0Vを測定し、GPIO 11の極性と切替を確認する。
+    この無負荷試験だけではLNB給電能力を確認済みと表現しない。実アンテナまたは代表負荷で電圧・電流・安定性を
+    確認するまでは`LNB switching hardware-verified / loaded supply unverified`と記録する。
 
 ### 10.3 Cross-platform support claims
 

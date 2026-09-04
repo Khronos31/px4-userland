@@ -2,6 +2,7 @@
 #include "px4/card_service.h"
 #include "px4/control_server.h"
 #include "px4/pcsc_ifd_adapter.h"
+#include "px4/tuner_service.h"
 
 extern "C" {
 #include <ifdhandler.h>
@@ -171,6 +172,40 @@ public:
 
 private:
     MockState& state_;
+};
+
+class NoopTunerBackend final : public TunerServiceBackend {
+public:
+    Result<void> open_receiver(std::uint8_t) noexcept override
+    { return Result<void>::success(); }
+    Result<void> tune_terrestrial(std::uint8_t, std::uint32_t,
+                                  std::uint32_t) noexcept override
+    { return Result<void>::success(); }
+    Result<void> tune_satellite(std::uint8_t, std::uint32_t,
+                                std::uint32_t) noexcept override
+    { return Result<void>::success(); }
+    Result<bool> is_locked(std::uint8_t, System) noexcept override
+    { return Result<bool>::success(true); }
+    Result<void> select_satellite_slot(std::uint8_t, std::uint8_t,
+                                       std::uint32_t) noexcept override
+    { return Result<void>::success(); }
+    Result<void> select_satellite_tsid(std::uint8_t, std::uint16_t,
+                                       std::uint32_t) noexcept override
+    { return Result<void>::success(); }
+    Result<void> close_receiver(std::uint8_t) noexcept override
+    { return Result<void>::success(); }
+};
+
+class NoopTunerNonce final : public TunerNonceSource {
+public:
+    Result<std::array<std::uint8_t, ipc::kNonceLength>> generate() noexcept override
+    { return Result<std::array<std::uint8_t, ipc::kNonceLength>>::success({}); }
+};
+
+class NoopTunerTime final : public TunerServiceTime {
+public:
+    std::uint64_t monotonic_ms() noexcept override { return 0U; }
+    void sleep_ms(std::uint32_t) noexcept override {}
 };
 
 bool replace_placeholder(std::string& text, std::string_view placeholder,
@@ -583,7 +618,12 @@ bool test_exported_abi_over_real_ipc()
     Session session;
     session.bind(backend);
     CardService service(backend, session);
-    auto server_result = PosixControlServer::create(endpoint, service, serial);
+    NoopTunerBackend tuner_backend;
+    NoopTunerNonce tuner_nonce;
+    NoopTunerTime tuner_time;
+    TunerService tuner_service(tuner_backend, tuner_nonce, tuner_time);
+    auto server_result = PosixControlServer::create(
+        endpoint, service, tuner_service, serial);
     CHECK(server_result);
     std::unique_ptr<PosixControlServer> server = std::move(server_result.value());
     const std::string socket_path = server->endpoint_path();
