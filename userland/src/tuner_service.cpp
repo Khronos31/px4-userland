@@ -6,6 +6,14 @@
 #include <limits>
 
 namespace px4::userland {
+namespace {
+
+// px4_drv/driver/ptx_chrdev.c:356-359, enabled by
+// px4_drv/driver/px4_device.c:1258 (PTX_CHRDEV_WAIT_AFTER_LOCK_TC_T).
+// The terrestrial lock path settles for 340 ms from check_lock start.
+constexpr std::uint32_t kWaitAfterLockTcTMs = 340U;
+
+}  // namespace
 
 TunerService::TunerService(TunerServiceBackend& backend,
                            TunerNonceSource& nonce_source,
@@ -413,11 +421,34 @@ Result<ipc::TuneResponsePayload> TunerService::tune(
     if (!tuned)
         return fail_after_power(tuned.error());
 
+    // Keep this origin separate from start_ms: the reference driver's
+    // PTX_CHRDEV_WAIT_AFTER_LOCK_TC_T interval starts when check_lock begins,
+    // after the frontend tune operation has completed.
+    const std::uint64_t lock_poll_start_ms = time_.monotonic_ms();
     const auto locked = poll_lock(receiver, request.system, start_ms,
                                   request.timeout_ms);
     if (!locked) return fail_after_power(locked.error());
     if (!locked.value())
         return fail_after_power(Error::TIMEOUT);
+
+    if (request.system == ipc::System::ISDB_T &&
+        backend_.requires_terrestrial_lock_settle()) {
+        const std::uint64_t now = time_.monotonic_ms();
+        const std::uint64_t elapsed_total = now - start_ms;
+        if (elapsed_total >= request.timeout_ms)
+            return fail_after_power(Error::TIMEOUT);
+
+        const std::uint64_t lock_poll_elapsed = now - lock_poll_start_ms;
+        if (lock_poll_elapsed < kWaitAfterLockTcTMs) {
+            const std::uint32_t settle_ms = static_cast<std::uint32_t>(
+                kWaitAfterLockTcTMs - lock_poll_elapsed);
+            const std::uint32_t remaining = static_cast<std::uint32_t>(
+                request.timeout_ms - elapsed_total);
+            if (remaining <= settle_ms)
+                return fail_after_power(Error::TIMEOUT);
+            time_.sleep_ms(settle_ms);
+        }
+    }
 
     if (request.system == ipc::System::ISDB_S) {
         const std::uint64_t elapsed = time_.monotonic_ms() - start_ms;

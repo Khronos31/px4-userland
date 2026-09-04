@@ -26,6 +26,10 @@ public:
                                 std::uint32_t timeout_ms) noexcept override;
     Result<bool> is_locked(std::uint8_t receiver,
                            ipc::System system) noexcept override;
+    bool requires_terrestrial_lock_settle() const noexcept override
+    {
+        return true;
+    }
     Result<void> select_satellite_slot(std::uint8_t receiver,
                                        std::uint8_t slot,
                                        std::uint32_t timeout_ms) noexcept override;

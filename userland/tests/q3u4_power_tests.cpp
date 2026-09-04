@@ -590,7 +590,7 @@ bool run_q3u4_power_tests()
         CHECK(!result && result.error() == Error::USB_IO);
         CHECK(check_snapshot(coordinator, 0U, false, Q3U4PowerState::off,
                              Q3U4PowerState::off));
-        CHECK((dev1.calls_copy() == std::vector<bool>{true, false}));
+        CHECK(dev1.calls_copy().empty());
         CHECK((dev2.calls_copy() == std::vector<bool>{true, false}));
     }
 
@@ -719,12 +719,12 @@ bool run_q3u4_power_tests()
         CHECK(!result && result.error() == Error::DISCONNECTED);
         CHECK(check_snapshot(coordinator, 0U, false, Q3U4PowerState::off,
                              Q3U4PowerState::disconnected));
-        CHECK((dev1.calls_copy() == std::vector<bool>{true, false}));
+        CHECK(dev1.calls_copy().empty());
         CHECK((dev2.calls_copy() == std::vector<bool>{true}));
 
         const auto retry = coordinator.acquire_receiver(0U);
         CHECK(!retry && retry.error() == Error::DISCONNECTED);
-        CHECK((dev1.calls_copy() == std::vector<bool>{true, false}));
+        CHECK(dev1.calls_copy().empty());
         CHECK((dev2.calls_copy() == std::vector<bool>{true}));
     }
 

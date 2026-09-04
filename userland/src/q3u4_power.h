@@ -69,9 +69,11 @@ public:
     Q3U4PowerSnapshot snapshot() const noexcept;
 
 private:
-    Result<void> apply_desired_locked() noexcept;
+    Result<void> apply_desired_locked(Q3U4Bridge first_bridge = Q3U4Bridge::dev1) noexcept;
     Result<void> set_bridge_locked(Q3U4Bridge bridge, bool on) noexcept;
-    void rollback_logical_locked(const Q3U4PowerSnapshot& prior) noexcept;
+    void rollback_logical_locked(
+        const Q3U4PowerSnapshot& prior,
+        Q3U4Bridge first_bridge = Q3U4Bridge::dev1) noexcept;
     bool desired_power_locked(Q3U4Bridge bridge) const noexcept;
     bool enclosure_disconnected_locked() const noexcept;
     Q3U4BackendPower& backend(Q3U4Bridge bridge) const noexcept;

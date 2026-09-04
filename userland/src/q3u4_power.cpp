@@ -76,19 +76,21 @@ Result<void> Q3U4PowerCoordinator::set_bridge_locked(Q3U4Bridge bridge, bool on)
     return result;
 }
 
-Result<void> Q3U4PowerCoordinator::apply_desired_locked() noexcept
+Result<void> Q3U4PowerCoordinator::apply_desired_locked(Q3U4Bridge first_bridge) noexcept
 {
-    const auto dev1_result = set_bridge_locked(Q3U4Bridge::dev1,
-                                               desired_power_locked(Q3U4Bridge::dev1));
-    if (!dev1_result) {
-        return dev1_result;
+    const Q3U4Bridge second_bridge = first_bridge == Q3U4Bridge::dev1
+                                         ? Q3U4Bridge::dev2
+                                         : Q3U4Bridge::dev1;
+    const auto first_result = set_bridge_locked(first_bridge,
+                                                desired_power_locked(first_bridge));
+    if (!first_result) {
+        return first_result;
     }
-    return set_bridge_locked(Q3U4Bridge::dev2,
-                             desired_power_locked(Q3U4Bridge::dev2));
+    return set_bridge_locked(second_bridge, desired_power_locked(second_bridge));
 }
 
 void Q3U4PowerCoordinator::rollback_logical_locked(
-    const Q3U4PowerSnapshot& prior) noexcept
+    const Q3U4PowerSnapshot& prior, Q3U4Bridge first_bridge) noexcept
 {
     state_.receiver_mask = prior.receiver_mask;
     state_.card_acquired = prior.card_acquired;
@@ -96,7 +98,7 @@ void Q3U4PowerCoordinator::rollback_logical_locked(
     // Best effort is intentional. A failed rollback leaves unknown state for
     // a subsequent retry; a DISCONNECTED result has already made that bridge
     // terminal and set_bridge_locked will not issue another write.
-    (void)apply_desired_locked();
+    (void)apply_desired_locked(first_bridge);
 }
 
 Result<void> Q3U4PowerCoordinator::acquire_receiver(
@@ -115,10 +117,12 @@ Result<void> Q3U4PowerCoordinator::acquire_receiver(
     }
 
     const Q3U4PowerSnapshot prior = state_;
+    const Q3U4Bridge requesting_bridge =
+        global_receiver_id < 4U ? Q3U4Bridge::dev1 : Q3U4Bridge::dev2;
     state_.receiver_mask = static_cast<std::uint8_t>(state_.receiver_mask | bit);
-    const auto result = apply_desired_locked();
+    const auto result = apply_desired_locked(requesting_bridge);
     if (!result) {
-        rollback_logical_locked(prior);
+        rollback_logical_locked(prior, requesting_bridge);
     }
     return result;
 }
@@ -137,7 +141,9 @@ Result<void> Q3U4PowerCoordinator::release_receiver(
     }
 
     state_.receiver_mask = static_cast<std::uint8_t>(state_.receiver_mask & ~bit);
-    return apply_desired_locked();
+    return apply_desired_locked(global_receiver_id < 4U
+                                    ? Q3U4Bridge::dev1
+                                    : Q3U4Bridge::dev2);
 }
 
 Result<void> Q3U4PowerCoordinator::acquire_card() noexcept
