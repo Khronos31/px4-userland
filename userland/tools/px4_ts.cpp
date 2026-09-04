@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fcntl.h>
+#include <signal.h>
 #include <thread>
 #include <unistd.h>
 
@@ -48,11 +49,11 @@ bool install_signals() noexcept
 {
     struct sigaction ignore_pipe {};
     ignore_pipe.sa_handler = SIG_IGN;
-    if (::sigemptyset(&ignore_pipe.sa_mask) != 0 ||
+    if (sigemptyset(&ignore_pipe.sa_mask) != 0 ||
         ::sigaction(SIGPIPE, &ignore_pipe, nullptr) != 0) return false;
     struct sigaction action {};
     action.sa_handler = stop_handler;
-    if (::sigemptyset(&action.sa_mask) != 0) return false;
+    if (sigemptyset(&action.sa_mask) != 0) return false;
     return ::sigaction(SIGINT, &action, nullptr) == 0 &&
            ::sigaction(SIGTERM, &action, nullptr) == 0;
 }

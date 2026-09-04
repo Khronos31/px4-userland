@@ -576,6 +576,8 @@ private:
 
 class FrameCollector final : public FrameConsumer {
 public:
+    FrameCollector() : payloads(64U) {}
+
     Result<void> on_frame(const FrameView& frame) noexcept override
     {
         if (count >= headers.size() || frame.payload.size > payloads[0U].size()) {
@@ -597,10 +599,10 @@ public:
     }
 
     // A single nonblocking read can legally contain many small stream frames.
-    // Keep enough fixed storage for one maximum transport read without
-    // turning the test collector into an allocation-backed queue.
+    // Keep enough bounded storage for one maximum transport read.  The payload
+    // backing is on the heap because collectors also live on worker threads.
     std::array<FrameHeader, 64U> headers{};
-    std::array<std::array<std::uint8_t, 1024U>, 64U> payloads{};
+    std::vector<std::array<std::uint8_t, 1024U>> payloads;
     std::array<std::size_t, 64U> payload_sizes{};
     std::size_t count = 0U;
 };
@@ -608,7 +610,7 @@ public:
 Result<void> send_raw_request(SocketStream& stream, MessageType type,
                               std::uint32_t request_id, ByteView payload) noexcept
 {
-    std::array<std::uint8_t, kFrameHeaderSize + kMaxControlPayload> frame{};
+    std::vector<std::uint8_t> frame(kFrameHeaderSize + kMaxControlPayload, 0U);
     const auto encoded = encode_frame(
         FrameHeader{kProtocolMajor, kProtocolMinor, type, MessageKind::request,
                     request_id, static_cast<std::uint32_t>(payload.size)},
@@ -2331,6 +2333,7 @@ bool test_stream_endpoint_nonreading_peer_isolated()
     std::atomic<std::size_t> sibling_data{0U};
     std::mutex sibling_mutex;
     std::condition_variable sibling_started_condition;
+    std::condition_variable sibling_progress_condition;
     bool sibling_started = false;
     std::thread sibling_reader([&]() {
         {
@@ -2348,11 +2351,14 @@ bool test_stream_endpoint_nonreading_peer_isolated()
             if (!read) {
                 if (read.error() == Error::TIMEOUT) continue;
                 sibling_ok.store(false);
+                sibling_progress_condition.notify_all();
                 return;
             }
             for (std::size_t index = 0U; index < frames.count; ++index) {
-                if (frames.headers[index].type == MessageType::TS_DATA)
+                if (frames.headers[index].type == MessageType::TS_DATA) {
                     ++sibling_data;
+                    sibling_progress_condition.notify_all();
+                }
             }
         }
     });
@@ -2364,6 +2370,13 @@ bool test_stream_endpoint_nonreading_peer_isolated()
                                                  }));
     }
     CHECK(observation.wait_for_write_blocked());
+    {
+        std::unique_lock<std::mutex> lock(sibling_mutex);
+        (void)sibling_progress_condition.wait_for(
+            lock, std::chrono::seconds(5), [&]() noexcept {
+                return !sibling_ok.load() || sibling_data.load() != 0U;
+            });
+    }
     CHECK(sibling_ok.load() && sibling_data.load() != 0U);
     sibling_stop.store(true);
     sibling_reader.join();

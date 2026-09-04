@@ -25,6 +25,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <signal.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -139,7 +140,7 @@ public:
     {
         struct sigaction action {};
         action.sa_handler = SIG_IGN;
-        if (::sigemptyset(&action.sa_mask) == 0 &&
+        if (sigemptyset(&action.sa_mask) == 0 &&
             ::sigaction(SIGPIPE, &action, &old_action_) == 0) {
             installed_ = true;
         }
@@ -268,7 +269,7 @@ struct FakeDaemon final {
 
     void send(SocketStream& stream, const FrameHeader& header, ByteView payload) noexcept
     {
-        std::array<std::uint8_t, kFrameHeaderSize + kMaxControlPayload> frame{};
+        std::vector<std::uint8_t> frame(kFrameHeaderSize + kMaxControlPayload, 0U);
         const auto encoded = encode_frame(header, payload,
                                           MutableByteView{frame.data(), frame.size()});
         if (!encoded) return;
@@ -297,7 +298,7 @@ struct FakeDaemon final {
     void send_payload(SocketStream& stream, const FrameHeader& request,
                       MessageKind kind, const Payload& payload) noexcept
     {
-        std::array<std::uint8_t, kMaxControlPayload> payload_buffer{};
+        std::vector<std::uint8_t> payload_buffer(kMaxControlPayload, 0U);
         const auto size = encode_payload(payload,
                                          MutableByteView{payload_buffer.data(), payload_buffer.size()});
         if (!size) return;
@@ -326,7 +327,7 @@ struct FakeDaemon final {
         }
         SocketStream stream = std::move(accepted.value());
         control_accepted.store(true);
-        std::array<std::uint8_t, kFrameHeaderSize + kMaxControlPayload> storage{};
+        std::vector<std::uint8_t> storage(kFrameHeaderSize + kMaxControlPayload, 0U);
         std::array<std::uint8_t, 8192U> input{};
         StreamFramer framer(MutableByteView{storage.data(), storage.size()});
         ControlFrames consumer(*this, stream);
@@ -352,7 +353,7 @@ struct FakeDaemon final {
         }
         SocketStream stream = std::move(accepted.value());
         stream_accepted.store(true);
-        std::array<std::uint8_t, kFrameHeaderSize + kMaxControlPayload> storage{};
+        std::vector<std::uint8_t> storage(kFrameHeaderSize + kMaxControlPayload, 0U);
         std::array<std::uint8_t, 1024U> input{};
         StreamFramer framer(MutableByteView{storage.data(), storage.size()});
         StreamFrames consumer(*this, stream);
@@ -423,8 +424,8 @@ struct FakeDaemon final {
     void send_data(SocketStream& stream) noexcept
     {
         if (mode == FakeMode::bad_alignment) {
-            std::array<std::uint8_t, kFrameHeaderSize + kMaxTsDataPayload> frame{};
-            std::array<std::uint8_t, kMaxTsDataPayload> payload{};
+            std::vector<std::uint8_t> frame(kFrameHeaderSize + kMaxTsDataPayload, 0U);
+            std::vector<std::uint8_t> payload(kMaxTsDataPayload, 0U);
             std::array<std::uint8_t, 188U> packet{};
             packet[0] = 0x47U;
             const TsDataEventPayload valid_data{0U, 0U,

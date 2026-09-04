@@ -24,6 +24,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <signal.h>
 
 namespace {
 
@@ -94,7 +95,7 @@ bool install_signal_handlers() noexcept
 {
     struct sigaction action {};
     action.sa_handler = stop_signal_handler;
-    if (::sigemptyset(&action.sa_mask) != 0) return false;
+    if (sigemptyset(&action.sa_mask) != 0) return false;
     action.sa_flags = 0;
     return ::sigaction(SIGINT, &action, nullptr) == 0 &&
            ::sigaction(SIGTERM, &action, nullptr) == 0;
