@@ -109,12 +109,14 @@ work=$(mktemp -d /tmp/px4-userland-android-2b2.XXXXXX)
 publish_probe_tmp=
 publish_daemon_tmp=
 publish_control_tmp=
+publish_stream_tmp=
 cleanup()
 {
     if [ -d "$work" ]; then
         find "$work" -depth -delete
     fi
-    for temporary in "$publish_probe_tmp" "$publish_daemon_tmp" "$publish_control_tmp"; do
+    for temporary in "$publish_probe_tmp" "$publish_daemon_tmp" "$publish_control_tmp" \
+        "$publish_stream_tmp"; do
         if [ -n "$temporary" ] && [ -e "$temporary" ]; then
             find "$temporary" -delete
         fi
@@ -128,6 +130,7 @@ cmake_build=$work/cmake
 output_probe=$output/px4-ts-probe-$abi
 output_daemon=$output/px4d-$abi
 output_control=$output/px4ctl-$abi
+output_stream=$output/px4-ts-$abi
 mkdir -p "$prefix" "$work/tmp"
 
 libusb_url=https://github.com/libusb/libusb/releases/download/v1.0.28/libusb-1.0.28.tar.bz2
@@ -209,9 +212,9 @@ env -i \
     TMPDIR="$work/tmp" \
     LC_ALL=C \
     "$cmake_bin" --build "$cmake_build" \
-        --target px4-ts-probe px4d px4ctl -j"$jobs"
+        --target px4-ts-probe px4d px4ctl px4-ts -j"$jobs"
 
-for binary in px4-ts-probe px4d px4ctl; do
+for binary in px4-ts-probe px4d px4ctl px4-ts; do
     "$root/scripts/verify-android-elf.sh" \
         "$cmake_build/$binary" "$expected_interpreter"
 done
@@ -235,16 +238,22 @@ verify_static_libusb "$cmake_build/px4d"
 publish_probe_tmp=$(mktemp "$output_probe.tmp.XXXXXX")
 publish_daemon_tmp=$(mktemp "$output_daemon.tmp.XXXXXX")
 publish_control_tmp=$(mktemp "$output_control.tmp.XXXXXX")
+publish_stream_tmp=$(mktemp "$output_stream.tmp.XXXXXX")
 cp "$cmake_build/px4-ts-probe" "$publish_probe_tmp"
 cp "$cmake_build/px4d" "$publish_daemon_tmp"
 cp "$cmake_build/px4ctl" "$publish_control_tmp"
-chmod 0755 "$publish_probe_tmp" "$publish_daemon_tmp" "$publish_control_tmp"
+cp "$cmake_build/px4-ts" "$publish_stream_tmp"
+chmod 0755 "$publish_probe_tmp" "$publish_daemon_tmp" "$publish_control_tmp" \
+    "$publish_stream_tmp"
 mv -f "$publish_probe_tmp" "$output_probe"
 publish_probe_tmp=
 mv -f "$publish_daemon_tmp" "$output_daemon"
 publish_daemon_tmp=
 mv -f "$publish_control_tmp" "$output_control"
 publish_control_tmp=
+mv -f "$publish_stream_tmp" "$output_stream"
+publish_stream_tmp=
 printf '%s\n' "built $output_probe"
 printf '%s\n' "built $output_daemon"
 printf '%s\n' "built $output_control"
+printf '%s\n' "built $output_stream"

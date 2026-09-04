@@ -81,7 +81,7 @@ jobs:
           add-to-path: false
       - name: Install Android build tools
         run: sudo apt-get update && sudo apt-get install --no-install-recommends -y cmake ninja-build
-      - name: Build Android px4-ts-probe
+      - name: Build Android command-line artifacts
         env:
           ABI: ${{ matrix.abi }}
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
