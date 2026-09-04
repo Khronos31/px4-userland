@@ -42,7 +42,7 @@ jobs:
           -w /src
           alpine:3.20
           sh -euxc
-          'apk add --no-cache cmake ninja-build g++ pkgconf libusb-dev;
+          'apk add --no-cache cmake samurai g++ pkgconf libusb-dev;
           cmake -S . -B build-userland -G Ninja -DPX4_BUILD_TESTS=ON;
           cmake --build build-userland;
           ctest --test-dir build-userland --output-on-failure'

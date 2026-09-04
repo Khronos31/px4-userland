@@ -342,6 +342,7 @@ public:
     int duplicate(int fd) noexcept override;
 };
 
+#if defined(__linux__) || defined(__ANDROID__)
 class FdTransportFactory final {
 public:
     FdTransportFactory(LibusbApi& api, LibusbApi::Context context,
@@ -356,6 +357,7 @@ private:
     LibusbApi::Context context_;
     FdSyscalls& syscalls_;
 };
+#endif
 
 struct Q3U4Runtime::Impl final {
     static Result<std::unique_ptr<Impl>> create(

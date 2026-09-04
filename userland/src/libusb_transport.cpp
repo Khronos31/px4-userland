@@ -198,6 +198,7 @@ int read_serial(LibusbApi& api, LibusbApi::Handle handle, std::uint8_t index,
 Result<UsbTopologyObservation> observe_topology(LibusbApi& api,
                                                 LibusbApi::Device device) noexcept;
 
+#if defined(__linux__) || defined(__ANDROID__)
 Result<DeviceObservation> observe_wrapped_handle(LibusbApi& api, LibusbApi::Handle handle) noexcept
 {
     LibusbApi::Device device = nullptr;
@@ -226,6 +227,7 @@ Result<DeviceObservation> observe_wrapped_handle(LibusbApi& api, LibusbApi::Hand
     observation.topology = topology.value();
     return Result<DeviceObservation>::success(std::move(observation));
 }
+#endif
 
 bool endpoint_is_in(std::uint8_t endpoint) noexcept
 {
@@ -1311,12 +1313,9 @@ int NativeFdSyscalls::duplicate(int fd) noexcept
 #endif
 }
 
+#if defined(__linux__) || defined(__ANDROID__)
 Result<std::unique_ptr<LibusbTransport>> FdTransportFactory::wrap_and_claim(int fd) noexcept
 {
-#if !defined(__linux__) && !defined(__ANDROID__)
-    (void)fd;
-    return Result<std::unique_ptr<LibusbTransport>>::failure(Error::UNSUPPORTED);
-#else
     if (fd < 0 || !syscalls_.valid(fd)) {
         return Result<std::unique_ptr<LibusbTransport>>::failure(Error::INVALID_ARGUMENT);
     }
@@ -1367,17 +1366,11 @@ Result<std::unique_ptr<LibusbTransport>> FdTransportFactory::wrap_and_claim(int 
         return Result<std::unique_ptr<LibusbTransport>>::failure(Error::INTERNAL);
     }
     return Result<std::unique_ptr<LibusbTransport>>::success(std::move(transport));
-#endif
 }
 
 Result<std::unique_ptr<Q3U4Enclosure>> FdTransportFactory::wrap_and_claim_enclosure(
     const std::vector<int>& fds, std::string_view base_serial) noexcept
 {
-#if !defined(__linux__) && !defined(__ANDROID__)
-    (void)fds;
-    (void)base_serial;
-    return Result<std::unique_ptr<Q3U4Enclosure>>::failure(Error::UNSUPPORTED);
-#else
     if (fds.empty()) {
         return Result<std::unique_ptr<Q3U4Enclosure>>::failure(Error::INVALID_ARGUMENT);
     }
@@ -1509,8 +1502,8 @@ Result<std::unique_ptr<Q3U4Enclosure>> FdTransportFactory::wrap_and_claim_enclos
     }
     cleanup();
     return Result<std::unique_ptr<Q3U4Enclosure>>::success(std::move(enclosure));
-#endif
 }
+#endif
 
 Result<GroupingResult> Q3U4Runtime::enumerate_native() noexcept
 {
