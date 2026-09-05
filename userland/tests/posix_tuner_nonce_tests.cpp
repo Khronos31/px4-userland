@@ -84,8 +84,9 @@ public:
 bool test_short_read_and_eintr()
 {
     FakeIo io;
-    io.steps = {ReadStep{FakeIo::eintr(), 0U}, ReadStep{FakeIo::bytes(3U, 0x10U), 0x10U},
-                ReadStep{FakeIo::bytes(13U, 0x20U), 0x20U}};
+    io.steps.push_back(ReadStep{FakeIo::eintr(), 0U});
+    io.steps.push_back(ReadStep{FakeIo::bytes(3U, 0x10U), 0x10U});
+    io.steps.push_back(ReadStep{FakeIo::bytes(13U, 0x20U), 0x20U});
     const auto nonce = generate_tuner_nonce(io);
     CHECK(nonce && io.open_calls == 1U && io.close_calls == 1U);
     CHECK(nonce.value()[0] == 0x10U && nonce.value()[2] == 0x12U &&
@@ -96,12 +97,12 @@ bool test_short_read_and_eintr()
 bool test_eof_and_read_failure()
 {
     FakeIo eof;
-    eof.steps = {ReadStep{FakeIo::bytes(0U, 0U), 0U}};
+    eof.steps.push_back(ReadStep{FakeIo::bytes(0U, 0U), 0U});
     const auto eof_result = generate_tuner_nonce(eof);
     CHECK(!eof_result && eof_result.error() == Error::INTERNAL && eof.close_calls == 1U);
 
     FakeIo failure;
-    failure.steps = {ReadStep{Result<EntropyReadResult>::failure(Error::USB_IO), 0U}};
+    failure.steps.push_back(ReadStep{Result<EntropyReadResult>::failure(Error::USB_IO), 0U});
     const auto failure_result = generate_tuner_nonce(failure);
     CHECK(!failure_result && failure_result.error() == Error::USB_IO &&
           failure.close_calls == 1U);
@@ -116,7 +117,7 @@ bool test_open_and_close_failure()
     CHECK(!result && result.error() == Error::INTERNAL && open_failure.close_calls == 0U);
 
     FakeIo close_failure;
-    close_failure.steps = {ReadStep{FakeIo::bytes(16U, 0x40U), 0x40U}};
+    close_failure.steps.push_back(ReadStep{FakeIo::bytes(16U, 0x40U), 0x40U});
     close_failure.close_result = Result<void>::failure(Error::INTERNAL);
     const auto close_result = generate_tuner_nonce(close_failure);
     CHECK(!close_result && close_result.error() == Error::INTERNAL &&
