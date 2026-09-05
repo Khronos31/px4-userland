@@ -123,6 +123,7 @@ public:
 bool wait_for_libusb_detach_quiescence(
     LibusbApi& api, LibusbApi::Context context,
     const std::array<LibusbApi::Handle, 2U>& handles,
+    bool detach_hazard_observed,
     std::size_t max_event_calls, unsigned int event_timeout_ms) noexcept;
 
 class LibusbSession final {
@@ -135,6 +136,7 @@ public:
     LibusbSession& operator=(const LibusbSession&) = delete;
 
     LibusbApi::Context context() const noexcept { return context_; }
+    void abandon_context() noexcept { context_ = nullptr; }
 
 private:
     LibusbSession(LibusbApi& api, LibusbApi::Context context) noexcept;
@@ -248,7 +250,7 @@ struct Q3U4RuntimeState final {
     RuntimeApiGate stream_api_gate;
     RuntimeEventGate event_gate;
     std::atomic<bool> abandoned{false};
-    std::atomic<bool> disconnect_observed{false};
+    std::atomic<bool> detach_hazard_observed{false};
 };
 
 class LibusbTransport final : public Transport {
@@ -397,7 +399,7 @@ public:
     static Result<std::unique_ptr<Q3U4Runtime>> create_shutdown_fixture(
         std::unique_ptr<LibusbApi> api,
         const std::array<LibusbApi::Handle, 2U>& handles,
-        bool disconnect_observed) noexcept;
+        bool detach_hazard_observed) noexcept;
 };
 
 }  // namespace px4::userland

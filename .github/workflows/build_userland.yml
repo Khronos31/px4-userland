@@ -5,12 +5,14 @@ on:
   pull_request:
     paths:
       - CMakeLists.txt
+      - packaging/**
       - userland/**
       - scripts/**
       - .github/workflows/build_userland.yml
   push:
     paths:
       - CMakeLists.txt
+      - packaging/**
       - userland/**
       - scripts/**
       - .github/workflows/build_userland.yml

@@ -91,10 +91,12 @@ private:
     RuntimeEventGate* gate_;
 };
 
-void observe_disconnect(Q3U4RuntimeState* state, int result) noexcept
+void observe_detach_hazard(Q3U4RuntimeState* state, int result) noexcept
 {
-    if (state != nullptr && result == LIBUSB_ERROR_NO_DEVICE) {
-        state->disconnect_observed.store(true);
+    if (state != nullptr &&
+        (result == LIBUSB_ERROR_IO || result == LIBUSB_ERROR_NO_DEVICE ||
+         result == LIBUSB_ERROR_OTHER)) {
+        state->detach_hazard_observed.store(true);
     }
 }
 
@@ -561,6 +563,7 @@ bool NativeLibusbApi::requires_detach_quiescence() const noexcept
 bool wait_for_libusb_detach_quiescence(
     LibusbApi& api, LibusbApi::Context context,
     const std::array<LibusbApi::Handle, 2U>& handles,
+    bool detach_hazard_observed,
     std::size_t max_event_calls, unsigned int event_timeout_ms) noexcept
 {
     std::array<LibusbApi::Device, 2U> devices{};
@@ -577,10 +580,11 @@ bool wait_for_libusb_detach_quiescence(
     }
     if (device_count == 0U) return true;
 
-    const auto all_detached = [&]() noexcept {
+    enum class Presence : std::uint8_t { all_present, detach_observed, error };
+    const auto device_presence = [&]() noexcept {
         void* list = nullptr;
         std::size_t count = 0U;
-        if (api.get_device_list(context, &list, &count) != 0) return false;
+        if (api.get_device_list(context, &list, &count) != 0) return Presence::error;
         std::array<bool, 2U> present{};
         for (std::size_t index = 0U; index < count; ++index) {
             const LibusbApi::Device listed = api.list_device(list, index);
@@ -589,14 +593,20 @@ bool wait_for_libusb_detach_quiescence(
             }
         }
         api.free_device_list(list);
-        return std::none_of(present.begin(), present.begin() + device_count,
-                            [](bool value) noexcept { return value; });
+        return std::all_of(present.begin(), present.begin() + device_count,
+                           [](bool value) noexcept { return value; })
+                   ? Presence::all_present
+                   : Presence::detach_observed;
     };
 
     for (std::size_t call = 0U; call <= max_event_calls; ++call) {
-        if (all_detached()) return true;
+        const Presence presence = device_presence();
+        if (presence == Presence::error) return false;
+        if (presence == Presence::detach_observed) return true;
+        if (!detach_hazard_observed) return true;
         if (call == max_event_calls) break;
-        (void)api.handle_events(context, event_timeout_ms);
+        const int event_result = api.handle_events(context, event_timeout_ms);
+        if (event_result != 0 && event_result != LIBUSB_ERROR_INTERRUPTED) return false;
     }
     return false;
 }
@@ -851,12 +861,16 @@ void LibusbTransport::on_transfer(LibusbApi::Transfer transfer,
         } else if (status == LibusbApi::TransferStatus::no_device) {
             slot->error = Error::DISCONNECTED;
             if (state.runtime_state != nullptr) {
-                state.runtime_state->disconnect_observed.store(true);
+                state.runtime_state->detach_hazard_observed.store(true);
             }
         } else if (status == LibusbApi::TransferStatus::cancelled && state.stopping) {
             slot->error = Error::OK;
         } else {
             slot->error = Error::USB_IO;
+            if (status == LibusbApi::TransferStatus::error &&
+                state.runtime_state != nullptr) {
+                state.runtime_state->detach_hazard_observed.store(true);
+            }
         }
     }
     if (state.stopping) {
@@ -901,9 +915,7 @@ void LibusbTransport::on_transfer(LibusbApi::Transfer transfer,
     ++state.outstanding;
     const int submit_result = state.api->submit_transfer(slot->transfer);
     if (submit_result != 0) {
-        if (submit_result == LIBUSB_ERROR_NO_DEVICE && state.runtime_state != nullptr) {
-            state.runtime_state->disconnect_observed.store(true);
-        }
+        observe_detach_hazard(state.runtime_state, submit_result);
         --state.outstanding;
         slot->status = StreamState::SlotStatus::allocated;
         state.resubmit_failed = true;
@@ -980,7 +992,7 @@ Result<std::size_t> LibusbTransport::bulk_read(std::uint8_t endpoint, MutableByt
     const int result = api_->bulk_transfer(handle_, endpoint, output.data,
                                            static_cast<int>(output.size), &transferred,
                                            timeout.milliseconds);
-    observe_disconnect(runtime_state_, result);
+    observe_detach_hazard(runtime_state_, result);
     if (transferred < 0 || static_cast<std::size_t>(transferred) > output.size) {
         return failure(Error::INTERNAL);
     }
@@ -1024,7 +1036,7 @@ Result<std::size_t> LibusbTransport::bulk_write(std::uint8_t endpoint, ByteView 
                                            const_cast<std::uint8_t*>(input.data),
                                            static_cast<int>(input.size), &transferred,
                                            timeout.milliseconds);
-    observe_disconnect(runtime_state_, result);
+    observe_detach_hazard(runtime_state_, result);
     if (result != 0) {
         return Result<std::size_t>::failure(map_libusb_error(result));
     }
@@ -1103,7 +1115,7 @@ Result<void> LibusbTransport::start_stream(const StreamConfig& config) noexcept
                                            : &runtime_state_->stream_api_gate);
             submit_result = api_->submit_transfer(slot.transfer);
         }
-        observe_disconnect(runtime_state_, submit_result);
+        observe_detach_hazard(runtime_state_, submit_result);
         if (submit_result != 0) {
             --stream_->outstanding;
             slot.status = StreamState::SlotStatus::allocated;
@@ -1139,7 +1151,7 @@ Result<StreamEvent> LibusbTransport::wait_stream(Timeout timeout) noexcept
                                            : &runtime_state_->stream_api_gate);
             submit_result = api_->submit_transfer(slot.transfer);
         }
-        observe_disconnect(runtime_state_, submit_result);
+        observe_detach_hazard(runtime_state_, submit_result);
         if (submit_result != 0) {
             --stream_->outstanding;
             slot.status = StreamState::SlotStatus::completed;
@@ -1229,7 +1241,7 @@ Result<StreamEvent> LibusbTransport::wait_stream(Timeout timeout) noexcept
             lock, std::chrono::milliseconds(timeout.milliseconds),
             completion_available);
     }
-    observe_disconnect(runtime_state_, event_result);
+    observe_detach_hazard(runtime_state_, event_result);
     if (event_result != 0) {
         return Result<StreamEvent>::failure(map_libusb_error(event_result));
     }
@@ -1265,7 +1277,7 @@ Result<void> LibusbTransport::cancel_and_drain_locked(
                                            ? nullptr
                                            : &runtime_state_->stream_api_gate);
             const int result = api_->cancel_transfer(slot.transfer);
-            observe_disconnect(runtime_state_, result);
+            observe_detach_hazard(runtime_state_, result);
             if (result != 0 && result != LIBUSB_ERROR_NOT_FOUND && first_error == Error::OK) {
                 first_error = map_libusb_error(result);
             }
@@ -1282,7 +1294,7 @@ Result<void> LibusbTransport::cancel_and_drain_locked(
             const CommandEventGateLock event_lock(runtime_state_);
             result = api_->handle_events(context_, 1000U);
         }
-        observe_disconnect(runtime_state_, result);
+        observe_detach_hazard(runtime_state_, result);
         lock.lock();
         ++drain_event_calls;
         if (result != 0 && first_error == Error::OK) {
@@ -1719,26 +1731,34 @@ Q3U4Runtime::Impl::~Impl() noexcept
 {
     // Members are declared in dependency order, but explicit reset makes the
     // transport-before-session/API invariant auditable and deterministic.
+    bool libusb_exit_safe = true;
     if (api_ != nullptr && session_ != nullptr && state_ != nullptr &&
-        !state_->abandoned.load() && state_->disconnect_observed.load() &&
+        !state_->abandoned.load() &&
         api_->requires_detach_quiescence()) {
         // libusb through 1.0.30 holds Darwin's cached-device mutex while
         // waiting for its hotplug thread to exit.  A concurrent detach callback
-        // takes the locks in the opposite order.  Wait until this context's two
-        // Q3U4 devices have left libusb's public device list before making the
-        // final libusb_exit call; the callback has then crossed the conflicting
-        // mutex and core libusb_exit's active-context lock is a final barrier.
+        // takes the locks in the opposite order.  A device-list query on Darwin
+        // first asks IOKit to quiesce providers before sampling libusb's list.
+        // Connected shutdown therefore needs no event-loop wait, while an observed
+        // USB failure waits until a detach has crossed the conflicting mutex.
         constexpr std::size_t kMaxDetachEventCalls = 100U;
         constexpr unsigned int kDetachEventTimeoutMs = 10U;
         const std::array<LibusbApi::Handle, 2U> handles{
             transports_[0U] == nullptr ? nullptr : transports_[0U]->handle_,
             transports_[1U] == nullptr ? nullptr : transports_[1U]->handle_};
-        (void)wait_for_libusb_detach_quiescence(
+        libusb_exit_safe = wait_for_libusb_detach_quiescence(
             *api_, session_->context(), handles,
+            state_->detach_hazard_observed.load(),
             kMaxDetachEventCalls, kDetachEventTimeoutMs);
     }
     transports_[1U].reset();
     transports_[0U].reset();
+    if (!libusb_exit_safe && session_ != nullptr) {
+        // Entering Darwin libusb_exit without proving detach quiescence can
+        // deadlock against its hotplug thread.  Transport handles are already
+        // closed; abandon only the context as a bounded process-exit fail-safe.
+        session_->abandon_context();
+    }
     if (state_ != nullptr && state_->abandoned.load()) {
         // A pending callback may still reach the leaked transfer state. Keep only the
         // API/context/gate graph alive; acquisition-time FdSyscalls is never callback-owned.

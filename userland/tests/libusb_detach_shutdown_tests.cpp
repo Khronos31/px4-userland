@@ -13,11 +13,15 @@
 using px4::userland::DeviceObservation;
 using px4::userland::Error;
 using px4::userland::LibusbApi;
+using px4::userland::MutableByteView;
 using px4::userland::RuntimeTestAccess;
 using px4::userland::StreamConfig;
+using px4::userland::Timeout;
 using px4::userland::UsbTopologyObservation;
 using px4::userland::kTsInEndpoint;
 using px4::userland::wait_for_libusb_detach_quiescence;
+
+constexpr int kLibusbIoError = -1;
 
 namespace {
 
@@ -53,6 +57,7 @@ public:
     int get_device_list(Context, void** list, std::size_t* count) noexcept override
     {
         events_.emplace_back("list");
+        if (detach_during_list) present_count = 0U;
         *list = this;
         *count = present_count;
         return 0;
@@ -139,7 +144,7 @@ public:
             return 0;
         }
         if (detach_on_event) present_count = 0U;
-        return 0;
+        return event_result;
     }
     bool requires_detach_quiescence() const noexcept override { return true; }
 
@@ -148,6 +153,8 @@ public:
     Transfer active_transfer = nullptr;
     std::size_t present_count = devices.size();
     bool detach_on_event = true;
+    bool detach_during_list = false;
+    int event_result = 0;
 };
 
 bool test_runtime_quiesces_before_close_and_exit()
@@ -191,6 +198,53 @@ bool test_normal_runtime_skips_detach_quiescence()
     runtime.value().reset();
 
     const std::vector<std::string> expected{
+        "device", "list", "free-list", "release", "close", "exit", "api-destroy"};
+    DETACH_CHECK(events == expected);
+    DETACH_CHECK(std::count(events.begin(), events.end(), "events") == 0);
+    return true;
+}
+
+bool test_unobserved_detach_is_synchronized_by_device_list()
+{
+    std::vector<std::string> events;
+    auto api = std::unique_ptr<FakeApi>(new FakeApi(events));
+    FakeApi* api_ptr = api.get();
+    api_ptr->detach_during_list = true;
+    FakeHandle handle{&api_ptr->devices[0U]};
+    const std::array<LibusbApi::Handle, 2U> handles{&handle, nullptr};
+    auto runtime = RuntimeTestAccess::create_shutdown_fixture(
+        std::move(api), handles, false);
+    DETACH_CHECK(runtime);
+    events.clear();
+
+    runtime.value().reset();
+
+    const std::vector<std::string> expected{
+        "device", "list", "free-list", "release", "close", "exit", "api-destroy"};
+    DETACH_CHECK(events == expected);
+    return true;
+}
+
+bool test_usb_io_hazard_waits_for_detach_without_no_device()
+{
+    std::vector<std::string> events;
+    auto api = std::unique_ptr<FakeApi>(new FakeApi(events));
+    FakeApi* api_ptr = api.get();
+    FakeHandle handle{&api_ptr->devices[0U]};
+    const std::array<LibusbApi::Handle, 2U> handles{&handle, nullptr};
+    auto runtime = RuntimeTestAccess::create_shutdown_fixture(
+        std::move(api), handles, false);
+    DETACH_CHECK(runtime);
+    std::array<std::uint8_t, 1U> buffer{};
+    const auto io_failure = runtime.value()->dev1().bulk_read(
+        0x81U, MutableByteView{buffer.data(), buffer.size()}, Timeout{1U});
+    DETACH_CHECK(!io_failure && io_failure.error() == Error::USB_IO);
+    events.clear();
+
+    runtime.value().reset();
+
+    const std::vector<std::string> expected{
+        "device", "list", "free-list", "events", "list", "free-list",
         "release", "close", "exit", "api-destroy"};
     DETACH_CHECK(events == expected);
     return true;
@@ -205,9 +259,33 @@ bool test_detach_quiescence_is_bounded()
     FakeHandle handle{&api.devices[0U]};
     const std::array<LibusbApi::Handle, 2U> handles{&handle, nullptr};
 
-    DETACH_CHECK(!wait_for_libusb_detach_quiescence(api, &api, handles, 3U, 0U));
+    DETACH_CHECK(!wait_for_libusb_detach_quiescence(
+        api, &api, handles, true, 3U, 0U));
     DETACH_CHECK(std::count(events.begin(), events.end(), "events") == 3);
     DETACH_CHECK(std::count(events.begin(), events.end(), "list") == 4);
+    return true;
+}
+
+bool test_event_failure_skips_libusb_exit()
+{
+    std::vector<std::string> events;
+    auto api = std::unique_ptr<FakeApi>(new FakeApi(events));
+    FakeApi* api_ptr = api.get();
+    api_ptr->detach_on_event = false;
+    api_ptr->event_result = kLibusbIoError;
+    FakeHandle handle{&api_ptr->devices[0U]};
+    const std::array<LibusbApi::Handle, 2U> handles{&handle, nullptr};
+    auto runtime = RuntimeTestAccess::create_shutdown_fixture(
+        std::move(api), handles, true);
+    DETACH_CHECK(runtime);
+    events.clear();
+
+    runtime.value().reset();
+
+    const std::vector<std::string> expected{
+        "device", "list", "free-list", "events", "release", "close", "api-destroy"};
+    DETACH_CHECK(events == expected);
+    DETACH_CHECK(std::find(events.begin(), events.end(), "exit") == events.end());
     return true;
 }
 
@@ -217,7 +295,10 @@ int main()
 {
     if (!test_runtime_quiesces_before_close_and_exit() ||
         !test_normal_runtime_skips_detach_quiescence() ||
-        !test_detach_quiescence_is_bounded()) {
+        !test_unobserved_detach_is_synchronized_by_device_list() ||
+        !test_usb_io_hazard_waits_for_detach_without_no_device() ||
+        !test_detach_quiescence_is_bounded() ||
+        !test_event_failure_skips_libusb_exit()) {
         return 1;
     }
     std::puts("libusb detach shutdown tests: PASS");
