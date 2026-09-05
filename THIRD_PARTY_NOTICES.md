@@ -1,94 +1,98 @@
-# Third-party notices and release inventory
+# Third-party notices and release-candidate contract
 
-This inventory distinguishes source-tree dependencies, system dependencies, and code that is statically present in a
-release binary. It is an engineering distribution contract. A notice in this file does not by itself complete the
-compliance work for a binary release.
+This document describes the dependencies and materials for the currently implemented `release-candidate` packaging
+contract. It is not, by itself, a declaration that the project is stable or ready for a general release. The release
+candidate workflow generates and audits four platform archives plus one corresponding-source archive, then uploads them
+together with an outer `SHA256SUMS` file.
 
 ## No vendored dependency in the repository source
 
 The repository source does not vendor libusb, pcsc-lite, the Android NDK, libc++/libc++abi, musl, or firmware. Native
-CMake discovers libusb from the host or an explicitly supplied library and discovers the PC/SC IFD headers/library
-from the host. The Android build script obtains a pinned libusb source archive during the build; that archive is not
-checked into this repository. GitHub Actions and their runners are CI infrastructure, not product dependencies in a
-release source snapshot.
+CMake discovers libusb and PC/SC headers from the host or from explicit build inputs. The Android build obtains the
+verified libusb source archive during the build; it is not checked into this repository.
 
-## Dependencies present in release binaries
+The source archive is made from the exact committed source ref selected by the workflow. It also contains the exact
+verified libusb 1.0.28 source archive, its `COPYING`, checksums, and `BUILD-RELINK.md`. It excludes `.git`, build outputs,
+firmware, APK/add-on material, and vendor drivers.
 
-### Android: static libusb
+## Android binary archives
 
-The Android build links libusb 1.0.28 statically (`libusb-1.0.a`). libusb remains licensed under LGPL-2.1-or-later.
-The planned release uses the LGPL-2.1 §6(d) route, with same-place access to the §6(a) corresponding-source materials:
-the exact px4-userland source, the exact libusb source used for the binary, verification hashes, and build/relink
-instructions. The complete px4-userland source is GPL-2.0-only and is rebuildable, so separate application `.o` files as
-a relinkable deliverable are not required for this release contract. This does not claim that libusb was converted to
-GPL under LGPL §3; libusb's LGPL terms remain applicable.
+The Android archives are API 24+ Bionic builds for `aarch64` and `armv7a`. libusb 1.0.28 is statically linked as
+`libusb-1.0.a` and remains licensed under LGPL-2.1-or-later. Each Android archive includes:
+
+- `libusb/COPYING`;
+- the exact NDK `source.properties` revision used by the build;
+- NDK `NOTICE` and `NOTICE.toolchain`;
+- a prominent `DEPENDENCY-NOTICE.txt` identifying libusb 1.0.28, static linkage, LGPL-2.1-or-later, the NDK revision and
+  notice materials, and the corresponding-source archive;
+- sanitized `evidence/inventory/*-static-archives.tsv` files listing archive basenames, member names, and categories;
+- `manifest.json` and `SHA256SUMS`, both checked against the archived payload.
+
+The static NDK C++ runtime portions, including the applicable `libc++`/`libc++abi` portions, are under Apache-2.0 WITH
+LLVM-exception. The bundled NDK `NOTICE` and `NOTICE.toolchain` provide the associated terms and notices for those
+runtime materials. The exact NDK revision is retained in `ndk/source.properties` and identified in the prominent
+dependency notice.
+
+The CI release-candidate path uses NDK r27d. The archive audit retains and checks the exact `27.x` revision recorded in
+`ndk/source.properties`; it does not replace that revision with a generic NDK label. The static inventory is generated
+from explicit linker-map inputs, but raw linker maps and their source/build/NDK paths are not shipped in the archive.
+
+The corresponding-source archive provides the exact px4-userland source and exact libusb source needed to rebuild or
+relink the Android artifacts. The libusb 1.0.28 obligation follows LGPL-2.1-or-later section 6(d), with the corresponding
+source and relink route provided under section 6(a): the same candidate handoff contains the exact source, verification
+hashes, and `BUILD-RELINK.md`. libusb's LGPL terms remain applicable; this contract does not claim that libusb was
+converted to GPL under LGPL section 3. The complete px4-userland source is GPL-2.0-only and is rebuildable, so separate
+application object files are not required as a relinkable deliverable under this contract.
 
 Primary license text: [libusb 1.0.28 `COPYING`](https://github.com/libusb/libusb/blob/v1.0.28/COPYING).
 
-Providing only this notice file, or relying only on GitHub's automatically generated source archive, is not sufficient.
-The exact libusb source must be present in the corresponding-source archive because the GitHub archive does not contain
-the downloaded libusb source. The Android binary release gate is incomplete until the same GitHub Release page contains
-both the binary archive and its corresponding-source archive with the release-specific hash and build/relink evidence.
+## Linux and macOS native archives
 
-Each Android binary archive must contain, at its top level, the GPL license (`LICENSE`), libusb's LGPL license text
-(`libusb/COPYING` or an equivalent clearly identified copy), a prominent plain-text third-party notice, this
-`THIRD_PARTY_NOTICES.md`, and `README.md`. The prominent notice must identify the static libusb 1.0.28 and the NDK
-runtime and point to the full notices and corresponding-source archive.
+The Linux archive is x86_64 musl-dynamic. It requires the host interpreter
+`/lib/ld-musl-x86_64.so.1` and host-provided shared `libusb-1.0.so.0`. The macOS archive is Apple Silicon and uses
+host-provided dynamic libusb. Both native archives also require their host system C++ runtime: Linux commonly needs
+Alpine-provided dynamic `libstdc++.so.6`, `libgcc_s.so.1`, and related libraries, while macOS needs system `libc++`.
+The actual `NEEDED`/dynamic dependency lists are retained in `evidence/binary-audit.json`. Native archives do not bundle
+a libusb or PC/SC client library.
 
-### Android: NDK C++ runtime
+Only `px4d` directly requires libusb. `px4-ts` and `px4ctl` are IPC clients and must not directly require libusb. The
+Linux/macOS IFD adapter also communicates with `px4d` over IPC and must not directly require libusb or a PC/SC client
+library. A host PC/SC consumer/pcscd loads the IFD adapter through the supplied reader template.
 
-The Android build uses NDK r27 and `CMAKE_ANDROID_STL_TYPE=c++_static`; the resulting artifacts can contain the
-statically linked libc++ and libc++abi runtime portions. The release must include the applicable LLVM Project
-Apache-2.0 WITH LLVM-exception terms, the NDK-provided `NOTICE` and `NOTICE.toolchain` files, and the legacy/third-party
-notices identified by that NDK. The exact archive members actually linked into each final artifact must be recorded in
-an immutable release inventory; listing the whole NDK without the linked-member inventory is insufficient.
+The native dependency claim is verified from each built binary: Linux uses `readelf` for the musl interpreter and shared
+libusb, while macOS uses `otool` for host-provided dynamic libusb and the IFD's dependency restrictions. The native
+archive notice identifies these as host-provided dynamic dependencies.
 
-NDK notice packaging and the release-specific static-link inventory are release blockers. This document does not
-claim that Android binary release compliance is complete.
+Primary PC/SC license reference: [pcsc-lite `COPYING`](https://github.com/LudovicRousseau/PCSC/blob/master/COPYING).
+The exact host package versions remain deployment-specific system inputs and are not copied into the native archives.
 
-Primary license and notice texts: [LLVM `LICENSE.txt`](https://llvm.org/LICENSE.txt), Android NDK r27
-[`NOTICE`](https://android.googlesource.com/toolchain/prebuilts/ndk/r27/+/refs/heads/main/NOTICE), and
-[`NOTICE.toolchain`](https://android.googlesource.com/toolchain/prebuilts/ndk/r27/+/refs/heads/main/NOTICE.toolchain).
+## CI and archive audit
 
-### Linux and macOS: system/dynamic dependencies
+The local packaging scripts and `.github/workflows/build_userland.yml` implement the same release-candidate contract.
+They require explicit already-built platform inputs, strict `N.N.N` version matching, and the exact pinned libusb source
+where Android or source packaging needs it. They audit archive allowlists, required files, manifests, checksums, path
+traversal, symlinks/hardlinks, firmware, Windows, probe, kernel/DKMS, and vendor content.
 
-The intended native release builds use host-provided dynamic dependencies rather than vendored product copies. The Linux
-x86_64 artifact is musl-dynamic/Siano-style: its PT_INTERP names `/lib/ld-musl-x86_64.so.1`, which the target host must
-provide, and it uses shared host libusb rather than a static libusb copy. Existing glibc native builds are
-CI/development builds, not the Linux release artifact.
+The final CI artifact is named `release-candidate` and contains exactly these five archives and the outer `SHA256SUMS`:
 
-- libusb 1.0.x, under the installed package's LGPL-2.1-or-later terms and notices;
-- system PC/SC / pcsc-lite libraries and the `ifdhandler.h` ABI. The system pcsc-lite core is normally distributed
-  under BSD-3-Clause terms; the exact package version and copyright file must be recorded for each release;
-- the host C++ runtime and other OS-provided libraries, which remain system dependencies when dynamically linked.
+- `px4-userland-<version>-linux-x86_64.tar.gz`;
+- `px4-userland-<version>-darwin-arm64.tar.gz`;
+- `px4-userland-<version>-android-aarch64.tar.gz`;
+- `px4-userland-<version>-android-armv7a.tar.gz`;
+- `px4-userland-<version>-source.tar.gz`.
 
-Primary pcsc-lite license text: [pcsc-lite `COPYING`](https://github.com/LudovicRousseau/PCSC/blob/master/COPYING).
+This artifact is a candidate handoff, not a Git tag, GitHub Release, or general-release readiness claim. The remaining
+stable acceptance work is described in [`SPEC.md`](SPEC.md), including three 72-hour soak runs and loaded LNB supply
+verification.
 
-For every actual release binary, the dynamic dependency claim must be verified from the binary and retained with the
-release evidence. For the Linux x86_64 musl artifact, use `readelf -l`/`readelf -d` to verify the ELF interpreter
-`/lib/ld-musl-x86_64.so.1`, `NEEDED` `libusb-1.0.so.0`, and `NEEDED` `libc.musl-x86_64.so.1`. For macOS, use `otool -L`
-to verify the host-provided dynamic libusb. If libusb is static, or if pcsc-lite or another system component is bundled,
-switch that binary to the Android-equivalent static source obligations and inventory its exact source, license, notices,
-and build/relink materials.
+## CI-only actions
 
-### CI-only actions
-
-The workflow uses `actions/checkout@v4` and `nttld/setup-ndk@v1` on CI runners. Their repositories are MIT-licensed
-CI inputs and are not normally included in the product source or release binaries. A future release workflow should
-pin action commits and retain its supply-chain evidence separately.
-
-## Future Linux musl static artifact
-
-A Linux musl static release is planned but is not implemented or released at this stage. When it exists, the selected
-musl version's exact source and `COPYRIGHT` (musl is MIT-licensed with additional listed BSD/MIT portions), the actual
-static crt/libc contents, and every other static library must be inventoried and shipped with its exact license texts,
-notices, and build instructions. This is a future musl-static release blocker, separate from the current Android
-blockers; it does not mean the current dynamic native build is already non-compliant.
-
-Primary license text: musl [`COPYRIGHT`](https://git.musl-libc.org/cgit/musl/plain/COPYRIGHT).
+GitHub Actions and their runners are CI infrastructure rather than product dependencies in a release source snapshot.
+The workflow uses SHA-pinned checkout, artifact, and NDK setup actions. Their notices and licenses apply to the CI
+execution environment; they are not copied into the product archives.
 
 ## Firmware is separate and not included
 
-The IT930x firmware is not a third-party library used by the source build and is not included as a source file, blob,
-archive member, or release artifact. It is a separately supplied runtime input whose licensing and acquisition remain
-outside this third-party library inventory. The project does not download, extract, or transform vendor firmware.
+IT930x firmware is not a third-party library used by the source build and is not included as a source file, blob, archive
+member, or release artifact. It is a separately supplied runtime input whose licensing and acquisition remain outside this
+inventory. The project does not download, extract, or transform vendor firmware.

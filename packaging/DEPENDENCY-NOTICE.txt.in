@@ -1,0 +1,5 @@
+IMPORTANT DEPENDENCY NOTICE
+
+px4-userland @VERSION@ dependency notice for @PLATFORM@
+
+@DEPENDENCY_TEXT@

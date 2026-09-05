@@ -560,7 +560,11 @@ Android binary release gateは次の全項目を満たすまで未完成とす�
 6. Future Linux/musl static releaseは、使用した各dependencyのexact source、license text、notice、build instructions
    とstatic member inventoryをreleaseへ含める。これは現行Android gateとは別の将来release gateである。
 
-このgateは現時点で未実装であり、`px4-userland`の一般releaseは未完成である。
+このgateの包装・manifest・checksum・binary/source archive auditは、local packaging scriptsと
+`.github/workflows/build_userland.yml`の`release-candidate` workflowとして実装済みである。workflowはtagや
+GitHub Releaseを作成せず、4つのbinary archive、対応source archive、外側`SHA256SUMS`をcandidate artifactとして
+まとめる。これはstable/general release readyを意味しない。72時間連続試験3回とloaded LNB給電能力の確認が
+完了するまで、一般releaseの準備完了とは表記しない。
 
 ## 11. Implementation increments
 

@@ -5,16 +5,24 @@ on:
   pull_request:
     paths:
       - CMakeLists.txt
+      - LICENSE
+      - README.md
+      - THIRD_PARTY_NOTICES.md
       - packaging/**
       - userland/**
       - scripts/**
+      - VERSION
       - .github/workflows/build_userland.yml
   push:
     paths:
       - CMakeLists.txt
+      - LICENSE
+      - README.md
+      - THIRD_PARTY_NOTICES.md
       - packaging/**
       - userland/**
       - scripts/**
+      - VERSION
       - .github/workflows/build_userland.yml
   workflow_dispatch:
 
@@ -23,7 +31,7 @@ jobs:
     name: Ubuntu glibc
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Install build tools
         run: sudo apt-get update && sudo apt-get install --no-install-recommends -y cmake ninja-build g++ pkg-config libusb-1.0-0-dev libpcsclite-dev
       - name: Build and test
@@ -38,39 +46,66 @@ jobs:
     name: Alpine musl
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Build and test in Alpine
-        run: >-
-          docker run --rm
-          -v "$GITHUB_WORKSPACE:/src"
-          -w /src
-          alpine:3.20
-          sh -euxc
-          'apk add --no-cache cmake samurai g++ pkgconf libusb-dev pcsc-lite-dev;
+        run: |
+          docker run --rm \
+          -v "$GITHUB_WORKSPACE:/src" \
+          -w /src \
+          alpine:3.20 \
+          sh -euxc \
+          'apk add --no-cache cmake samurai g++ pkgconf libusb-dev pcsc-lite-dev python3 binutils;
           pkg-config --modversion libpcsclite;
-          cmake -S . -B build-userland -G Ninja -DPX4_BUILD_TESTS=ON -DPX4_REQUIRE_PCSC_IFD=ON;
+          cmake -S . -B build-userland -G Ninja -DCMAKE_BUILD_TYPE=Release -DPX4_BUILD_TESTS=ON -DPX4_REQUIRE_PCSC_IFD=ON;
           cmake --build build-userland;
           ctest --test-dir build-userland -R "^px4_ifd_(tests|symbols)$" --no-tests=error --output-on-failure;
-          ctest --test-dir build-userland --output-on-failure'
+          ctest --test-dir build-userland --output-on-failure;
+          version=$(tr -d "\\n" < VERSION);
+          ifd=$(find build-userland -type f -name "libpx4-userland-ifd.so" -print -quit);
+          test -n "$ifd";
+          mkdir -p /src/release-candidate/linux;
+          scripts/package-artifact.sh --platform linux-x86_64 --version "$version" \
+          --build-dir build-userland --ifd-library "$ifd" \
+          --reader-template packaging/pcsc/reader.conf.d/px4-userland.conf.in \
+          --output-dir /src/release-candidate/linux'
+      - name: Upload Linux candidate archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rc-linux
+          path: release-candidate/linux/*.tar.gz
+          if-no-files-found: error
 
   macos:
     name: macOS
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Install build tools
         run: brew install ninja libusb pcsc-lite pkgconf
       - name: Build and test
         run: |
           pcsc_prefix="$(brew --prefix pcsc-lite)"
           pcsc_include="$pcsc_prefix/include/PCSC"
-          export PKG_CONFIG_PATH="$(brew --prefix libusb)/lib/pkgconfig:$pcsc_prefix/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+          PKG_CONFIG_PATH="$(brew --prefix libusb)/lib/pkgconfig:$pcsc_prefix/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+          export PKG_CONFIG_PATH
           pkg-config --modversion libpcsclite
-          cmake -S . -B build-userland -G Ninja -DPX4_BUILD_TESTS=ON -DPX4_REQUIRE_PCSC_IFD=ON -DPX4_PCSC_IFD_INCLUDE_DIR:PATH="$pcsc_include"
+          cmake -S . -B build-userland -G Ninja -DCMAKE_BUILD_TYPE=Release -DPX4_BUILD_TESTS=ON -DPX4_REQUIRE_PCSC_IFD=ON -DPX4_PCSC_IFD_INCLUDE_DIR:PATH="$pcsc_include"
           test "$(sed -n 's/^PX4_PCSC_IFD_INCLUDE_DIR:PATH=//p' build-userland/CMakeCache.txt)" = "$pcsc_include"
           cmake --build build-userland
           ctest --test-dir build-userland -R '^px4_ifd_(tests|symbols)$' --no-tests=error --output-on-failure
           ctest --test-dir build-userland --output-on-failure
+          version="$(tr -d '\n' < VERSION)"
+          mkdir -p "$RUNNER_TEMP/release-candidate/macos"
+          scripts/package-artifact.sh --platform darwin-arm64 --version "$version" \
+            --build-dir build-userland --ifd-bundle build-userland/px4-userland-ifd.bundle \
+            --reader-template packaging/pcsc/reader.conf.d/px4-userland.conf.in \
+            --output-dir "$RUNNER_TEMP/release-candidate/macos"
+      - name: Upload macOS candidate archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rc-macos
+          path: ${{ runner.temp }}/release-candidate/macos/*.tar.gz
+          if-no-files-found: error
 
   android-api-24:
     name: Android API 24 compile checks
@@ -81,11 +116,13 @@ jobs:
         include:
           - name: aarch64
             abi: arm64-v8a
+            platform: android-aarch64
           - name: armv7a
             abi: armeabi-v7a
+            platform: android-armv7a
     steps:
-      - uses: actions/checkout@v4
-      - uses: nttld/setup-ndk@v1
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: nttld/setup-ndk@afb4c9964b521afb97c864b7d40b11e6911bd410 # v1.5.0
         id: setup-ndk
         with:
           ndk-version: r27d
@@ -97,6 +134,116 @@ jobs:
           ABI: ${{ matrix.abi }}
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
-          work="$(mktemp -d /tmp/px4-userland-android-XXXXXX)"
-          trap 'find "$work" -depth -delete' EXIT
-          scripts/build-android.sh --abi "$ABI" --output "$work/output"
+          artifact_root="$RUNNER_TEMP/release-candidate/$ABI"
+          mkdir -p "$artifact_root"
+          scripts/build-android.sh --abi "$ABI" \
+            --output "$artifact_root/output" --evidence "$artifact_root/evidence"
+          version="$(tr -d '\n' < VERSION)"
+          scripts/package-artifact.sh --platform "${{ matrix.platform }}" --version "$version" \
+            --build-dir "$artifact_root/output" --binary-suffix "$ABI" \
+            --libusb-source-archive "$artifact_root/evidence/libusb/libusb-1.0.28.tar.bz2" \
+            --ndk-root "$ANDROID_NDK_HOME" \
+            --link-map-dir "$artifact_root/evidence/maps" \
+            --output-dir "$artifact_root/package"
+      - name: Upload Android candidate archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rc-${{ matrix.name }}
+          path: ${{ runner.temp }}/release-candidate/${{ matrix.abi }}/package/*.tar.gz
+          if-no-files-found: error
+
+  source-archive:
+    name: Corresponding source archive
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+      - name: Build and audit source archive
+        run: |
+          libusb="$RUNNER_TEMP/libusb-1.0.28.tar.bz2"
+          curl -fsSL --retry 2 -o "$libusb" \
+            https://github.com/libusb/libusb/releases/download/v1.0.28/libusb-1.0.28.tar.bz2
+          echo '966bb0d231f94a474eaae2e67da5ec844d3527a1f386456394ff432580634b29  '"$libusb" | sha256sum -c -
+          version="$(tr -d '\n' < VERSION)"
+          mkdir -p "$RUNNER_TEMP/release-candidate/source"
+          scripts/package-source.sh --version "$version" --source-root "$GITHUB_WORKSPACE" \
+            --source-ref "$GITHUB_SHA" --libusb-source-archive "$libusb" \
+            --output-dir "$RUNNER_TEMP/release-candidate/source"
+      - name: Upload source candidate archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rc-source
+          path: ${{ runner.temp }}/release-candidate/source/*.tar.gz
+          if-no-files-found: error
+
+  release-candidate:
+    name: Assemble release-candidate artifact
+    needs: [alpine-musl, macos, android-api-24, source-archive]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: rc-*
+          merge-multiple: true
+          path: release-candidate
+      - name: Verify and checksum candidate archives
+        run: |
+          set -eu
+          version="$(python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          data = Path('VERSION').read_bytes()
+          if not data.endswith(b'\n') or data.count(b'\n') != 1:
+              raise SystemExit('VERSION must contain exactly one newline')
+          version = data[:-1].decode('ascii')
+          if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', version):
+              raise SystemExit('VERSION must contain strict N.N.N')
+          print(version)
+          PY
+          )"
+          python3 - "$version" <<'PY'
+          from pathlib import Path
+          import sys
+
+          version = sys.argv[1]
+          expected = {
+              f'px4-userland-{version}-linux-x86_64.tar.gz',
+              f'px4-userland-{version}-darwin-arm64.tar.gz',
+              f'px4-userland-{version}-android-aarch64.tar.gz',
+              f'px4-userland-{version}-android-armv7a.tar.gz',
+              f'px4-userland-{version}-source.tar.gz',
+          }
+          actual = {
+              path.name for path in Path('release-candidate').iterdir()
+              if path.is_file() and path.name.endswith('.tar.gz')
+          }
+          if len(actual) != 5 or actual != expected:
+              raise SystemExit(f'exact archive set required: expected={sorted(expected)}, actual={sorted(actual)}')
+          PY
+          cd release-candidate
+          linux_archive="px4-userland-$version-linux-x86_64.tar.gz"
+          macos_archive="px4-userland-$version-darwin-arm64.tar.gz"
+          android_aarch64_archive="px4-userland-$version-android-aarch64.tar.gz"
+          android_armv7a_archive="px4-userland-$version-android-armv7a.tar.gz"
+          source_archive="px4-userland-$version-source.tar.gz"
+          ../scripts/audit-artifact.sh --platform linux-x86_64 --archive "$linux_archive"
+          ../scripts/audit-artifact.sh --platform darwin-arm64 --archive "$macos_archive"
+          ../scripts/audit-artifact.sh --platform android-aarch64 --archive "$android_aarch64_archive"
+          ../scripts/audit-artifact.sh --platform android-armv7a --archive "$android_armv7a_archive"
+          ../scripts/audit-artifact.sh --source-archive --archive "$source_archive"
+          sha256sum "$linux_archive" "$macos_archive" "$android_aarch64_archive" \
+            "$android_armv7a_archive" "$source_archive" > SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - name: Upload single release-candidate artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-candidate
+          path: release-candidate
+          if-no-files-found: error

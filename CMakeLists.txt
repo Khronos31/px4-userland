@@ -1,7 +1,20 @@
 # SPDX-License-Identifier: GPL-2.0-only
 cmake_minimum_required(VERSION 3.20)
 
-project(px4_userland VERSION 0.1.0 LANGUAGES CXX)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" PX4_VERSION_LINE)
+string(LENGTH "${PX4_VERSION_LINE}" PX4_VERSION_LENGTH)
+if(PX4_VERSION_LENGTH LESS 2)
+    message(FATAL_ERROR "VERSION must contain exactly N.N.N followed by one newline")
+endif()
+math(EXPR PX4_VERSION_LAST_INDEX "${PX4_VERSION_LENGTH} - 1")
+string(SUBSTRING "${PX4_VERSION_LINE}" ${PX4_VERSION_LAST_INDEX} 1 PX4_VERSION_TRAILING)
+string(SUBSTRING "${PX4_VERSION_LINE}" 0 ${PX4_VERSION_LAST_INDEX} PX4_PROJECT_VERSION)
+if(NOT PX4_VERSION_TRAILING STREQUAL "\n" OR
+        PX4_PROJECT_VERSION MATCHES "[\r\n]" OR
+        NOT PX4_PROJECT_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+    message(FATAL_ERROR "VERSION must contain exactly N.N.N followed by one newline")
+endif()
+project(px4_userland VERSION "${PX4_PROJECT_VERSION}" LANGUAGES CXX)
 
 option(PX4_BUILD_TESTS "Build offline portable-core tests" OFF)
 option(PX4_ENABLE_LIBUSB "Build the native libusb transport" ON)
@@ -9,8 +22,33 @@ option(PX4_BUILD_TOOLS "Build developer-only USB probe tools" OFF)
 option(PX4_BUILD_ANDROID_LINKCHECK "Build the Android-only final link check" OFF)
 option(PX4_BUILD_PCSC_IFD "Build the POSIX PC/SC IFD Handler when headers are available" ON)
 option(PX4_REQUIRE_PCSC_IFD "Fail configuration when the PC/SC IFD Handler cannot be built" OFF)
+set(PX4_ANDROID_NDK_ROOT_MAP "" CACHE PATH
+    "Android NDK root to remove from compiler debug paths")
+set(PX4_ANDROID_LINK_MAP_DIR "" CACHE PATH
+    "Optional output directory for Android production executable link maps")
 
 if(ANDROID)
+    # Release ELFs must not retain the machine-specific source, build, or NDK
+    # roots emitted by Clang's DWARF and macro expansion.  Keep the mapped
+    # value relative so an unstripped developer build is reproducible too.
+    set(px4_android_prefix_map_flags
+        "-fdebug-compilation-dir=."
+        "-ffile-prefix-map=${CMAKE_SOURCE_DIR}=."
+        "-fdebug-prefix-map=${CMAKE_SOURCE_DIR}=."
+        "-fmacro-prefix-map=${CMAKE_SOURCE_DIR}=."
+        "-ffile-prefix-map=${CMAKE_BINARY_DIR}=."
+        "-fdebug-prefix-map=${CMAKE_BINARY_DIR}=."
+        "-fmacro-prefix-map=${CMAKE_BINARY_DIR}=."
+    )
+    if(PX4_ANDROID_NDK_ROOT_MAP)
+        list(APPEND px4_android_prefix_map_flags
+            "-ffile-prefix-map=${PX4_ANDROID_NDK_ROOT_MAP}=."
+            "-fdebug-prefix-map=${PX4_ANDROID_NDK_ROOT_MAP}=."
+            "-fmacro-prefix-map=${PX4_ANDROID_NDK_ROOT_MAP}=."
+        )
+    endif()
+    add_compile_options(${px4_android_prefix_map_flags})
+
     # Every Android executable/shared-library final link in this project inherits this
     # contract, including future daemons, CLIs, JNI libraries, and developer tools. Every
     # packaged ELF must additionally pass scripts/verify-android-elf.sh before publication.
@@ -111,10 +149,6 @@ if(PX4_BUILD_TESTS)
     target_link_libraries(px4_userland_stream_runtime PUBLIC px4_userland_core)
 endif()
 
-if(PX4_ENABLE_LIBUSB)
-    target_sources(px4_userland_core PRIVATE userland/src/libusb_transport.cpp)
-endif()
-
 target_include_directories(px4_userland_core
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
@@ -122,12 +156,6 @@ target_include_directories(px4_userland_core
 
 target_compile_features(px4_userland_core PUBLIC cxx_std_17)
 target_link_libraries(px4_userland_core PUBLIC Threads::Threads)
-if(PX4_ENABLE_LIBUSB)
-    target_link_libraries(px4_userland_core PUBLIC ${PX4_LIBUSB_TARGET})
-    if(ANDROID)
-        target_link_libraries(px4_userland_core PUBLIC log)
-    endif()
-endif()
 
 function(px4_enable_project_warnings target)
     target_compile_options(${target} PRIVATE
@@ -143,6 +171,25 @@ endfunction()
 px4_enable_project_warnings(px4_userland_core)
 if(TARGET px4_userland_stream_runtime)
     px4_enable_project_warnings(px4_userland_stream_runtime)
+endif()
+
+if(PX4_ENABLE_LIBUSB)
+    add_library(px4_userland_libusb_transport STATIC
+        userland/src/libusb_transport.cpp
+    )
+    target_include_directories(px4_userland_libusb_transport
+        PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
+    )
+    target_compile_features(px4_userland_libusb_transport PUBLIC cxx_std_17)
+    target_link_libraries(px4_userland_libusb_transport PUBLIC
+        px4_userland_core
+        ${PX4_LIBUSB_TARGET}
+    )
+    if(ANDROID)
+        target_link_libraries(px4_userland_libusb_transport PUBLIC log)
+    endif()
+    px4_enable_project_warnings(px4_userland_libusb_transport)
 endif()
 
 # Filesystem AF_UNIX is a POSIX adapter, including Android API 24.  Keep its
@@ -330,6 +377,9 @@ if(PX4_BUILD_TESTS)
         target_sources(px4_userland_tests PRIVATE userland/src/control_workers.cpp)
     endif()
     target_link_libraries(px4_userland_tests PRIVATE px4_userland_core px4_userland_test_support)
+    if(PX4_ENABLE_LIBUSB)
+        target_link_libraries(px4_userland_tests PRIVATE px4_userland_libusb_transport)
+    endif()
     target_compile_features(px4_userland_tests PRIVATE cxx_std_17)
     target_compile_definitions(px4_userland_tests PRIVATE
         PX4_ENABLE_LIBUSB=$<BOOL:${PX4_ENABLE_LIBUSB}>
@@ -418,7 +468,8 @@ if(PX4_BUILD_TESTS)
         add_executable(px4_userland_libusb_detach_shutdown_tests
             userland/tests/libusb_detach_shutdown_tests.cpp)
         target_link_libraries(px4_userland_libusb_detach_shutdown_tests
-            PRIVATE px4_userland_core px4_userland_test_support)
+            PRIVATE px4_userland_core px4_userland_test_support
+                    px4_userland_libusb_transport)
         target_include_directories(px4_userland_libusb_detach_shutdown_tests
             PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/userland/src)
         target_compile_features(px4_userland_libusb_detach_shutdown_tests
@@ -457,7 +508,10 @@ if(TARGET px4_userland_posix_ipc)
             userland/tools/px4d.cpp
             userland/src/px4d_args.cpp
         )
-        target_link_libraries(px4d PRIVATE px4_userland_posix_ipc)
+        target_link_libraries(px4d PRIVATE
+            px4_userland_posix_ipc
+            px4_userland_libusb_transport
+        )
         if(TARGET px4_userland_posix_workers)
             target_link_libraries(px4d PRIVATE px4_userland_posix_workers)
         endif()
@@ -478,7 +532,7 @@ if(PX4_BUILD_TOOLS)
         message(FATAL_ERROR "PX4_BUILD_TOOLS requires PX4_ENABLE_LIBUSB=ON")
     endif()
     add_executable(px4-usb-probe userland/tools/usb_probe.cpp)
-    target_link_libraries(px4-usb-probe PRIVATE px4_userland_core)
+    target_link_libraries(px4-usb-probe PRIVATE px4_userland_libusb_transport)
     target_include_directories(px4-usb-probe PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/userland/include)
     target_compile_features(px4-usb-probe PRIVATE cxx_std_17)
     px4_enable_project_warnings(px4-usb-probe)
@@ -487,7 +541,7 @@ if(PX4_BUILD_TOOLS)
         userland/tools/it930x_probe.cpp
         userland/src/it930x_probe_args.cpp
     )
-    target_link_libraries(px4-it930x-probe PRIVATE px4_userland_core)
+    target_link_libraries(px4-it930x-probe PRIVATE px4_userland_libusb_transport)
     target_include_directories(px4-it930x-probe PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
         ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
@@ -499,7 +553,7 @@ if(PX4_BUILD_TOOLS)
         userland/tools/frontend_probe.cpp
         userland/src/frontend_probe_support.cpp
     )
-    target_link_libraries(px4-frontend-probe PRIVATE px4_userland_core)
+    target_link_libraries(px4-frontend-probe PRIVATE px4_userland_libusb_transport)
     target_include_directories(px4-frontend-probe PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
         ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
@@ -512,7 +566,7 @@ if(PX4_BUILD_TOOLS)
         userland/src/frontend_probe_support.cpp
         userland/src/ts_probe_support.cpp
     )
-    target_link_libraries(px4-ts-probe PRIVATE px4_userland_core)
+    target_link_libraries(px4-ts-probe PRIVATE px4_userland_libusb_transport)
     target_include_directories(px4-ts-probe PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
         ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
@@ -524,7 +578,7 @@ if(PX4_BUILD_TOOLS)
         userland/tools/card_probe.cpp
         userland/src/frontend_probe_support.cpp
     )
-    target_link_libraries(px4-card-probe PRIVATE px4_userland_core)
+    target_link_libraries(px4-card-probe PRIVATE px4_userland_libusb_transport)
     target_include_directories(px4-card-probe PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
         ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
@@ -541,7 +595,7 @@ if(PX4_BUILD_ANDROID_LINKCHECK)
         message(FATAL_ERROR "PX4_BUILD_ANDROID_LINKCHECK requires PX4_ENABLE_LIBUSB=ON")
     endif()
     add_executable(px4-android-linkcheck userland/tools/android_linkcheck.cpp)
-    target_link_libraries(px4-android-linkcheck PRIVATE px4_userland_core)
+    target_link_libraries(px4-android-linkcheck PRIVATE px4_userland_libusb_transport)
     target_link_libraries(px4-android-linkcheck PRIVATE log c)
     target_include_directories(px4-android-linkcheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/userland/include)
     target_compile_features(px4-android-linkcheck PRIVATE cxx_std_17)
@@ -555,4 +609,14 @@ if(PX4_BUILD_ANDROID_LINKCHECK)
         -Wl,--undefined=__android_log_print
         -Wl,--undefined=memcpy
     )
+endif()
+
+if(ANDROID AND PX4_ANDROID_LINK_MAP_DIR)
+    file(MAKE_DIRECTORY "${PX4_ANDROID_LINK_MAP_DIR}")
+    foreach(target px4d px4-ts px4ctl)
+        if(TARGET ${target})
+            target_link_options(${target} PRIVATE
+                "LINKER:-Map,${PX4_ANDROID_LINK_MAP_DIR}/${target}.map")
+        endif()
+    endforeach()
 endif()

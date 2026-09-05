@@ -1,0 +1,18 @@
+#!/bin/sh
+# Synthetic readelf used only by test-packaging.sh; it is not a release tool.
+case "$*" in
+*-h*)
+    printf '%s\n' 'ELF Header:' '  Type: DYN (Position-Independent Executable file)' '  Machine: Advanced Micro Devices X86-64'
+    ;;
+*-lW*)
+    printf '%s\n' '      [Requesting program interpreter: /lib/ld-musl-x86_64.so.1]'
+    ;;
+*-d*)
+    case "${PX4_TEST_LINKAGE:-normal}:$*" in
+    bad-all:*|*:*-d*px4d*)
+        printf '%s\n' ' 0x0000000000000001 (NEEDED) Shared library: [libusb-1.0.so.0]'
+        ;;
+    esac
+    printf '%s\n' ' 0x0000000000000001 (NEEDED) Shared library: [libc.musl-x86_64.so.1]'
+    ;;
+esac

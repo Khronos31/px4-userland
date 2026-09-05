@@ -6,10 +6,14 @@ set -eu
 api=24
 abi=aarch64
 output=
+evidence=
+libusb_source_input=
 
 usage()
 {
-    printf '%s\n' "usage: $0 --abi aarch64|arm64-v8a|armv7a|armeabi-v7a --output DIR"
+    printf '%s\n' \
+        "usage: $0 --abi aarch64|arm64-v8a|armv7a|armeabi-v7a --output DIR" \
+        "          [--evidence DIR] [--libusb-source DIR]"
 }
 
 while [ "$#" -gt 0 ]; do
@@ -22,6 +26,16 @@ while [ "$#" -gt 0 ]; do
     --output)
         [ "$#" -ge 2 ] || { usage >&2; exit 2; }
         output=$2
+        shift 2
+        ;;
+    --evidence)
+        [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+        evidence=$2
+        shift 2
+        ;;
+    --libusb-source)
+        [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+        libusb_source_input=$2
         shift 2
         ;;
     --help)
@@ -37,6 +51,10 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ -n "$output" ] || { printf '%s\n' '--output is required' >&2; exit 2; }
+[ -z "$evidence" ] || [ -z "$libusb_source_input" ] || {
+    printf '%s\n' '--evidence requires the pinned libusb download, not --libusb-source' >&2
+    exit 2
+}
 case "$abi" in
 arm64-v8a|aarch64)
     abi=arm64-v8a
@@ -61,6 +79,7 @@ ndk=${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}
     printf '%s\n' 'ANDROID_NDK_HOME must point to NDK r26 or newer' >&2
     exit 1
 }
+ndk=$(cd -- "$ndk" && pwd -P)
 revision=$(sed -n 's/^Pkg.Revision = //p' "$ndk/source.properties" | head -n 1)
 major=${revision%%.*}
 case "$major" in
@@ -73,6 +92,10 @@ esac
     printf '%s\n' "NDK r26+ is required, got $revision" >&2
     exit 1
 }
+if [ -n "$evidence" ] && [ "$major" -ne 27 ]; then
+    printf '%s\n' "release evidence requires NDK r27, got $revision" >&2
+    exit 1
+fi
 
 case "$(uname -s)-$(uname -m)" in
 Linux-x86_64) prebuilt=linux-x86_64 ;;
@@ -105,11 +128,37 @@ else
     mkdir -p "$output"
     output=$(cd -- "$output" && pwd)
 fi
+if [ -n "$libusb_source_input" ]; then
+    [ -d "$libusb_source_input" ] || {
+        printf '%s\n' "libusb source directory not found: $libusb_source_input" >&2
+        exit 1
+    }
+    libusb_source_input=$(cd -- "$libusb_source_input" && pwd)
+    [ -x "$libusb_source_input/configure" ] && [ -f "$libusb_source_input/COPYING" ] || {
+        printf '%s\n' "invalid libusb source directory: $libusb_source_input" >&2
+        exit 1
+    }
+fi
+if [ -n "$evidence" ]; then
+    case "$evidence" in
+    /*) ;;
+    *) evidence=$(pwd)/$evidence ;;
+    esac
+    evidence_parent=$(dirname -- "$evidence")
+    mkdir -p "$evidence_parent"
+    evidence_parent=$(cd -- "$evidence_parent" && pwd)
+    evidence=$evidence_parent/$(basename -- "$evidence")
+    [ ! -e "$evidence" ] && [ ! -L "$evidence" ] || {
+        printf '%s\n' "evidence destination already exists: $evidence" >&2
+        exit 1
+    }
+fi
 work=$(mktemp -d /tmp/px4-userland-android-2b2.XXXXXX)
 publish_probe_tmp=
 publish_daemon_tmp=
 publish_control_tmp=
 publish_stream_tmp=
+evidence_tmp=
 cleanup()
 {
     if [ -d "$work" ]; then
@@ -121,31 +170,51 @@ cleanup()
             find "$temporary" -delete
         fi
     done
+    if [ -n "$evidence_tmp" ] && [ -d "$evidence_tmp" ]; then
+        find "$evidence_tmp" -depth -delete
+    fi
 }
 trap cleanup EXIT HUP INT TERM
 prefix=$work/prefix
 archive=$work/libusb-1.0.28.tar.bz2
 libusb_source=$work/libusb-1.0.28
 cmake_build=$work/cmake
+link_map_dir=$work/link-maps
 output_probe=$output/px4-ts-probe-$abi
 output_daemon=$output/px4d-$abi
 output_control=$output/px4ctl-$abi
 output_stream=$output/px4-ts-$abi
-mkdir -p "$prefix" "$work/tmp"
+mkdir -p "$prefix" "$work/tmp" "$link_map_dir"
+
+# libusb is built outside CMake, so give its compiler the same reproducibility
+# contract as the project build.  Map the complete temporary work tree because
+# configure/build directories can otherwise enter DWARF as compilation paths.
+libusb_prefix_maps="-fdebug-compilation-dir=."
+for prefix_map in "$libusb_source" "$work" "$ndk"; do
+    libusb_prefix_maps="$libusb_prefix_maps -ffile-prefix-map=$prefix_map=."
+    libusb_prefix_maps="$libusb_prefix_maps -fdebug-prefix-map=$prefix_map=."
+    libusb_prefix_maps="$libusb_prefix_maps -fmacro-prefix-map=$prefix_map=."
+done
 
 libusb_url=https://github.com/libusb/libusb/releases/download/v1.0.28/libusb-1.0.28.tar.bz2
 libusb_sha256=966bb0d231f94a474eaae2e67da5ec844d3527a1f386456394ff432580634b29
-curl -fsSL --retry 2 -o "$archive" "$libusb_url"
-if command -v sha256sum >/dev/null 2>&1; then
-    actual=$(sha256sum "$archive" | awk '{print $1}')
+if [ -n "$libusb_source_input" ]; then
+    mkdir -p "$libusb_source"
+    (cd -- "$libusb_source_input" && tar -cf - .) |
+        (cd -- "$libusb_source" && tar -xf -)
 else
-    actual=$(shasum -a 256 "$archive" | awk '{print $1}')
+    curl -fsSL --retry 2 -o "$archive" "$libusb_url"
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual=$(sha256sum "$archive" | awk '{print $1}')
+    else
+        actual=$(shasum -a 256 "$archive" | awk '{print $1}')
+    fi
+    [ "$actual" = "$libusb_sha256" ] || {
+        printf '%s\n' "libusb checksum mismatch: $actual" >&2
+        exit 1
+    }
+    tar -xjf "$archive" -C "$work"
 fi
-[ "$actual" = "$libusb_sha256" ] || {
-    printf '%s\n' "libusb checksum mismatch: $actual" >&2
-    exit 1
-}
-tar -xjf "$archive" -C "$work"
 
 jobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '%s' 2)
 env -i \
@@ -156,7 +225,7 @@ env -i \
     CXX="$cxx" \
     AR="$ar" \
     RANLIB="$ranlib" \
-    CFLAGS='-O2 -fPIC' \
+    CFLAGS="-O2 -fPIC $libusb_prefix_maps" \
     LDFLAGS='-fPIC' \
     PKG_CONFIG=/bin/false \
     /bin/sh -c "
@@ -201,10 +270,12 @@ env -i \
         -DANDROID_PLATFORM=android-$api \
         -DCMAKE_ANDROID_STL_TYPE=c++_static \
         -DCMAKE_BUILD_TYPE=Release \
+        -DPX4_ANDROID_NDK_ROOT_MAP="$ndk" \
         -DPX4_ENABLE_LIBUSB=ON \
         -DPX4_BUILD_TESTS=OFF \
         -DPX4_BUILD_TOOLS=ON \
         -DPX4_BUILD_ANDROID_LINKCHECK=ON \
+        -DPX4_ANDROID_LINK_MAP_DIR="$link_map_dir" \
         -DPX4_LIBUSB_INCLUDE_DIR="$prefix/include/libusb-1.0" \
         -DPX4_LIBUSB_LIBRARY="$prefix/lib/libusb-1.0.a"
 env -i \
@@ -233,6 +304,64 @@ verify_static_libusb()
 verify_static_libusb "$cmake_build/px4-ts-probe"
 verify_static_libusb "$cmake_build/px4d"
 
+# CMake/NDK can leave DWARF and the regular symbol table in a Release link.
+# Strip only after the static-link checks, then verify the exact files that are
+# copied to the publication directory.
+for binary in px4-ts-probe px4d px4ctl px4-ts; do
+    "$strip" --strip-all "$cmake_build/$binary"
+done
+for binary in px4-ts-probe px4d px4ctl px4-ts; do
+    "$root/scripts/verify-android-elf.sh" \
+        "$cmake_build/$binary" "$expected_interpreter"
+done
+
+if [ -n "$evidence" ]; then
+    command -v python3 >/dev/null 2>&1 || {
+        printf '%s\n' 'python3 is required for release evidence' >&2
+        exit 1
+    }
+    for required in "$ndk/source.properties" "$ndk/NOTICE" "$ndk/NOTICE.toolchain" \
+        "$libusb_source/COPYING" "$archive"; do
+        [ -f "$required" ] || {
+            printf '%s\n' "required release material missing: $required" >&2
+            exit 1
+        }
+    done
+    for binary in px4d px4-ts px4ctl; do
+        [ -s "$link_map_dir/$binary.map" ] || {
+            printf '%s\n' "missing Android link map: $binary.map" >&2
+            exit 1
+        }
+        require_libusb=
+        [ "$binary" != px4d ] || require_libusb=--require-libusb
+        python3 "$root/scripts/android-link-inventory.py" \
+            --map "$link_map_dir/$binary.map" \
+            --output "$work/$binary-static-archives.tsv" \
+            $require_libusb
+    done
+
+    evidence_tmp=$(mktemp -d "$evidence.tmp.XXXXXX")
+    mkdir -p "$evidence_tmp/libusb" "$evidence_tmp/ndk" \
+        "$evidence_tmp/maps" "$evidence_tmp/inventory"
+    cp "$archive" "$evidence_tmp/libusb/libusb-1.0.28.tar.bz2"
+    cp "$libusb_source/COPYING" "$evidence_tmp/libusb/COPYING"
+    cp "$ndk/source.properties" "$evidence_tmp/ndk/source.properties"
+    cp "$ndk/NOTICE" "$evidence_tmp/ndk/NOTICE"
+    cp "$ndk/NOTICE.toolchain" "$evidence_tmp/ndk/NOTICE.toolchain"
+    for binary in px4d px4-ts px4ctl; do
+        cp "$link_map_dir/$binary.map" "$evidence_tmp/maps/$binary.map"
+        cp "$work/$binary-static-archives.tsv" \
+            "$evidence_tmp/inventory/$binary-static-archives.tsv"
+    done
+    {
+        printf 'android_abi=%s\n' "$abi"
+        printf 'android_api=%s\n' "$api"
+        printf 'ndk_revision=%s\n' "$revision"
+        printf 'libusb_version=1.0.28\n'
+        printf 'libusb_archive_sha256=%s\n' "$libusb_sha256"
+    } >"$evidence_tmp/build.properties"
+fi
+
 # Copy all verified artifacts to adjacent temporary files first.  Each final
 # rename is atomic and no published artifact is touched before all copies pass.
 publish_probe_tmp=$(mktemp "$output_probe.tmp.XXXXXX")
@@ -253,7 +382,12 @@ mv -f "$publish_control_tmp" "$output_control"
 publish_control_tmp=
 mv -f "$publish_stream_tmp" "$output_stream"
 publish_stream_tmp=
+if [ -n "$evidence_tmp" ]; then
+    mv "$evidence_tmp" "$evidence"
+    evidence_tmp=
+fi
 printf '%s\n' "built $output_probe"
 printf '%s\n' "built $output_daemon"
 printf '%s\n' "built $output_control"
 printf '%s\n' "built $output_stream"
+[ -z "$evidence" ] || printf '%s\n' "built $evidence"

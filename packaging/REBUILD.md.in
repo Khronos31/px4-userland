@@ -1,0 +1,62 @@
+# Rebuilding px4-userland @VERSION@
+
+This corresponding-source archive records repository commit `@COMMIT@` and
+tree `@TREE@`. The `repository/` directory is the exact tracked source tree;
+`third_party/libusb-1.0.28/` and its original verified source archive are the
+libusb sources used for Android release binaries.
+
+## Android rebuild and LGPL relink
+
+Install Android NDK r27, CMake, Ninja, a POSIX shell, Python 3, Autoconf build
+tools, and set `ANDROID_NDK_HOME` to the NDK root. From this archive root:
+
+```sh
+cd repository
+scripts/build-android.sh \
+  --abi arm64-v8a \
+  --libusb-source ../third_party/libusb-1.0.28 \
+  --output ../rebuilt-android-aarch64
+scripts/build-android.sh \
+  --abi armeabi-v7a \
+  --libusb-source ../third_party/libusb-1.0.28 \
+  --output ../rebuilt-android-armv7a
+```
+
+To relink with a modified LGPL libusb, modify a copy of
+`third_party/libusb-1.0.28/` and pass that directory to `--libusb-source`.
+The production release evidence path intentionally accepts only the pinned,
+checksum-verified libusb source archive; local relink builds do not emit that
+release evidence.
+
+## Linux musl-dynamic rebuild
+
+On x86_64 musl Linux, install CMake, Ninja, a C++17 compiler, shared libusb,
+and pcsc-lite development headers, then run:
+
+```sh
+cmake -S repository -B build-linux -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DPX4_BUILD_TESTS=OFF \
+  -DPX4_REQUIRE_PCSC_IFD=ON
+cmake --build build-linux --target px4d px4-ts px4ctl px4_ifdhandler
+```
+
+## macOS arm64 rebuild
+
+Install CMake, Ninja, Homebrew libusb, pkgconf, and Homebrew pcsc-lite. Export
+their pkg-config paths, configure with the exact pcsc-lite include directory,
+and build the CLIs and bundle:
+
+```sh
+pcsc_prefix="$(brew --prefix pcsc-lite)"
+export PKG_CONFIG_PATH="$(brew --prefix libusb)/lib/pkgconfig:$pcsc_prefix/lib/pkgconfig"
+cmake -S repository -B build-macos -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DPX4_BUILD_TESTS=OFF \
+  -DPX4_REQUIRE_PCSC_IFD=ON \
+  -DPX4_PCSC_IFD_INCLUDE_DIR="$pcsc_prefix/include/PCSC"
+cmake --build build-macos --target px4d px4-ts px4ctl px4_ifd_bundle
+```
+
+The native products intentionally use host-provided shared libusb. Firmware
+is neither required to compile nor present in this archive.
