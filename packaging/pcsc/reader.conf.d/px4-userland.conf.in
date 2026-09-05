@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # px4-userland pcsc-lite reader template. Replace all @...@ placeholders.
+# On macOS, the LIBPATH value is the px4-userland-ifd.bundle directory,
+# not its nested Contents/MacOS dylib.
 FRIENDLYNAME "PLEX PX-Q3U4 Internal Card Reader"
 DEVICENAME   px4-userland:runtime=@PX4_RUNTIME_DIR@:device=@PX4_BASE_SERIAL@:access=user
 LIBPATH      @PX4_IFD_LIBRARY@

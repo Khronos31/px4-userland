@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-2.0-only -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>English</string>
+    <key>CFBundleExecutable</key>
+    <string>@PX4_IFD_BUNDLE_EXECUTABLE_NAME@</string>
+    <key>CFBundleIdentifier</key>
+    <string>io.github.khronos31.px4-userland.ifd</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>px4-userland IFD Handler</string>
+    <key>CFBundlePackageType</key>
+    <string>BNDL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>@PROJECT_VERSION@</string>
+    <key>CFBundleVersion</key>
+    <string>@PROJECT_VERSION@</string>
+    <key>ifdCapabilities</key>
+    <string>0x00000000</string>
+    <key>ifdManufacturerString</key>
+    <string>px4-userland contributors</string>
+    <key>ifdProductString</key>
+    <string>PLEX PX-Q3U4 Internal Card Reader IPC Adapter</string>
+    <key>ifdVersionNumber</key>
+    <string>0x00000001</string>
+</dict>
+</plist>

@@ -61,4 +61,37 @@ Result<std::unique_ptr<Q3U4Runtime>> RuntimeTestAccess::open_fds(
     return Result<std::unique_ptr<Q3U4Runtime>>::success(std::move(runtime));
 }
 
+Result<std::unique_ptr<Q3U4Runtime>> RuntimeTestAccess::create_shutdown_fixture(
+    std::unique_ptr<LibusbApi> api,
+    const std::array<LibusbApi::Handle, 2U>& handles,
+    bool disconnect_observed) noexcept
+{
+    if (!api) return Result<std::unique_ptr<Q3U4Runtime>>::failure(Error::INVALID_ARGUMENT);
+    auto session = LibusbSession::create(*api, false);
+    if (!session) {
+        return Result<std::unique_ptr<Q3U4Runtime>>::failure(session.error());
+    }
+    std::unique_ptr<Q3U4Runtime::Impl> impl(new (std::nothrow) Q3U4Runtime::Impl);
+    std::unique_ptr<Q3U4RuntimeState> state(new (std::nothrow) Q3U4RuntimeState);
+    if (!impl || !state) {
+        return Result<std::unique_ptr<Q3U4Runtime>>::failure(Error::INTERNAL);
+    }
+    impl->api_ = std::move(api);
+    impl->session_ = std::move(session.value());
+    impl->state_ = std::move(state);
+    for (std::size_t index = 0U; index < handles.size(); ++index) {
+        if (handles[index] == nullptr) continue;
+        impl->transports_[index].reset(new (std::nothrow) LibusbTransport(
+            *impl->api_, impl->session_->context(), handles[index], -1, impl->state_.get()));
+        if (!impl->transports_[index]) {
+            return Result<std::unique_ptr<Q3U4Runtime>>::failure(Error::INTERNAL);
+        }
+    }
+    impl->state_->disconnect_observed.store(disconnect_observed);
+    std::unique_ptr<Q3U4Runtime> runtime(
+        new (std::nothrow) Q3U4Runtime(std::move(impl)));
+    if (!runtime) return Result<std::unique_ptr<Q3U4Runtime>>::failure(Error::INTERNAL);
+    return Result<std::unique_ptr<Q3U4Runtime>>::success(std::move(runtime));
+}
+
 }  // namespace px4::userland

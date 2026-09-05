@@ -226,6 +226,40 @@ if(PX4_BUILD_PCSC_IFD AND UNIX AND NOT ANDROID)
             OUTPUT_NAME px4-userland-ifd
         )
         if(APPLE)
+            set(PX4_IFD_BUNDLE_DIR
+                "${CMAKE_CURRENT_BINARY_DIR}/px4-userland-ifd.bundle")
+            set(PX4_IFD_BUNDLE_EXECUTABLE_NAME
+                "${CMAKE_SHARED_LIBRARY_PREFIX}px4-userland-ifd${CMAKE_SHARED_LIBRARY_SUFFIX}")
+            set(PX4_IFD_BUNDLE_INFO_PLIST
+                "${CMAKE_CURRENT_BINARY_DIR}/px4-userland-ifd.Info.plist")
+            configure_file(
+                packaging/pcsc/macos/Info.plist.in
+                "${PX4_IFD_BUNDLE_INFO_PLIST}"
+                @ONLY
+            )
+            add_custom_command(
+                OUTPUT
+                    "${PX4_IFD_BUNDLE_DIR}/Contents/Info.plist"
+                    "${PX4_IFD_BUNDLE_DIR}/Contents/MacOS/${PX4_IFD_BUNDLE_EXECUTABLE_NAME}"
+                COMMAND ${CMAKE_COMMAND} -E make_directory
+                    "${PX4_IFD_BUNDLE_DIR}/Contents/MacOS"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${PX4_IFD_BUNDLE_INFO_PLIST}"
+                    "${PX4_IFD_BUNDLE_DIR}/Contents/Info.plist"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "$<TARGET_FILE:px4_ifdhandler>"
+                    "${PX4_IFD_BUNDLE_DIR}/Contents/MacOS/${PX4_IFD_BUNDLE_EXECUTABLE_NAME}"
+                DEPENDS px4_ifdhandler "${PX4_IFD_BUNDLE_INFO_PLIST}"
+                COMMENT "Creating px4-userland macOS IFD bundle"
+                VERBATIM
+            )
+            add_custom_target(px4_ifd_bundle ALL
+                DEPENDS
+                    "${PX4_IFD_BUNDLE_DIR}/Contents/Info.plist"
+                    "${PX4_IFD_BUNDLE_DIR}/Contents/MacOS/${PX4_IFD_BUNDLE_EXECUTABLE_NAME}"
+            )
+            set_property(DIRECTORY APPEND PROPERTY ADDITIONAL_CLEAN_FILES
+                "${PX4_IFD_BUNDLE_DIR}")
             target_link_options(px4_ifdhandler PRIVATE
                 "LINKER:-exported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/scripts/px4-ifd.exports.macos"
             )
@@ -349,6 +383,7 @@ if(PX4_BUILD_TESTS)
                 -DNM=${CMAKE_NM}
                 -DLIBRARY=$<TARGET_FILE:px4_ifdhandler>
                 -DIS_APPLE=${APPLE}
+                -DBUNDLE=${PX4_IFD_BUNDLE_DIR}
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-ifd-symbols.cmake
         )
     endif()
@@ -379,6 +414,18 @@ if(PX4_BUILD_TESTS)
             COMMAND px4_userland_tests --fail-safe-abandonment)
         set_tests_properties(px4_userland_fail_safe_abandonment PROPERTIES
             ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0")
+
+        add_executable(px4_userland_libusb_detach_shutdown_tests
+            userland/tests/libusb_detach_shutdown_tests.cpp)
+        target_link_libraries(px4_userland_libusb_detach_shutdown_tests
+            PRIVATE px4_userland_core px4_userland_test_support)
+        target_include_directories(px4_userland_libusb_detach_shutdown_tests
+            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/userland/src)
+        target_compile_features(px4_userland_libusb_detach_shutdown_tests
+            PRIVATE cxx_std_17)
+        px4_enable_project_warnings(px4_userland_libusb_detach_shutdown_tests)
+        add_test(NAME px4_userland_libusb_detach_shutdown_tests
+            COMMAND px4_userland_libusb_detach_shutdown_tests)
     endif()
 endif()
 

@@ -42,6 +42,50 @@ if(dependencies MATCHES "PCSC\\.framework|libpcsclite")
     message(FATAL_ERROR "IFD Handler must not link the PC/SC client library:\n${dependencies}")
 endif()
 
+if(IS_APPLE)
+    if(NOT DEFINED BUNDLE OR NOT IS_DIRECTORY "${BUNDLE}")
+        message(FATAL_ERROR "macOS IFD bundle directory not found: ${BUNDLE}")
+    endif()
+    set(bundle_info "${BUNDLE}/Contents/Info.plist")
+    get_filename_component(library_name "${LIBRARY}" NAME)
+    set(bundle_library "${BUNDLE}/Contents/MacOS/${library_name}")
+    if(NOT EXISTS "${bundle_info}" OR NOT EXISTS "${bundle_library}")
+        message(FATAL_ERROR "incomplete macOS IFD bundle: ${BUNDLE}")
+    endif()
+    execute_process(
+        COMMAND "${CMAKE_COMMAND}" -E compare_files "${LIBRARY}" "${bundle_library}"
+        RESULT_VARIABLE bundle_library_result
+    )
+    if(NOT bundle_library_result EQUAL 0)
+        message(FATAL_ERROR "macOS IFD bundle executable differs from target")
+    endif()
+    find_program(plutil NAMES plutil REQUIRED)
+    execute_process(
+        COMMAND "${plutil}" -lint "${bundle_info}"
+        RESULT_VARIABLE plist_result
+        OUTPUT_VARIABLE plist_output
+        ERROR_VARIABLE plist_error
+    )
+    if(NOT plist_result EQUAL 0)
+        message(FATAL_ERROR "invalid macOS IFD Info.plist: ${plist_output}${plist_error}")
+    endif()
+    file(READ "${bundle_info}" plist)
+    foreach(required_key CFBundleExecutable CFBundleIdentifier CFBundlePackageType)
+        if(NOT plist MATCHES "<key>${required_key}</key>")
+            message(FATAL_ERROR "macOS IFD Info.plist lacks ${required_key}")
+        endif()
+    endforeach()
+    if(NOT plist MATCHES "<string>${library_name}</string>" OR
+       NOT plist MATCHES "<string>BNDL</string>")
+        message(FATAL_ERROR "macOS IFD Info.plist has incorrect executable or package type")
+    endif()
+    foreach(forbidden_key ifdVendorID ifdProductID IOKitPersonalities)
+        if(plist MATCHES "<key>${forbidden_key}</key>")
+            message(FATAL_ERROR "macOS IFD bundle must not declare ${forbidden_key}")
+        endif()
+    endforeach()
+endif()
+
 set(expected
     IFDHCreateChannel
     IFDHCreateChannelByName
