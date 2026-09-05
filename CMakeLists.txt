@@ -185,24 +185,15 @@ if(PX4_REQUIRE_PCSC_IFD AND NOT PX4_BUILD_PCSC_IFD)
 endif()
 if(PX4_BUILD_PCSC_IFD AND UNIX AND NOT ANDROID)
     find_package(PkgConfig QUIET)
-    if(PkgConfig_FOUND AND NOT APPLE)
-        pkg_check_modules(PX4_PCSC_LITE QUIET IMPORTED_TARGET libpcsclite)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(PX4_PCSC_LITE QUIET libpcsclite)
     endif()
     find_path(PX4_PCSC_IFD_INCLUDE_DIR
         NAMES ifdhandler.h
         HINTS ${PX4_PCSC_LITE_INCLUDE_DIRS}
         PATH_SUFFIXES PCSC PCSC.framework/Headers
     )
-    if(APPLE)
-        find_library(PX4_PCSC_IFD_LIBRARY NAMES PCSC)
-        set(PX4_PCSC_IFD_LINK_TARGET ${PX4_PCSC_IFD_LIBRARY})
-    elseif(TARGET PkgConfig::PX4_PCSC_LITE)
-        set(PX4_PCSC_IFD_LINK_TARGET PkgConfig::PX4_PCSC_LITE)
-    else()
-        find_library(PX4_PCSC_IFD_LIBRARY NAMES pcsclite)
-        set(PX4_PCSC_IFD_LINK_TARGET ${PX4_PCSC_IFD_LIBRARY})
-    endif()
-    if(PX4_PCSC_IFD_INCLUDE_DIR AND PX4_PCSC_IFD_LINK_TARGET)
+    if(PX4_PCSC_IFD_INCLUDE_DIR)
         set(PX4_PCSC_IFD_AVAILABLE ON)
         set_target_properties(px4_userland_core px4_userland_posix_ipc PROPERTIES
             POSITION_INDEPENDENT_CODE ON
@@ -228,7 +219,6 @@ if(PX4_BUILD_PCSC_IFD AND UNIX AND NOT ANDROID)
         target_compile_features(px4_ifdhandler PRIVATE cxx_std_17)
         target_link_libraries(px4_ifdhandler PRIVATE
             px4_userland_pcsc_ifd_core
-            ${PX4_PCSC_IFD_LINK_TARGET}
         )
         set_target_properties(px4_ifdhandler PROPERTIES
             CXX_VISIBILITY_PRESET hidden
@@ -248,9 +238,9 @@ if(PX4_BUILD_PCSC_IFD AND UNIX AND NOT ANDROID)
         px4_enable_project_warnings(px4_ifdhandler)
     elseif(PX4_REQUIRE_PCSC_IFD)
         message(FATAL_ERROR
-            "PC/SC IFD headers/library were not found; install libpcsclite-dev or provide PX4_PCSC_IFD_INCLUDE_DIR/PX4_PCSC_IFD_LIBRARY")
+            "PC/SC IFD header ifdhandler.h was not found; install libpcsclite-dev or provide PX4_PCSC_IFD_INCLUDE_DIR")
     else()
-        message(STATUS "PC/SC IFD headers/library not found; px4_ifdhandler is disabled")
+        message(STATUS "PC/SC IFD header ifdhandler.h not found; px4_ifdhandler is disabled")
     endif()
 elseif(PX4_REQUIRE_PCSC_IFD)
     message(FATAL_ERROR "The PC/SC IFD Handler requires a non-Android POSIX host")

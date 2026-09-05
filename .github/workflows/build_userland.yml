@@ -23,11 +23,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y cmake ninja-build g++ pkg-config libusb-1.0-0-dev
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y cmake ninja-build g++ pkg-config libusb-1.0-0-dev libpcsclite-dev
       - name: Build and test
         run: |
-          cmake -S . -B build-userland -G Ninja -DPX4_BUILD_TESTS=ON
+          pkg-config --modversion libpcsclite
+          cmake -S . -B build-userland -G Ninja -DPX4_BUILD_TESTS=ON -DPX4_REQUIRE_PCSC_IFD=ON
           cmake --build build-userland
+          ctest --test-dir build-userland -R '^px4_ifd_(tests|symbols)$' --no-tests=error --output-on-failure
           ctest --test-dir build-userland --output-on-failure
 
   alpine-musl:
@@ -42,9 +44,11 @@ jobs:
           -w /src
           alpine:3.20
           sh -euxc
-          'apk add --no-cache cmake samurai g++ pkgconf libusb-dev;
-          cmake -S . -B build-userland -G Ninja -DPX4_BUILD_TESTS=ON;
+          'apk add --no-cache cmake samurai g++ pkgconf libusb-dev pcsc-lite-dev;
+          pkg-config --modversion libpcsclite;
+          cmake -S . -B build-userland -G Ninja -DPX4_BUILD_TESTS=ON -DPX4_REQUIRE_PCSC_IFD=ON;
           cmake --build build-userland;
+          ctest --test-dir build-userland -R "^px4_ifd_(tests|symbols)$" --no-tests=error --output-on-failure;
           ctest --test-dir build-userland --output-on-failure'
 
   macos:
@@ -52,13 +56,18 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-      - name: Install Ninja
-        run: brew install ninja libusb pkgconf
+      - name: Install build tools
+        run: brew install ninja libusb pcsc-lite pkgconf
       - name: Build and test
         run: |
-          export PKG_CONFIG_PATH="$(brew --prefix libusb)/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
-          cmake -S . -B build-userland -G Ninja -DPX4_BUILD_TESTS=ON
+          pcsc_prefix="$(brew --prefix pcsc-lite)"
+          pcsc_include="$pcsc_prefix/include/PCSC"
+          export PKG_CONFIG_PATH="$(brew --prefix libusb)/lib/pkgconfig:$pcsc_prefix/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+          pkg-config --modversion libpcsclite
+          cmake -S . -B build-userland -G Ninja -DPX4_BUILD_TESTS=ON -DPX4_REQUIRE_PCSC_IFD=ON -DPX4_PCSC_IFD_INCLUDE_DIR:PATH="$pcsc_include"
+          test "$(sed -n 's/^PX4_PCSC_IFD_INCLUDE_DIR:PATH=//p' build-userland/CMakeCache.txt)" = "$pcsc_include"
           cmake --build build-userland
+          ctest --test-dir build-userland -R '^px4_ifd_(tests|symbols)$' --no-tests=error --output-on-failure
           ctest --test-dir build-userland --output-on-failure
 
   android-api-24:

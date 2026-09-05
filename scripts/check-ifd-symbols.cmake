@@ -22,6 +22,26 @@ if(NOT result EQUAL 0)
     message(FATAL_ERROR "nm failed: ${error_output}")
 endif()
 
+if(IS_APPLE)
+    find_program(dependency_tool NAMES otool REQUIRED)
+    set(dependency_arguments -L)
+else()
+    find_program(dependency_tool NAMES readelf REQUIRED)
+    set(dependency_arguments -d)
+endif()
+execute_process(
+    COMMAND "${dependency_tool}" ${dependency_arguments} "${LIBRARY}"
+    RESULT_VARIABLE dependency_result
+    OUTPUT_VARIABLE dependencies
+    ERROR_VARIABLE dependency_error
+)
+if(NOT dependency_result EQUAL 0)
+    message(FATAL_ERROR "dependency inspection failed: ${dependency_error}")
+endif()
+if(dependencies MATCHES "PCSC\\.framework|libpcsclite")
+    message(FATAL_ERROR "IFD Handler must not link the PC/SC client library:\n${dependencies}")
+endif()
+
 set(expected
     IFDHCreateChannel
     IFDHCreateChannelByName
