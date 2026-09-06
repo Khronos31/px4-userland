@@ -1,6 +1,6 @@
 # px4-userland 仕様
 
-Status: Frozen v0.8 (2026-09-04)
+Status: Frozen v0.9 (2026-09-06)
 
 本書の`MUST`、`MUST NOT`、`SHOULD`は規範要件を示す。実機観測で前提の誤りが判明した場合も暗黙に
 実装だけを変えず、本書のversionと変更理由を更新してから実装する。
@@ -8,6 +8,9 @@ Status: Frozen v0.8 (2026-09-04)
 v0.8では、`empty_intervals`の訂正でstream starvationを見逃さないよう、1秒以下の観測間隔と連続5秒以内の
 packet/byte進行を受入条件に追加した。これはwire semanticsの変更ではなく、v0.7のacceptance erratumを
 機械的に検証可能にする訂正であり、protocol minorは変更しない。
+v0.9では、受入要件を緩和せず、`v0.1.0 Beta`の実機試験結果と公開時の扱いを明記する。receiver 7は
+10.2の6、7、17を満たさずstrict acceptanceはFAILであり、stable/general release readyまたは
+`runtime-supported`を意味しない。Beta公開の目的は、追加個体および追加環境の証拠収集とする。
 v0.7では、実機長時間試験で確認した`empty_intervals`の意味をUSB待機のTIMEOUT/空completion回数と明記し、
 非zero値だけをTS integrity failureにしない受入条件へ訂正した。
 v0.6では、LNB 15Vを明示的に許可したdaemonだけが出力できる安全境界、GPIO完了が曖昧な場合の
@@ -493,6 +496,11 @@ Linux・Android・macOSを対象にする既存実装は確認できなかった
 19. 壁設備と完全に分離した開放端で0V、15V、cleanup後0Vを測定し、GPIO 11の極性と切替を確認する。
     この無負荷試験だけではLNB給電能力を確認済みと表現しない。実アンテナまたは代表負荷で電圧・電流・安定性を
     確認するまでは`LNB switching hardware-verified / loaded supply unverified`と記録する。
+
+`v0.1.0 Beta`では、receiver 0--6は2時間soakでerror 0だった。receiver 7はTEI `10974`、
+`continuity_errors=453`を記録し、strict soakの終了コードは1だったため、10.2の6、7、17を満たさない。
+同一試験個体では、参照`tsukumijima/px4_drv`でも約11k TEIの署名が再現した。これをもって受入要件を
+変更せず、既知制限をREADMEに開示する。`px4-ts`はTS integrity errorをCLI exit code 8で報告する。
 
 ### 10.3 Cross-platform support claims
 

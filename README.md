@@ -1,85 +1,57 @@
 # px4-userland
 
-`px4-userland` は PLEX PX-Q3U4（USB ID `0511:084a`）をカーネルモジュールなしで扱うユーザー空間実装です。
-チューナーと内蔵ICカードリーダーを1つの `px4d` が所有し、`px4-ts` と `px4ctl` は同一ホスト内のIPCで利用します。
+`px4-userland` は、PLEX PX-Q3U4 向けのユーザー空間ドライバおよびツール群です。カーネルモジュールを使用せず、ユーザー空間からチューナーおよび内蔵 IC カードリーダーを制御し、MPEG-TS ストリームを出力します。
 
-## 対応プラットフォーム
+## 対応機種・動作環境
 
-| プラットフォーム | 製品サポート |
+### 対応機種
+
+- **PLEX PX-Q3U4**（USB ID `0511:084a`）のみ対応
+  - 他の PX4 / PX5 シリーズなど関連機種での動作は未確認です。
+
+### 動作環境
+
+| OS / 環境 | 状態 | 備考 |
 |---|---|---|
-| Linux | 対応対象（x86_64 archive、HAOSを含むLinux環境） |
-| macOS arm64 | 対応対象 |
-| Android Termux | 対応対象（aarch64 / armv7a archive） |
-| Android app embedding | 統合対象。配布APKはありません |
-| Windows | 非対応 |
+| Linux | 対応 | x86_64（musl 動的リンクバイナリ） |
+| macOS | 対応 | Apple Silicon（arm64） |
+| Android | 対応 | Termux（aarch64 / armv7a 実行ファイル）およびアプリ組み込み |
+| Windows | 非対応 | 対象外 |
 
-## 配布物
+※ Android 向けには実行ファイルのみを提供しており、配布用 APK は提供していません。
 
-`<version>` はリポジトリ直下の [`VERSION`](VERSION) と同じ値です。現在のplatform archiveは次の4つです。
+## 必要条件
 
-| Archive | 実行環境 |
-|---|---|
-| `px4-userland-<version>-linux-x86_64.tar.gz` | x86_64 Linux、musl dynamic。HAOSを含むLinux環境向け |
-| `px4-userland-<version>-darwin-arm64.tar.gz` | Apple Silicon macOS |
-| `px4-userland-<version>-android-aarch64.tar.gz` | Android API 24以上、Bionic aarch64、Termux向け |
-| `px4-userland-<version>-android-armv7a.tar.gz` | Android API 24以上、Bionic armv7a、Termux向け |
+### ファームウェア
 
-同じcandidate一式には `px4-userland-<version>-source.tar.gz` も含まれます。これは該当source snapshot、検証済み
-libusb 1.0.28 source、checksums、relink手順を含むcorresponding-source archiveです。各archiveには `LICENSE`、
-`README.md`、`THIRD_PARTY_NOTICES.md`、`DEPENDENCY-NOTICE.txt`、`manifest.json`、`SHA256SUMS`が含まれます。
+IT930x ファームウェアは本ソフトウェアに同梱されていません。別途用意し、`px4d` 起動時に `--firmware` オプションでパスを指定してください。
 
-Android archiveはlibusb 1.0.28をstatic linkし、NDKの正確なrevisionとnotice materialを含みます。Linux/macOSは
-host-provided dynamic dependencyを使います。Android archiveにはIFD、APK、`px4-ts-probe`を含めません。
+- 受理条件: ファイルサイズ 2,169 バイト、SHA-256 `5213a5a38872661277a2cc1b2dfdfe88faf06f41205f460f3b51857f0568b484`
 
-firmware、vendor driver、Windows用ファイルはどのarchiveにも含まれません。firmwareの取得、抽出、変換機能も
-ありません。利用者がライセンスと対象機器に適合するfirmwareを別途用意し、`px4d --firmware PATH`で指定します。
+### 実行時ライブラリ
 
-Android APKは配布しません。
+- **Linux**: `/lib/ld-musl-x86_64.so.1`、ホスト環境の `libusb-1.0.so.0`、C++ ランタイム。PC/SC リーダーとして利用する場合は `pcscd` などの PC/SC デーモン。
+- **macOS**: ホスト環境の libusb、PC/SC デーモン。
+- **Android**: ホストまたはアプリケーション側で USB パーミッションを取得し、ファイルディスクリプタを渡す必要があります（libusb は静的リンク済み）。
 
-## 実行時の依存
+## 導入方法
 
-### Linux
-
-Linux archiveはmusl dynamicです。実行先に次が必要です。
-
-- x86_64向け `/lib/ld-musl-x86_64.so.1`
-- host-provided shared `libusb-1.0.so.0`
-- dynamic C++ runtime。通常はAlpine由来の `libstdc++.so.6`、`libgcc_s.so.1` などのhost system libraries
-  が必要で、実際の `NEEDED` 一覧はarchiveの `evidence/binary-audit.json` に記録されています
-- PC/SC readerとして使う場合は、別途インストールした `pcscd` / pcsc-lite consumer
-
-`px4d`だけが直接libusbを使用します。`px4-ts` と `px4ctl` は `px4d`へのIPC clientで、libusbを直接必要と
-しません。IFD adapterもIPCだけを使い、libusbやPC/SC client libraryを直接linkしません。
-
-### macOS
-
-Apple Silicon macOSと、hostから利用できるdynamic libusb、system libc++などのhost system libraries、および
-PC/SC consumerが必要です。実際のdynamic dependency listはarchive evidenceに記録されます。macOS archiveの
-IFDは完全な `ifd/px4-userland-ifd.bundle` として収録されています。
-
-### Android / Termux
-
-ABIに対応するAndroid archiveを選び、TermuxまたはUSB permissionを管理するhost側でUSB file descriptorを開いて
-`px4d`へ渡します。Android archiveはlibusb 1.0.28と必要なNDK runtime部分をstatic linkしているため、hostの
-libusbやnative IFDは必要ありません。内蔵card readerは `px4d` のIPC経路から利用します。
-
-## インストールとPC/SC reader設定
-
-archiveを任意のprefixへ展開します。例えばLinuxでは次のようにします。
+配布アーカイブを任意のディレクトリへ展開します。
 
 ```sh
 sudo install -d /opt/px4-userland
 sudo tar -xzf px4-userland-<version>-linux-x86_64.tar.gz -C /opt/px4-userland
 ```
 
-native archiveの `reader.conf.d/px4-userland.conf` はtemplateです。少なくとも次のplaceholderを、実際に配置した
-pathへ置換してください。
+### PC/SC リーダー設定（Linux / macOS）
 
-- `@PX4_RUNTIME_DIR@`: `px4d` とclientが共有するruntime directory
-- `@PX4_BASE_SERIAL@`: 対象Q3U4のbase serial
-- `@PX4_IFD_LIBRARY@`: Linuxでは `ifd/px4-userland-ifd.so`、macOSではbundle directory
+内蔵 IC カードリーダーを PC/SC リーダーとして認識させる場合、アーカイブ内の `reader.conf.d/px4-userland.conf` のプレースホルダーを実際のパスに置き換えて PC/SC の設定ディレクトリに配置します。
 
-Linuxの例です。`<pcsc-reader-config-dir>` は利用するpcsc-lite packageのreader設定include directoryに置き換えます。
+- `@PX4_RUNTIME_DIR@`: `px4d` とクライアントが共有するランタイムディレクトリ（例: `/run/px4-userland`）
+- `@PX4_BASE_SERIAL@`: 対象 PX-Q3U4 の 14 桁 base serial（2 つの USB シリアルに共通する 14 桁部分）
+- `@PX4_IFD_LIBRARY@`: Linux では `ifd/px4-userland-ifd.so`、macOS では `ifd/px4-userland-ifd.bundle` の絶対パス
+
+Linux での配置例（`<pcsc-reader-config-dir>` は利用する pcsc-lite パッケージの reader 設定 include ディレクトリに置き換えます）:
 
 ```sh
 sed \
@@ -87,16 +59,14 @@ sed \
   -e 's|@PX4_BASE_SERIAL@|00001205000960|g' \
   -e 's|@PX4_IFD_LIBRARY@|/opt/px4-userland/ifd/px4-userland-ifd.so|g' \
   /opt/px4-userland/reader.conf.d/px4-userland.conf \
-  | sudo install -D /dev/stdin "/path/to/pcsc-reader-config-dir/px4-userland.conf"
+  | sudo install -D /dev/stdin "<pcsc-reader-config-dir>/px4-userland.conf"
 ```
 
-macOSでは最後の置換先を、例えば `/opt/px4-userland/ifd/px4-userland-ifd.bundle` としてください。readerの
-`LIBPATH`はbundle directoryを指し、bundle内のdylibを直接指しません。配置後は利用するpcscdの設定手順に従って
-readerを再読み込みします。
+macOS では `@PX4_IFD_LIBRARY@` に `ifd/px4-userland-ifd.bundle` の絶対パスを指定します。reader 設定の `LIBPATH` は bundle ディレクトリを指し、bundle 内部の dylib を直接指しません。配置後は利用する PC/SC デーモン（`pcscd`）を再起動またはリロードして設定を反映します。
 
-## CLIの利用例
+## 最短の使用例
 
-`px4d`をforegroundで起動し、firmwareを別途用意したpathから読み込みます。
+1. デーモン（`px4d`）を起動します。
 
 ```sh
 /opt/px4-userland/px4d \
@@ -105,36 +75,150 @@ readerを再読み込みします。
   --runtime-dir /run/px4-userland
 ```
 
-Androidのようにhost側が2つのUSB fdを開く経路では、同じdaemonをfd指定で起動します。
+2. 地上波（ISDB-T）を受信し、MPEG-TS を標準出力からファイルへ保存します。
 
 ```sh
-px4d --fd 3 --fd 4 --firmware "$HOME/firmware.bin" --runtime-dir "$PREFIX/var/run/px4-userland"
+/opt/px4-userland/px4-ts \
+  --device 00001205000960 \
+  --receiver 2 \
+  --system isdb-t \
+  --frequency-khz 557142 \
+  --runtime-dir /run/px4-userland \
+  --output - \
+  --duration-seconds 30 > stream.ts
 ```
 
-地上波を受信し、1 receiverのTSをstdoutへ出す例です。`px4d`と同じruntime directoryを指定します。
+## CLI 仕様
+
+`px4d`、`px4-ts`、`px4ctl` は、同一ホスト内で同じランタイムルートディレクトリ（`--runtime-dir`、省略時の既定値は `$XDG_RUNTIME_DIR`）と 14 桁の base serial（`--device`）を用いてプロセス間通信（IPC）を行います。実際のエンドポイントは、ランタイムルート下の `px4-userland/<BASE_SERIAL>/` に作成されます。
+
+### 受信機（Receiver）番号の割り当て
+
+PX-Q3U4 に搭載されている 8 つの受信機は以下の番号に割り当てられています。
+
+| 受信機番号 | 放送方式 | 備考 |
+|:---:|:---:|---|
+| 0, 1 | ISDB-S | デバイス 1（衛星放送） |
+| 2, 3 | ISDB-T | デバイス 1（地上波） |
+| 4, 5 | ISDB-S | デバイス 2（衛星放送） |
+| 6, 7 | ISDB-T | デバイス 2（地上波） |
+
+1 つの受信機を同時に占有できるクライアントは 1 つです。異なる受信機同士および内蔵カードリーダーは並行して利用できます。
+
+### `px4d`（デバイス所有デーモン）
+
+PX-Q3U4 の USB デバイス（2 系統）、8 つの受信機、内蔵 IC カードリーダーを一括して所有・管理します。フォアグラウンドで動作します。
 
 ```sh
-px4-ts --device 00001205000960 --receiver 2 \
-  --system isdb-t --frequency-khz 557142 \
-  --runtime-dir /run/px4-userland --output - --duration-seconds 30 > stream.ts
+px4d --device BASE_SERIAL --firmware PATH [--runtime-dir PATH] [--allow-lnb-power]
 ```
 
-状態・カード操作は `px4ctl` で行います。
+- `--device BASE_SERIAL`: 対象 PX-Q3U4 の 14 桁 base serial を指定します。
+- `--firmware PATH`: IT930x ファームウェアバイナリのパスを指定します（必須）。
+- `--runtime-dir PATH`: ランタイムルートディレクトリを指定します（省略時は `$XDG_RUNTIME_DIR`）。
+- `--allow-lnb-power`: 衛星放送受信時の LNB 15V 給電を許可します（安全のための明示的 opt-in）。
+- `--fd FD --fd FD`: Android 環境などで、ホスト側が開いた 2 つの USB ファイルディスクリプタを直接渡して起動します（この場合 `--device` は任意）。
+
+### `px4-ts`（MPEG-TS 受信ツール）
+
+`px4d` に接続し、指定した受信機から MPEG-TS ストリームを受信して標準出力またはファイルへ出力します。
 
 ```sh
-px4ctl --device 00001205000960 --runtime-dir /run/px4-userland status
-px4ctl --device 00001205000960 --runtime-dir /run/px4-userland card-atr
-px4ctl --device 00001205000960 --runtime-dir /run/px4-userland card-apdu 00A4040000
+px4-ts --device BASE_SERIAL --receiver 0..7 --system isdb-t|isdb-s --frequency-khz N [OPTIONS]
 ```
 
-ISDB-Sの15V LNB要求は安全上のopt-inです。必要な場合だけdaemonに `--allow-lnb-power` を付け、アンテナ側の
-負荷条件を確認してください。未指定時は15V要求を拒否します。
+- `--device BASE_SERIAL`: 対象デバイスの base serial（必須）。
+- `--receiver 0..7`: 利用する受信機番号（必須）。
+- `--system isdb-t|isdb-s`: 放送方式（必須）。
+- `--frequency-khz N`: 受信周波数（kHz 単位、必須）。
+- ISDB-T 固有設定:
+  - 帯域幅は 6MHz（6000000Hz）固定です。
+- ISDB-S 固有設定:
+  - `--stream-id N`（TSID）または `--slot 0..11` のいずれか一方が必須です。
+- 停止条件（いずれか一方を指定）:
+  - `--duration-seconds N`: 指定秒数の受信後に終了します。
+  - `--packet-count N`: 指定 TS パケット数の受信後に終了します。
+- その他のオプション:
+  - `--output PATH`: 出力先ファイルパスを指定します（`-` で標準出力、既定値: `-`）。
+  - `--tune-timeout-ms N`: チューニング待機時間（ミリ秒、範囲: 100〜30000、既定値: 5000）。
+  - `--lnb-voltage 0|15`: LNB 出力電圧（既定値: 0）。15V 給電には `px4d --allow-lnb-power` との併用が必要です。
+  - `--runtime-dir PATH`: `px4d` と共有するランタイムルートディレクトリ（省略時は `$XDG_RUNTIME_DIR`）。
 
-## 対応外
+#### 終了コード
 
-Windows runtime、Windows adapter、Windows向け配布物はこのprojectの対象外です。Windowsでは
-[`tsukumijima/px4_drv`](https://github.com/tsukumijima/px4_drv)を利用してください。これは別実装であり、
-`px4-userland`のCLI、IPC、reader設定との互換性はありません。
+| コード | 意味 |
+|:---:|---|
+| `0` | 正常終了（指定秒数・パケット数到達、または正常停止） |
+| `2` | 引数・構文エラー（usage） |
+| `3` | デバイス未検出 / 未準備（not found / not ready） |
+| `4` | 受信機が使用中（busy） |
+| `5` | タイムアウト |
+| `6` | IPC バージョン不一致 / プロトコルエラー |
+| `7` | USB エラー / デバイス切断 |
+| `8` | TS 整合性エラー（TEI・連続性エラー等） / バックプレッシャー |
+| `9` | カードエラー / カードプロトコルエラー |
+| `10` | ファームウェア拒否・エラー |
+| `70` | 内部エラー |
 
-詳細なwire仕様と受入条件は [`SPEC.md`](SPEC.md)、依存関係とlicense materialは
-[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)、source derivationは [`PROVENANCE.md`](PROVENANCE.md)を参照してください。
+### `px4ctl`（制御・診断ツール）
+
+デバイスの状態確認や内蔵 IC カードリーダーの操作を行います。
+
+```sh
+px4ctl --device BASE_SERIAL [--runtime-dir PATH] <サブコマンド>
+```
+
+#### サブコマンド一覧
+
+- `list`: 対象デーモンインスタンスのシリアル番号、ready 状態、USB present mask、および 8 つの受信機情報（受信機番号、デバイス番号、ローカル番号、放送方式）を表示します。
+- `status`: デバイス全体の稼働状態、各受信機の状態（free / leased / tuned / streaming / error）およびエラー統計を表示します。
+- `card-status`: 内蔵カードリーダーのカード挿入状態、初期化状態、ATR を表示します。
+- `card-atr`: カードの ATR（Answer to Reset）を取得して表示します。
+- `card-reset`: カードをリセットし、ATR を表示します。
+- `card-apdu HEX [--repeat N]`: 16 進文字列で指定した APDU をカードへ送信し、応答を表示します（`--repeat` で送信回数を指定可能）。
+
+## 内蔵 IC カードリーダー
+
+PX-Q3U4 内蔵の IC カードリーダーは `px4d` が管理します。本ソフトウェア自体にスクランブル復号機能は含まれません。
+
+- **Linux / macOS**: 同梱の IFD Handler（`ifd/px4-userland-ifd.so` または `ifd/px4-userland-ifd.bundle`）を PC/SC デーモン（`pcscd` 等）へ登録することで、システム上の標準的な PC/SC リーダーとして利用できます。
+- **Android**: システム PC/SC は使用せず、同一ホスト内の IPC 経由でアプリケーションからカードリーダー機能（ATR 取得、リセット、APDU 送受信）を利用します。
+
+## 注意事項・既知の制限
+
+> [!WARNING]
+> **受信機 7（地上波）に関する制限（Beta）**
+> 試験個体において、地上波受信機 7（`receiver 7`）で TEI（Transport Error Indicator）や連続性エラー（continuity error）のバーストが発生することが確認されています。同一ハードウェア個体では参照カーネルドライバでも同様に再現しており、本実装固有の問題ではないと見られますが、根本原因や他ロット・他個体での発生状況は未確認です。
+> このエラーが発生した場合、`px4-ts` は `PROTOCOL_ERROR` を検知して終了コード `8` で終了します。
+
+> [!CAUTION]
+> **LNB 15V 給電の安全に関する注意**
+> 衛星アンテナ設備への LNB 15V 給電は、配線や他の給電機器（ブースターやテレビなど）との競合を確認した上で行ってください。誤った給電による機器破損を防ぐため、デーモン起動時の `--allow-lnb-power` と受信時の `px4-ts --lnb-voltage 15` の双方が明示的に指定された場合のみ 15V 給電を有効化します。
+
+## ビルド方法
+
+### 必要環境
+
+- CMake 3.20 以上
+- C++17 対応コンパイラ
+- スレッドライブラリ（Threads）
+- libusb 1.0.23 以上
+- PC/SC IFD Handler をビルドする場合は pcsc-lite の開発ヘッダー（`ifdhandler.h`）
+
+### 手順
+
+```sh
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+```
+
+主な CMake オプション（詳細は [`CMakeLists.txt`](CMakeLists.txt) を参照）:
+- `-DPX4_ENABLE_LIBUSB=ON|OFF`（既定値: ON）: libusb トランスポートのビルド
+- `-DPX4_BUILD_PCSC_IFD=ON|OFF`（既定値: ON）: PC/SC IFD Handler のビルド
+- `-DPX4_BUILD_TESTS=ON|OFF`（既定値: OFF）: テストのビルド
+
+## ライセンス
+
+本ソフトウェアは [GPL-2.0-only](LICENSE) の下で公開されています。
+
+コードの由来、派生元、および第三者コンポーネントのライセンス通知については、[`PROVENANCE.md`](PROVENANCE.md) および [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) を参照してください。
