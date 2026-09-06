@@ -815,8 +815,10 @@ bool test_q3u4_same_bank_multi_open_and_reopen()
 
 bool test_q3u4_all_close_orders()
 {
-    std::array<std::uint8_t, 4U> order{{0U, 1U, 2U, 3U}};
+    std::array<std::size_t, 4U> order{{0U, 1U, 2U, 3U}};
+    std::size_t permutation_count = 0U;
     do {
+        ++permutation_count;
         Bridge dev1_bridge;
         Bridge dev2_bridge;
         CoordinatorBackend dev1_power;
@@ -833,11 +835,12 @@ bool test_q3u4_all_close_orders()
                                                        Q3U4PowerState::on));
         std::array<bool, 4U> closed{};
         for (const auto global : order) {
-            FRONTEND_LIFECYCLE_CHECK(enclosure.close_receiver(global));
+            const auto receiver = static_cast<std::uint8_t>(global);
+            FRONTEND_LIFECYCLE_CHECK(enclosure.close_receiver(receiver));
             closed[global] = true;
-            for (std::uint8_t survivor = 0U; survivor < 4U; ++survivor) {
+            for (std::size_t survivor = 0U; survivor < closed.size(); ++survivor) {
                 FRONTEND_LIFECYCLE_CHECK(
-                    enclosure.receiver_state(survivor) ==
+                    enclosure.receiver_state(static_cast<std::uint8_t>(survivor)) ==
                     (closed[survivor] ? Q3U4ReceiverState::closed
                                       : Q3U4ReceiverState::open));
             }
@@ -846,6 +849,7 @@ bool test_q3u4_all_close_orders()
                                                        Q3U4PowerState::off,
                                                        Q3U4PowerState::off));
     } while (std::next_permutation(order.begin(), order.end()));
+    FRONTEND_LIFECYCLE_CHECK(permutation_count == 24U);
     return true;
 }
 
