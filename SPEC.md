@@ -1,6 +1,6 @@
 # px4-userland 仕様
 
-Status: Frozen v0.9 (2026-09-06)
+Status: Frozen v0.10 (2026-09-07)
 
 本書の`MUST`、`MUST NOT`、`SHOULD`は規範要件を示す。実機観測で前提の誤りが判明した場合も暗黙に
 実装だけを変えず、本書のversionと変更理由を更新してから実装する。
@@ -8,9 +8,13 @@ Status: Frozen v0.9 (2026-09-06)
 v0.8では、`empty_intervals`の訂正でstream starvationを見逃さないよう、1秒以下の観測間隔と連続5秒以内の
 packet/byte進行を受入条件に追加した。これはwire semanticsの変更ではなく、v0.7のacceptance erratumを
 機械的に検証可能にする訂正であり、protocol minorは変更しない。
-v0.9では、受入要件を緩和せず、`v0.1.0 Beta`の実機試験結果と公開時の扱いを明記する。receiver 7は
-10.2の6、7、17を満たさずstrict acceptanceはFAILであり、stable/general release readyまたは
-`runtime-supported`を意味しない。Beta公開の目的は、追加個体および追加環境の証拠収集とする。
+v0.10ではStable受入方針を、主環境HAOSでの2時間試験と各対象環境での30分以上の実機試験へ改訂する。
+receiver 7の既知burstは、同一個体・同一条件で取得した`tsukumijima/px4_drv`の参照結果より悪化しないことを
+確認できれば非ブロッカーとする。LNBは無負荷の0V/15V/0V切替を受入済みとし、代表負荷時の能力未確認は
+既知制限として記録する。最終配布archiveそのものの試験、重大な未解決issueがないこと、公開前レビューを
+Stable公開の条件に追加する。
+v0.9では、`v0.1.0 Beta`の実機試験結果と公開時の扱いを明記した。receiver 7の既知burstは同一個体・同一条件の
+参照結果と比較して扱う。Beta公開の目的は、追加個体および追加環境の証拠収集とする。
 v0.7では、実機長時間試験で確認した`empty_intervals`の意味をUSB待機のTIMEOUT/空completion回数と明記し、
 非zero値だけをTS integrity failureにしない受入条件へ訂正した。
 v0.6では、LNB 15Vを明示的に許可したdaemonだけが出力できる安全境界、GPIO完了が曖昧な場合の
@@ -475,9 +479,11 @@ Linux・Android・macOSを対象にする既存実装は確認できなかった
    receiver 4..7へ分配し、bridgeを跨いだ混入がない。
 5. 8 receiverを同時に30分captureできる。
 6. tune完了後の測定区間で各streamを1秒以下の間隔で観測し、任意の連続5秒窓の中でpacketとbyteの両方が
-   増加する。counterは単調非減少で、常に`bytes == packets * 188`を満たし、sync error、TEI、queue drop、
-   USB errorが0である。`empty_intervals`は6.4節の診断値として記録するが、非zeroだけでは失敗としない。
-7. continuity errorはdiscontinuity indicatorとtune境界を除外して計数し、測定区間で0である。
+   増加する。counterは単調非減少で、常に`bytes == packets * 188`を満たす。receiver 0--6ではsync error、
+   TEI、queue drop、USB errorが0である。receiver 7の既知burstは10.2.6aの参照比較を適用する。
+   `empty_intervals`は6.4節の診断値として記録するが、非zeroだけでは失敗としない。
+7. continuity errorはdiscontinuity indicatorとtune境界を除外して計数する。receiver 0--6では測定区間で0とし、
+   receiver 7の既知burstは10.2.6aの参照比較を適用する。
 8. 1 receiverの停止または再tuneが、他receiverのTSを停止・混入させない。
 9. receiverを片側だけ、両側、cardだけ、receiver+cardの順にopen/closeし、5.2節のbridge別power stateを満たす。
 10. `--allow-lnb-power`なしでは15V要求をGPIO書込みなしで拒否する。opt-in時はLNB 0V/15Vとbridgeごとの
@@ -485,22 +491,33 @@ Linux・Android・macOSを対象にする既存実装は確認できなかった
     SIGTERM、片側USB切断のcleanup規則は5.2節を満たす。
 11. card未挿入、挿入、ATR、reset、基本APDU、抜去、再挿入が成功する。
 12. 外付け標準readerで同じB-CASを使ったAPDU responseと、Q3U4内蔵readerのresponseが一致する。
-13. 8 receiverの同時capture中にcard APDUを反復し、APDU failureとTS error/dropが0である。
+13. 8 receiverの同時capture中にcard APDUを反復し、APDU failureが0である。TS error/dropはreceiver 0--6で0とし、
+    receiver 7の既知burstは10.2.6aの参照比較を適用する。
 14. card利用中にtunerをすべて閉じてもcard通信を継続し、tuner利用中にcardを閉じてもTSを継続する。
 15. idle、streaming、card transaction中のUSB切断が有限時間で失敗を返し、hangまたはuse-after-freeを起こさない。
 16. 再接続後に旧lease、ATR、T=1 sequence、TS端数を再利用せず、再列挙・再初期化できる。
-17. 開発中の各release candidateは2時間のsoak testでcrash、memory/handle増加傾向、stale lease、
-    TS/card errorを生じない。
-18. stable release候補は8 receiver、反復APDU、定期的なretune/stop/reopenを含む72時間連続試験を3回行い、
-    continuity、queue、sync、APDU errorが0で、RSSとhandle数に単調増加傾向がない。
+17. Stable候補は主環境HAOSで2時間、8 receiver、反復APDU、定期的なretune/stop/reopenを含むsoak testを行い、
+    crash、stale lease、APDU failure、RSSまたはhandle数の増加傾向を生じない。TS errorはreceiver 0--6で0とし、
+    receiver 7の既知burstは10.2.6aの参照比較を適用する。
+18. Stable候補はLinux、HAOS、macOS、Android Termux、Android ad-hoc APKの各対象環境で30分以上の実機試験を行う。
+    各環境で地上波・衛星のcapture、定期的なstop/reopen、USB detach/reconnect、Q3U4内蔵カード経路の反復APDUを
+    確認する。HAOSの2時間試験はこの条件を兼ねる。
 19. 壁設備と完全に分離した開放端で0V、15V、cleanup後0Vを測定し、GPIO 11の極性と切替を確認する。
-    この無負荷試験だけではLNB給電能力を確認済みと表現しない。実アンテナまたは代表負荷で電圧・電流・安定性を
-    確認するまでは`LNB switching hardware-verified / loaded supply unverified`と記録する。
+    この無負荷試験をもってLNB切替をhardware-verifiedとするが、代表負荷時の給電能力は未確認として
+    `LNB switching hardware-verified / loaded supply unverified`と記録する。これはStableのブロッカーではない。
+
+### 10.2.6a receiver 7 reference comparison
+
+receiver 7でTEIまたはcontinuity errorのburstが発生した場合、同一Q3U4個体、同一アンテナ・電源・firmware、
+同一周波数、同一測定時間および同等のcapture条件で`tsukumijima/px4_drv`を実行し、同じcounterを取得する。
+px4-userlandのburstが参照結果より悪化せず、追加のUSB error、queue drop、stream停止、crash、stale leaseを
+生じない場合、そのburstは既知制限として記録し、Stable受入のブロッカーにしない。比較条件を再現できない場合は
+判定保留とし、receiver 7を無条件に合格扱いしない。
 
 `v0.1.0 Beta`では、receiver 0--6は2時間soakでerror 0だった。receiver 7はTEI `10974`、
-`continuity_errors=453`を記録し、strict soakの終了コードは1だったため、10.2の6、7、17を満たさない。
-同一試験個体では、参照`tsukumijima/px4_drv`でも約11k TEIの署名が再現した。これをもって受入要件を
-変更せず、既知制限をREADMEに開示する。`px4-ts`はTS integrity errorをCLI exit code 8で報告する。
+`continuity_errors=453`を記録した。同一試験個体では、参照`tsukumijima/px4_drv`でも約11k TEIの署名が再現した。
+この結果は10.2.6aの既知制限の初期証拠として扱うが、Stable候補では同一条件の比較記録を改めて保存する。
+`px4-ts`はTS integrity errorをCLI exit code 8で報告する。
 
 ### 10.3 Cross-platform support claims
 
@@ -513,7 +530,8 @@ support表示は機能軸を混ぜず、OSごとに次の4列を持つ。
   Androidはこの列を`not applicable`とする。
 
 OS全体を`runtime-supported`と表記するには、上記の該当列を満たし、8 receiver同時stream中にnative card adapter
-（Androidはportable IPC client）から反復APDUを行ってTS/card errorが0でなければならない。
+（Androidはportable IPC client）から反復APDUを行って、10.2.6aを適用したTS受入条件とcard error条件を満たさなければ
+ならない。
 
 `tuner-hardware-verified`には2 USB deviceのgrouping、firmware load、ISDB-T 1 receiverとISDB-S 1 receiverの
 capture、stop/reopen、USB disconnect/reconnectを要する。`card-core-hardware-verified`にはATR、reset、反復APDU、
@@ -524,11 +542,11 @@ v0.4実機試験の割当は次のとおりとする。
 
 | Test path | Required evidence |
 |---|---|
-| Latitude 5300 / AnduinOS | 10.2節全体と実PC/SC consumer |
-| M720q / HAOS container | 8 receiver、card core、USB detach/reconnect、2時間soak |
-| Google TV Streamer / Termux | armv7a Bionic ELF、2 fd wrap、T/S capture、card APDU、stop/reopen |
-| Google TV Streamer / ad-hoc APK | armv7a、USB permission、2 fd wrap、T/S capture、card APDU、detach/reconnect |
-| M2 Mac mini / macOS | grouping、T/S capture、card core、実PC/SC consumer、detach/reconnect |
+| Latitude 5300 / AnduinOS | T/S capture、8 receiver、内蔵card経路、USB detach/reconnect、30分以上、実PC/SC consumer |
+| M720q / HAOS container | T/S capture、8 receiver、内蔵card経路、USB detach/reconnect、2時間soak |
+| Google TV Streamer / Termux | armv7a Bionic ELF、2 fd wrap、T/S capture、内蔵card経路、stop/reopen、USB detach/reconnect、30分以上 |
+| Google TV Streamer / ad-hoc APK | armv7a、USB permission、2 fd wrap、T/S capture、内蔵card経路、stop/reopen、USB detach/reconnect、30分以上 |
+| M2 Mac mini / macOS | grouping、T/S capture、内蔵card経路、実PC/SC consumer、USB detach/reconnect、30分以上 |
 
 TermuxとAPKは同一ハードウェアでも別runtime経路として個別に合否を記録する。HAOS検証はLinux一般の
 `tuner-hardware-verified`を代替せず、`HAOS-container-verified`として別に記録する。
@@ -571,8 +589,21 @@ Android binary release gateは次の全項目を満たすまで未完成とす�
 このgateの包装・manifest・checksum・binary/source archive auditは、local packaging scriptsと
 `.github/workflows/build_userland.yml`の`release-candidate` workflowとして実装済みである。workflowはtagや
 GitHub Releaseを作成せず、4つのbinary archive、対応source archive、外側`SHA256SUMS`をcandidate artifactとして
-まとめる。これはstable/general release readyを意味しない。72時間連続試験3回とloaded LNB給電能力の確認が
-完了するまで、一般releaseの準備完了とは表記しない。
+まとめる。Stable公開時は、このcandidateで使用した最終配布archiveそのものを各対象環境で試験する。
+
+### 10.5 Stable release gate
+
+Stable公開前に、次の条件をすべて満たすこと。
+
+1. 10.1のCI、静的監査、archive manifest、checksum、licenseおよびcorresponding-source監査が成功している。
+2. 10.2のHAOS 2時間soakと10.3の各対象環境30分以上の実機試験を、公開する最終配布archiveそのもので完了している。
+3. 地上波・衛星、USB detach/reconnect、stop/reopen、Q3U4内蔵カード経路および反復APDUの証拠を、環境ごとに保存している。
+4. receiver 7の既知burstは10.2.6aの比較結果を添付し、LNBは`LNB switching hardware-verified / loaded supply unverified`
+   と明記している。
+5. crash、hang、use-after-free、stale lease、再接続不能、カード経路の重大な未解決issueがない。receiver 7の参照一致
+   burstおよび代表負荷未検証のLNBは、この項の重大な未解決issueには含めない。
+6. 公開前レビューを実施し、README、LICENSE、THIRD_PARTY_NOTICES、provenance、checksum、support表示および
+   release archiveの内容が一致している。
 
 ## 11. Implementation increments
 
