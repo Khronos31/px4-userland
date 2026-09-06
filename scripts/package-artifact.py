@@ -362,7 +362,7 @@ def main() -> int:
                 fail("--reader-template is required for native platforms")
             copy_regular(args.reader_template.resolve(), stage / "reader.conf.d" / "px4-userland.conf")
         revision = None
-        if args.platform == "linux-x86_64":
+        if args.platform.startswith("linux-"):
             if not args.ifd_library:
                 fail("--ifd-library is required for Linux")
             copy_regular(args.ifd_library.resolve(), stage / "ifd" / "px4-userland-ifd.so")

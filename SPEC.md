@@ -1,6 +1,6 @@
 # px4-userland 仕様
 
-Status: Frozen v0.10 (2026-09-07)
+Status: Frozen v0.11 (2026-09-07)
 
 本書の`MUST`、`MUST NOT`、`SHOULD`は規範要件を示す。実機観測で前提の誤りが判明した場合も暗黙に
 実装だけを変えず、本書のversionと変更理由を更新してから実装する。
@@ -8,6 +8,8 @@ Status: Frozen v0.10 (2026-09-07)
 v0.8では、`empty_intervals`の訂正でstream starvationを見逃さないよう、1秒以下の観測間隔と連続5秒以内の
 packet/byte進行を受入条件に追加した。これはwire semanticsの変更ではなく、v0.7のacceptance erratumを
 機械的に検証可能にする訂正であり、protocol minorは変更しない。
+v0.11ではLinux aarch64のnative CI buildとmusl-dynamic配布archiveを追加する。aarch64の実機は未保有のため、
+build-tested / hardware-unverifiedと表示し、Stable受入では既知の非ブロッカーとして扱う。
 v0.10ではStable受入方針を、主環境HAOSでの2時間試験と各対象環境での30分以上の実機試験へ改訂する。
 receiver 7の既知burstは、同一個体・同一条件で取得した`tsukumijima/px4_drv`の参照結果より悪化しないことを
 確認できれば非ブロッカーとする。LNBは無負荷の0V/15V/0V切替を受入済みとし、代表負荷時の能力未確認は
@@ -37,7 +39,8 @@ support matrixと実機検証経路は次のとおりとする。
 
 | Environment | Machine | Access path | Primary validation |
 |---|---|---|---|
-| Linux | Dell Latitude 5300 / AnduinOS | native libusb | tuner、card core、PC/SC adapter |
+| Linux x86_64 | Dell Latitude 5300 / AnduinOS | native libusb | tuner、card core、PC/SC adapter |
+| Linux aarch64 | GitHub Actions `ubuntu-24.04-arm` | native arm64 Alpine/musl CI | build-tested / hardware-unverified |
 | HAOS | Lenovo ThinkCentre M720q / Studio Code Server container | containerからlibusb | HAOS上のportable runtime |
 | Android | Google TV Streamer / Termux | `termux-usb`からfd渡し | Bionic CLI、repeated `--fd`、portable IPC |
 | Android | Google TV Streamer / ad-hoc APK | Android USB Host APIからfd渡し | armv7a native coreをAPK processから利用する経路 |
@@ -405,9 +408,11 @@ queue overflow、sync/TEI/drop検出を0にしない。stdoutはTSだけ、全�
 
 - Linux/macOSのrelease binaryは、host-provided dynamic libusbおよびsystem PC/SC依存を意図する。Linux releaseは
   Siano-styleのmusl-dynamic artifactとし、既存のglibc native buildはCI/dev用に限定する。
-- Linux x86_64 musl ELFは`readelf -l`/`readelf -d`で、interpreterが`/lib/ld-musl-x86_64.so.1`、`NEEDED`に
-  `libusb-1.0.so.0`と`libc.musl-x86_64.so.1`があることを検証する。macOS Mach-Oは`otool -L`でhost-provided
-  dynamic libusbを検証し、各出力をrelease evidenceへ保存する。staticになっていたbinaryはdynamic releaseとして出さない。
+- Linux x86_64/aarch64 musl ELFは`readelf -h`/`readelf -l`/`readelf -d`で、architectureに対応する
+  interpreter（`/lib/ld-musl-x86_64.so.1`または`/lib/ld-musl-aarch64.so.1`）、`NEEDED`の
+  `libusb-1.0.so.0`および対応するmusl libc（`libc.musl-x86_64.so.1`または`libc.musl-aarch64.so.1`）を検証する。
+  macOS Mach-Oは`otool -L`でhost-provided dynamic libusbを検証し、各出力をrelease evidenceへ保存する。
+  staticになっていたbinaryはdynamic releaseとして出さない。
 - libusb、pcsc-lite、その他のhost dependencyをstaticまたはbundleした場合は、Androidと同等のexact source、license、
   notice、build/relink obligationsへ切り替える。
 
@@ -499,9 +504,9 @@ Linux・Android・macOSを対象にする既存実装は確認できなかった
 17. Stable候補は主環境HAOSで2時間、8 receiver、反復APDU、定期的なretune/stop/reopenを含むsoak testを行い、
     crash、stale lease、APDU failure、RSSまたはhandle数の増加傾向を生じない。TS errorはreceiver 0--6で0とし、
     receiver 7の既知burstは10.2.6aの参照比較を適用する。
-18. Stable候補はLinux、HAOS、macOS、Android Termux、Android ad-hoc APKの各対象環境で30分以上の実機試験を行う。
+18. Stable候補はLinux x86_64、HAOS、macOS、Android Termux、Android ad-hoc APKの各対象環境で30分以上の実機試験を行う。
     各環境で地上波・衛星のcapture、定期的なstop/reopen、USB detach/reconnect、Q3U4内蔵カード経路の反復APDUを
-    確認する。HAOSの2時間試験はこの条件を兼ねる。
+    確認する。HAOSの2時間試験はこの条件を兼ねる。Linux aarch64は実機未検証のため、この実機試験の対象外とする。
 19. 壁設備と完全に分離した開放端で0V、15V、cleanup後0Vを測定し、GPIO 11の極性と切替を確認する。
     この無負荷試験をもってLNB切替をhardware-verifiedとするが、代表負荷時の給電能力は未確認として
     `LNB switching hardware-verified / loaded supply unverified`と記録する。これはStableのブロッカーではない。
@@ -542,7 +547,8 @@ v0.4実機試験の割当は次のとおりとする。
 
 | Test path | Required evidence |
 |---|---|
-| Latitude 5300 / AnduinOS | T/S capture、8 receiver、内蔵card経路、USB detach/reconnect、30分以上、実PC/SC consumer |
+| Latitude 5300 / AnduinOS (x86_64) | T/S capture、8 receiver、内蔵card経路、USB detach/reconnect、30分以上、実PC/SC consumer |
+| Linux aarch64 / GitHub Actions | native build、offline test、archive audit、実機未検証 |
 | M720q / HAOS container | T/S capture、8 receiver、内蔵card経路、USB detach/reconnect、2時間soak |
 | Google TV Streamer / Termux | armv7a Bionic ELF、2 fd wrap、T/S capture、内蔵card経路、stop/reopen、USB detach/reconnect、30分以上 |
 | Google TV Streamer / ad-hoc APK | armv7a、USB permission、2 fd wrap、T/S capture、内蔵card経路、stop/reopen、USB detach/reconnect、30分以上 |
@@ -553,11 +559,12 @@ TermuxとAPKは同一ハードウェアでも別runtime経路として個別に�
 
 ### 10.4 Release artifacts
 
-最終配布物のplatform/architectureは次の4 archiveとする。
+最終配布物のplatform/architectureは次の5 binary archiveとする。source archiveは全binaryに共通で1つ作成する。
 
 | Artifact | Runtime contract |
 |---|---|
 | `px4-userland-<version>-linux-x86_64.tar.gz` | x86_64 Linux、musl build |
+| `px4-userland-<version>-linux-aarch64.tar.gz` | aarch64 Linux、musl build、実機未検証 |
 | `px4-userland-<version>-darwin-arm64.tar.gz` | Apple Silicon macOS |
 | `px4-userland-<version>-android-aarch64.tar.gz` | Android API 24+、Bionic aarch64、Termux用 |
 | `px4-userland-<version>-android-armv7a.tar.gz` | Android API 24+、Bionic armv7a、Termux/Google TV用 |
@@ -588,15 +595,16 @@ Android binary release gateは次の全項目を満たすまで未完成とす�
 
 このgateの包装・manifest・checksum・binary/source archive auditは、local packaging scriptsと
 `.github/workflows/build_userland.yml`の`release-candidate` workflowとして実装済みである。workflowはtagや
-GitHub Releaseを作成せず、4つのbinary archive、対応source archive、外側`SHA256SUMS`をcandidate artifactとして
-まとめる。Stable公開時は、このcandidateで使用した最終配布archiveそのものを各対象環境で試験する。
+GitHub Releaseを作成せず、5つのbinary archive、対応source archive、外側`SHA256SUMS`をcandidate artifactとして
+まとめる。Stable公開時は、このcandidateで使用した最終配布archiveそのものを各対象環境で試験する。Linux aarch64は
+archive auditとnative CI buildを必須とするが、実機未検証を既知の非ブロッカーとして公開時に明記する。
 
 ### 10.5 Stable release gate
 
 Stable公開前に、次の条件をすべて満たすこと。
 
 1. 10.1のCI、静的監査、archive manifest、checksum、licenseおよびcorresponding-source監査が成功している。
-2. 10.2のHAOS 2時間soakと10.3の各対象環境30分以上の実機試験を、公開する最終配布archiveそのもので完了している。
+2. 10.2のHAOS 2時間soakと10.3の実機検証対象環境での30分以上の試験を、公開する最終配布archiveそのもので完了している。
 3. 地上波・衛星、USB detach/reconnect、stop/reopen、Q3U4内蔵カード経路および反復APDUの証拠を、環境ごとに保存している。
 4. receiver 7の既知burstは10.2.6aの比較結果を添付し、LNBは`LNB switching hardware-verified / loaded supply unverified`
    と明記している。
@@ -604,6 +612,8 @@ Stable公開前に、次の条件をすべて満たすこと。
    burstおよび代表負荷未検証のLNBは、この項の重大な未解決issueには含めない。
 6. 公開前レビューを実施し、README、LICENSE、THIRD_PARTY_NOTICES、provenance、checksum、support表示および
    release archiveの内容が一致している。
+7. Linux aarch64はnative CI build、offline test、musl/ELF/IFD/archive監査を満たしている。実機未検証は既知の
+   非ブロッカーとしてsupport表示とrelease notesに明記し、実機検証済みとは表現しない。
 
 ## 11. Implementation increments
 

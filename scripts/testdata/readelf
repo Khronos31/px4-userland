@@ -1,11 +1,27 @@
 #!/bin/sh
 # Synthetic readelf used only by test-packaging.sh; it is not a release tool.
+case "${PX4_TEST_ARCH:-x86_64}" in
+aarch64)
+    machine='AArch64'
+    interpreter='/lib/ld-musl-aarch64.so.1'
+    libc='libc.musl-aarch64.so.1'
+    ;;
+x86_64)
+    machine='Advanced Micro Devices X86-64'
+    interpreter='/lib/ld-musl-x86_64.so.1'
+    libc='libc.musl-x86_64.so.1'
+    ;;
+*)
+    printf '%s\n' 'unsupported PX4_TEST_ARCH' >&2
+    exit 1
+    ;;
+esac
 case "$*" in
 *-h*)
-    printf '%s\n' 'ELF Header:' '  Type: DYN (Position-Independent Executable file)' '  Machine: Advanced Micro Devices X86-64'
+    printf '%s\n' 'ELF Header:' '  Type: DYN (Position-Independent Executable file)' "  Machine: $machine"
     ;;
 *-lW*)
-    printf '%s\n' '      [Requesting program interpreter: /lib/ld-musl-x86_64.so.1]'
+    printf '%s\n' "      [Requesting program interpreter: $interpreter]"
     ;;
 *-d*)
     case "${PX4_TEST_LINKAGE:-normal}:$*" in
@@ -13,6 +29,6 @@ case "$*" in
         printf '%s\n' ' 0x0000000000000001 (NEEDED) Shared library: [libusb-1.0.so.0]'
         ;;
     esac
-    printf '%s\n' ' 0x0000000000000001 (NEEDED) Shared library: [libc.musl-x86_64.so.1]'
+    printf '%s\n' " 0x0000000000000001 (NEEDED) Shared library: [$libc]"
     ;;
 esac

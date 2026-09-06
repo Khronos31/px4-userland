@@ -2,7 +2,7 @@
 
 This document describes the dependencies and materials for the currently implemented `release-candidate` packaging
 contract. It is not, by itself, a declaration that the project is stable or ready for a general release. The release
-candidate workflow generates and audits four platform archives plus one corresponding-source archive, then uploads them
+candidate workflow generates and audits five platform archives plus one corresponding-source archive, then uploads them
 together with an outer `SHA256SUMS` file.
 
 ## No vendored dependency in the repository source
@@ -48,10 +48,12 @@ Primary license text: [libusb 1.0.28 `COPYING`](https://github.com/libusb/libusb
 
 ## Linux and macOS native archives
 
-The Linux archive is x86_64 musl-dynamic. It requires the host interpreter
-`/lib/ld-musl-x86_64.so.1` and host-provided shared `libusb-1.0.so.0`. The macOS archive is Apple Silicon and uses
-host-provided dynamic libusb. Both native archives also require their host system C++ runtime: Linux commonly needs
-Alpine-provided dynamic `libstdc++.so.6`, `libgcc_s.so.1`, and related libraries, while macOS needs system `libc++`.
+The Linux archives are x86_64 and aarch64 musl-dynamic builds. They require the corresponding host interpreter
+(`/lib/ld-musl-x86_64.so.1` or `/lib/ld-musl-aarch64.so.1`) and host-provided shared `libusb-1.0.so.0`. The macOS archive
+is Apple Silicon and uses host-provided dynamic libusb. All native archives also require their host system C++ runtime:
+Linux commonly needs Alpine-provided dynamic `libstdc++.so.6`, `libgcc_s.so.1`, and related libraries, while macOS needs
+system `libc++`. The Linux aarch64 archive is built and audited on the native `ubuntu-24.04-arm` CI runner but has no
+hardware validation.
 The actual `NEEDED`/dynamic dependency lists are retained in `evidence/binary-audit.json`. Native archives do not bundle
 a libusb or PC/SC client library.
 
@@ -59,9 +61,9 @@ Only `px4d` directly requires libusb. `px4-ts` and `px4ctl` are IPC clients and 
 Linux/macOS IFD adapter also communicates with `px4d` over IPC and must not directly require libusb or a PC/SC client
 library. A host PC/SC consumer/pcscd loads the IFD adapter through the supplied reader template.
 
-The native dependency claim is verified from each built binary: Linux uses `readelf` for the musl interpreter and shared
-libusb, while macOS uses `otool` for host-provided dynamic libusb and the IFD's dependency restrictions. The native
-archive notice identifies these as host-provided dynamic dependencies.
+The native dependency claim is verified from each built binary: Linux uses `readelf` for the ELF architecture, matching musl
+interpreter, matching musl libc, and shared libusb, while macOS uses `otool` for host-provided dynamic libusb and the IFD's
+dependency restrictions. The native archive notice identifies these as host-provided dynamic dependencies.
 
 Primary PC/SC license reference: [pcsc-lite `COPYING`](https://github.com/LudovicRousseau/PCSC/blob/master/COPYING).
 The exact host package versions remain deployment-specific system inputs and are not copied into the native archives.
@@ -73,9 +75,10 @@ They require explicit already-built platform inputs, strict `N.N.N` version matc
 where Android or source packaging needs it. They audit archive allowlists, required files, manifests, checksums, path
 traversal, symlinks/hardlinks, firmware, Windows, probe, kernel/DKMS, and vendor content.
 
-The final CI artifact is named `release-candidate` and contains exactly these five archives and the outer `SHA256SUMS`:
+The final CI artifact is named `release-candidate` and contains exactly these six archives and the outer `SHA256SUMS`:
 
 - `px4-userland-<version>-linux-x86_64.tar.gz`;
+- `px4-userland-<version>-linux-aarch64.tar.gz`;
 - `px4-userland-<version>-darwin-arm64.tar.gz`;
 - `px4-userland-<version>-android-aarch64.tar.gz`;
 - `px4-userland-<version>-android-armv7a.tar.gz`;
@@ -85,7 +88,8 @@ This artifact is a candidate handoff, not a Git tag or GitHub Release. Stable ac
 the final archives themselves must pass the HAOS 2-hour soak and the 30-minute-or-longer target-environment tests, including
 terrestrial/satellite capture, stop/reopen, USB detach/reconnect, and the Q3U4 internal card path. The receiver 7 reference
 comparison and the unloaded-only LNB limitation are recorded as specified there. Stable publication also requires no major
-unresolved issue and a pre-publication review.
+unresolved issue and a pre-publication review. The Linux aarch64 archive remains `build-tested / hardware-unverified` and
+its lack of hardware validation is a known non-blocking limitation.
 
 ## CI-only actions
 

@@ -19,9 +19,22 @@ import tempfile
 
 PLATFORMS = {
     "linux-x86_64": "linux",
+    "linux-aarch64": "linux",
     "darwin-arm64": "darwin",
     "android-aarch64": "android",
     "android-armv7a": "android",
+}
+LINUX_TARGETS = {
+    "linux-x86_64": {
+        "machine": "Advanced Micro Devices X86-64",
+        "interpreter": "/lib/ld-musl-x86_64.so.1",
+        "libc": "libc.musl-x86_64.so.1",
+    },
+    "linux-aarch64": {
+        "machine": "AArch64",
+        "interpreter": "/lib/ld-musl-aarch64.so.1",
+        "libc": "libc.musl-aarch64.so.1",
+    },
 }
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 LIBUSB_SHA256 = "966bb0d231f94a474eaae2e67da5ec844d3527a1f386456394ff432580634b29"
@@ -205,7 +218,7 @@ def validate_string_list(value: object, field: str) -> list[str]:
 def validate_binary_evidence_record(record: object, platform: str) -> dict:
     if not isinstance(record, dict):
         fail("binary evidence artifact record must be an object")
-    if platform == "linux-x86_64":
+    if platform.startswith("linux-"):
         fields = {"artifact", "format", "interpreter", "needed", "sha256"}
         if set(record) != fields or record.get("format") != "ELF":
             fail("invalid Linux binary evidence schema")
@@ -254,6 +267,7 @@ def verify_binary_evidence(archive: Path, members: dict[str, tarfile.TarInfo],
 
     expected_extra = {
         "linux-x86_64": "ifd/px4-userland-ifd.so",
+        "linux-aarch64": "ifd/px4-userland-ifd.so",
         "darwin-arm64": "ifd/px4-userland-ifd.bundle/Contents/MacOS/libpx4-userland-ifd.dylib",
     }.get(platform)
     extra = evidence.get("extra")
@@ -273,6 +287,7 @@ def verify_binary_evidence(archive: Path, members: dict[str, tarfile.TarInfo],
 
     expected_interpreter = {
         "linux-x86_64": "/lib/ld-musl-x86_64.so.1",
+        "linux-aarch64": "/lib/ld-musl-aarch64.so.1",
         "android-aarch64": "/system/bin/linker64",
         "android-armv7a": "/system/bin/linker",
     }.get(platform)
@@ -280,7 +295,7 @@ def verify_binary_evidence(archive: Path, members: dict[str, tarfile.TarInfo],
         artifact = record["artifact"]
         if artifact not in members:
             fail(f"binary evidence artifact is not archived: {artifact}")
-        if platform == "linux-x86_64":
+        if platform.startswith("linux-"):
             required_interpreter = expected_interpreter if artifact in PROGRAMS else None
             if record["interpreter"] != required_interpreter:
                 fail(f"Linux binary evidence interpreter mismatch: {artifact}")
@@ -347,18 +362,22 @@ def readelf_path() -> str:
     fail("readelf or llvm-readelf is required")
 
 
-def audit_linux(path: Path, logical_name: str, *, shared: bool, require_libusb: bool,
+def audit_linux(path: Path, logical_name: str, *, platform: str, shared: bool, require_libusb: bool,
                 reject_pcsc: bool = False) -> dict:
+    target = LINUX_TARGETS[platform]
     readelf = readelf_path()
     header = run([readelf, "-h", str(path)])
     program = run([readelf, "-lW", str(path)])
     dynamic = run([readelf, "-d", str(path)])
     if "ELF" not in header:
         fail(f"not an ELF file: {path}")
+    machine = re.search(r"^\s*Machine:\s*(.+)$", header, re.MULTILINE)
+    if not machine or machine.group(1).strip() != target["machine"]:
+        fail(f"wrong Linux ELF machine for {platform}: {path}")
     if not shared:
         interpreter = re.search(r"Requesting program interpreter: ([^]]+)", program)
-        if not interpreter or interpreter.group(1) != "/lib/ld-musl-x86_64.so.1":
-            fail(f"wrong Linux musl interpreter: {path}")
+        if not interpreter or interpreter.group(1) != target["interpreter"]:
+            fail(f"wrong Linux musl interpreter for {platform}: {path}")
     needed = parse_needed(dynamic)
     if require_libusb and "libusb-1.0.so.0" not in needed:
         fail(f"shared libusb is missing from {path}")
@@ -366,12 +385,12 @@ def audit_linux(path: Path, logical_name: str, *, shared: bool, require_libusb: 
         fail(f"unexpected direct shared libusb dependency: {path}")
     if reject_pcsc and any("pcsc" in library.lower() for library in needed):
         fail(f"unexpected direct PC/SC client dependency: {path}")
-    if "libc.musl-x86_64.so.1" not in needed:
+    if target["libc"] not in needed:
         fail(f"musl libc is missing from {path}")
     if "RPATH" in dynamic or "RUNPATH" in dynamic:
         fail(f"RPATH/RUNPATH is forbidden: {path}")
     return {"artifact": logical_name, "format": "ELF",
-            "interpreter": "/lib/ld-musl-x86_64.so.1" if not shared else None,
+            "interpreter": target["interpreter"] if not shared else None,
             "needed": sorted(needed)}
 
 
@@ -430,20 +449,21 @@ def audit_binaries(args: argparse.Namespace) -> dict:
         if args.platform.startswith("android"):
             expected = "/system/bin/linker64" if args.platform.endswith("aarch64") else "/system/bin/linker"
             evidence = audit_android(path, program, expected, args.repo_root.resolve())
-        elif args.platform == "linux-x86_64":
-            evidence = audit_linux(path, program, shared=False, require_libusb=program == "px4d")
+        elif args.platform.startswith("linux-"):
+            evidence = audit_linux(path, program, platform=args.platform, shared=False,
+                                   require_libusb=program == "px4d")
         else:
             evidence = audit_darwin(path, program, require_libusb=program == "px4d")
         evidence["sha256"] = sha256(path)
         result["programs"].append(evidence)
 
-    if args.platform == "linux-x86_64":
+    if args.platform.startswith("linux-"):
         if not args.ifd_library:
             fail("--ifd-library is required for Linux binary audit")
         path = args.ifd_library.resolve()
         if not path.is_file() or path.is_symlink():
             fail(f"missing Linux IFD library: {path}")
-        evidence = audit_linux(path, "ifd/px4-userland-ifd.so", shared=True,
+        evidence = audit_linux(path, "ifd/px4-userland-ifd.so", platform=args.platform, shared=True,
                                require_libusb=False, reject_pcsc=True)
         evidence["sha256"] = sha256(path)
         result["extra"].append(evidence)
@@ -505,7 +525,7 @@ def audit_binary_archive(args: argparse.Namespace) -> dict:
     validate_platform(args.platform)
     members = archive_members(args.archive.resolve())
     expected = set(COMMON) | set(PROGRAMS)
-    if args.platform == "linux-x86_64":
+    if args.platform.startswith("linux-"):
         expected |= {"ifd/px4-userland-ifd.so", "reader.conf.d/px4-userland.conf"}
     elif args.platform == "darwin-arm64":
         expected |= {

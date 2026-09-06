@@ -75,6 +75,39 @@ jobs:
           path: release-candidate/linux/*.tar.gz
           if-no-files-found: error
 
+  alpine-musl-aarch64:
+    name: Alpine musl (Linux aarch64 native)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Build and test in native arm64 Alpine
+        run: |
+          docker run --rm \
+          -v "$GITHUB_WORKSPACE:/src" \
+          -w /src \
+          alpine:3.20 \
+          sh -euxc \
+          'apk add --no-cache cmake samurai g++ pkgconf libusb-dev pcsc-lite-dev python3 binutils;
+          pkg-config --modversion libpcsclite;
+          cmake -S . -B build-userland -G Ninja -DCMAKE_BUILD_TYPE=Release -DPX4_BUILD_TESTS=ON -DPX4_REQUIRE_PCSC_IFD=ON;
+          cmake --build build-userland;
+          ctest --test-dir build-userland -R "^px4_ifd_(tests|symbols)$" --no-tests=error --output-on-failure;
+          ctest --test-dir build-userland --output-on-failure;
+          version=$(tr -d "\\n" < VERSION);
+          ifd=$(find build-userland -type f -name "libpx4-userland-ifd.so" -print -quit);
+          test -n "$ifd";
+          mkdir -p /src/release-candidate/linux-aarch64;
+          scripts/package-artifact.sh --platform linux-aarch64 --version "$version" \
+          --build-dir build-userland --ifd-library "$ifd" \
+          --reader-template packaging/pcsc/reader.conf.d/px4-userland.conf.in \
+          --output-dir /src/release-candidate/linux-aarch64'
+      - name: Upload Linux aarch64 candidate archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rc-linux-aarch64
+          path: release-candidate/linux-aarch64/*.tar.gz
+          if-no-files-found: error
+
   macos:
     name: macOS
     runs-on: macos-14
@@ -180,7 +213,7 @@ jobs:
 
   release-candidate:
     name: Assemble release-candidate artifact
-    needs: [alpine-musl, macos, android-api-24, source-archive]
+    needs: [alpine-musl, alpine-musl-aarch64, macos, android-api-24, source-archive]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -215,6 +248,7 @@ jobs:
           version = sys.argv[1]
           expected = {
               f'px4-userland-{version}-linux-x86_64.tar.gz',
+              f'px4-userland-{version}-linux-aarch64.tar.gz',
               f'px4-userland-{version}-darwin-arm64.tar.gz',
               f'px4-userland-{version}-android-aarch64.tar.gz',
               f'px4-userland-{version}-android-armv7a.tar.gz',
@@ -224,21 +258,23 @@ jobs:
               path.name for path in Path('release-candidate').iterdir()
               if path.is_file() and path.name.endswith('.tar.gz')
           }
-          if len(actual) != 5 or actual != expected:
+          if len(actual) != 6 or actual != expected:
               raise SystemExit(f'exact archive set required: expected={sorted(expected)}, actual={sorted(actual)}')
           PY
           cd release-candidate
           linux_archive="px4-userland-$version-linux-x86_64.tar.gz"
+          linux_aarch64_archive="px4-userland-$version-linux-aarch64.tar.gz"
           macos_archive="px4-userland-$version-darwin-arm64.tar.gz"
           android_aarch64_archive="px4-userland-$version-android-aarch64.tar.gz"
           android_armv7a_archive="px4-userland-$version-android-armv7a.tar.gz"
           source_archive="px4-userland-$version-source.tar.gz"
           ../scripts/audit-artifact.sh --platform linux-x86_64 --archive "$linux_archive"
+          ../scripts/audit-artifact.sh --platform linux-aarch64 --archive "$linux_aarch64_archive"
           ../scripts/audit-artifact.sh --platform darwin-arm64 --archive "$macos_archive"
           ../scripts/audit-artifact.sh --platform android-aarch64 --archive "$android_aarch64_archive"
           ../scripts/audit-artifact.sh --platform android-armv7a --archive "$android_armv7a_archive"
           ../scripts/audit-artifact.sh --source-archive --archive "$source_archive"
-          sha256sum "$linux_archive" "$macos_archive" "$android_aarch64_archive" \
+          sha256sum "$linux_archive" "$linux_aarch64_archive" "$macos_archive" "$android_aarch64_archive" \
             "$android_armv7a_archive" "$source_archive" > SHA256SUMS
           sha256sum -c SHA256SUMS
       - name: Upload single release-candidate artifact

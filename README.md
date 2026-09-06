@@ -13,7 +13,7 @@
 
 | OS / 環境 | 状態 | 備考 |
 |---|---|---|
-| Linux | 対応 | x86_64（musl 動的リンクバイナリ） |
+| Linux | 対応（aarch64: 実機未検証） | x86_64 / aarch64（musl 動的リンクバイナリ） |
 | macOS | 対応 | Apple Silicon（arm64） |
 | Android | 対応 | Termux（aarch64 / armv7a 実行ファイル）およびアプリ組み込み |
 | Windows | 非対応 | 対象外 |
@@ -30,7 +30,7 @@ IT930x ファームウェアは本ソフトウェアに同梱されていませ�
 
 ### 実行時ライブラリ
 
-- **Linux**: `/lib/ld-musl-x86_64.so.1`、ホスト環境の `libusb-1.0.so.0`、C++ ランタイム。PC/SC リーダーとして利用する場合は `pcscd` などの PC/SC デーモン。
+- **Linux**: x86_64 では `/lib/ld-musl-x86_64.so.1`、aarch64 では `/lib/ld-musl-aarch64.so.1`、ホスト環境の `libusb-1.0.so.0`、C++ ランタイム。PC/SC リーダーとして利用する場合は `pcscd` などの PC/SC デーモン。aarch64 はCIでのビルド・監査のみで、実機未検証です。
 - **macOS**: ホスト環境の libusb、PC/SC デーモン。
 - **Android**: ホストまたはアプリケーション側で USB パーミッションを取得し、ファイルディスクリプタを渡す必要があります（libusb は静的リンク済み）。
 
@@ -40,7 +40,7 @@ IT930x ファームウェアは本ソフトウェアに同梱されていませ�
 
 ```sh
 sudo install -d /opt/px4-userland
-sudo tar -xzf px4-userland-<version>-linux-x86_64.tar.gz -C /opt/px4-userland
+sudo tar -xzf px4-userland-<version>-linux-<arch>.tar.gz -C /opt/px4-userland
 ```
 
 ### PC/SC リーダー設定（Linux / macOS）

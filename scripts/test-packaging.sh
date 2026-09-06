@@ -44,6 +44,14 @@ PATH="$script_dir/testdata:$PATH" python3 "$script_dir/package-artifact.py" \
     --ifd-bundle "$test_root/ifd.bundle" \
     --reader-template "$script_dir/../packaging/pcsc/reader.conf.d/px4-userland.conf.in" \
     --output-dir "$test_root/out-macos"
+PX4_TEST_ARCH=aarch64 PATH="$script_dir/testdata:$PATH" python3 "$script_dir/package-artifact.py" \
+    --platform linux-aarch64 --version "$version" --build-dir "$test_root/build" \
+    --ifd-library "$test_root/build/ifd.so" \
+    --reader-template "$script_dir/../packaging/pcsc/reader.conf.d/px4-userland.conf.in" \
+    --output-dir "$test_root/out-aarch64"
+PX4_TEST_ARCH=aarch64 PATH="$script_dir/testdata:$PATH" python3 "$script_dir/audit-artifact.py" \
+    --platform linux-aarch64 \
+    --archive "$test_root/out-aarch64/px4-userland-$version-linux-aarch64.tar.gz"
 if PATH="$script_dir/testdata:$PATH" PX4_TEST_LINKAGE=bad-all \
     python3 "$script_dir/audit-artifact.py" --platform linux-x86_64 --build-dir "$test_root/build" \
     --ifd-library "$test_root/build/ifd.so"; then
