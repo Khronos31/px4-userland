@@ -8,6 +8,7 @@ python3 "$script_dir/package-artifact.py" --self-test
 python3 "$script_dir/android-link-inventory.py" --help >/dev/null
 test_root=$(mktemp -d /tmp/px4-package-self-test.XXXXXX)
 trap 'find "$test_root" -depth -delete' EXIT
+version=$(tr -d '\n' < "$script_dir/../VERSION")
 mkdir -p "$test_root/build"
 printf '%s\n' px4d px4-ts px4ctl | while IFS= read -r program; do
     printf '%s\n' synthetic >"$test_root/build/$program"
@@ -19,27 +20,27 @@ mkdir -p "$test_root/ifd.bundle/Contents/MacOS"
 printf '%s\n' synthetic >"$test_root/ifd.bundle/Contents/Info.plist"
 printf '%s\n' synthetic >"$test_root/ifd.bundle/Contents/MacOS/libpx4-userland-ifd.dylib"
 PATH="$script_dir/testdata:$PATH" python3 "$script_dir/package-artifact.py" \
-    --platform linux-x86_64 --version 0.1.0 --build-dir "$test_root/build" \
+    --platform linux-x86_64 --version "$version" --build-dir "$test_root/build" \
     --ifd-library "$test_root/build/ifd.so" \
     --reader-template "$script_dir/../packaging/pcsc/reader.conf.d/px4-userland.conf.in" \
     --output-dir "$test_root/out"
 PATH="$script_dir/testdata:$PATH" python3 "$script_dir/package-artifact.py" \
-    --platform linux-x86_64 --version 0.1.0 --build-dir "$test_root/build" \
+    --platform linux-x86_64 --version "$version" --build-dir "$test_root/build" \
     --ifd-library "$test_root/build/ifd.so" \
     --reader-template "$script_dir/../packaging/pcsc/reader.conf.d/px4-userland.conf.in" \
     --output-dir "$test_root/out-second"
-first_sha=$(sha256sum "$test_root/out/px4-userland-0.1.0-linux-x86_64.tar.gz" | awk '{print $1}')
-second_sha=$(sha256sum "$test_root/out-second/px4-userland-0.1.0-linux-x86_64.tar.gz" | awk '{print $1}')
+first_sha=$(sha256sum "$test_root/out/px4-userland-$version-linux-x86_64.tar.gz" | awk '{print $1}')
+second_sha=$(sha256sum "$test_root/out-second/px4-userland-$version-linux-x86_64.tar.gz" | awk '{print $1}')
 [ "$first_sha" = "$second_sha" ] || {
     printf '%s\n' 'deterministic package self-test failed' >&2
     exit 1
 }
-if tar -xOzf "$test_root/out/px4-userland-0.1.0-linux-x86_64.tar.gz" evidence/binary-audit.json | grep -F "$test_root" >/dev/null; then
+if tar -xOzf "$test_root/out/px4-userland-$version-linux-x86_64.tar.gz" evidence/binary-audit.json | grep -F "$test_root" >/dev/null; then
     printf '%s\n' 'binary-audit.json leaked temporary input path' >&2
     exit 1
 fi
 PATH="$script_dir/testdata:$PATH" python3 "$script_dir/package-artifact.py" \
-    --platform darwin-arm64 --version 0.1.0 --build-dir "$test_root/build" \
+    --platform darwin-arm64 --version "$version" --build-dir "$test_root/build" \
     --ifd-bundle "$test_root/ifd.bundle" \
     --reader-template "$script_dir/../packaging/pcsc/reader.conf.d/px4-userland.conf.in" \
     --output-dir "$test_root/out-macos"
@@ -136,11 +137,11 @@ if [ -n "$real_libusb_archive" ]; then
         --libusb-source-archive "$real_libusb_archive"
     source_ref=${PX4_SOURCE_REF:-HEAD}
     if git -C "$script_dir/.." cat-file -e "$source_ref:VERSION" 2>/dev/null; then
-        python3 "$script_dir/package-source.py" --version 0.1.0 \
+        python3 "$script_dir/package-source.py" --version "$version" \
             --source-root "$script_dir/.." --source-ref "$source_ref" \
             --libusb-source-archive "$real_libusb_archive" --output-dir "$test_root/source"
     else
-        if python3 "$script_dir/package-source.py" --version 0.1.0 \
+        if python3 "$script_dir/package-source.py" --version "$version" \
             --source-root "$script_dir/.." --source-ref "$source_ref" \
             --libusb-source-archive "$real_libusb_archive" --output-dir "$test_root/source"; then
             printf '%s\n' 'source package accepted a source ref without VERSION' >&2
