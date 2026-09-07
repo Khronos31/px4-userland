@@ -37,16 +37,20 @@ p = Path(sys.argv[1])
 data = p.read_text()
 old = "https://libusb.info"
 new = "https://libusb.relink-test.invalid"
-if data.count(old) != 1:
-    raise SystemExit("expected one libusb version URL")
-p.write_text(data.replace(old, new), newline="\n")
+if data.count(old) != 2:
+    raise SystemExit(f"expected two libusb version URLs before replacement, found {data.count(old)}")
+modified = data.replace(old, new)
+if modified.count(new) != 2:
+    raise SystemExit(f"expected two replacement URLs after replacement, found {modified.count(new)}")
+p.write_text(modified, newline="\n")
 PY
 "$root/scripts/build-linux-static.sh" --output "$work/original" --libusb-source-dir "$work/original-source"
 "$root/scripts/build-linux-static.sh" --output "$work/modified" --libusb-source-dir "$work/modified-source"
 orig=$(sha256sum "$work/original/px4d" | awk '{print $1}')
 changed=$(sha256sum "$work/modified/px4d" | awk '{print $1}')
 [ "$orig" != "$changed" ] || { printf '%s\n' 'relink did not change px4d' >&2; exit 1; }
-strings "$work/modified/px4d" | grep -F 'libusb.relink-test.invalid' >/dev/null || {
+modified_marker_count=$(strings "$work/modified/px4d" | grep -F -c 'libusb.relink-test.invalid' || true)
+[ "$modified_marker_count" -ge 1 ] || {
     printf '%s\n' 'modified libusb marker is absent from relinked px4d' >&2
     exit 1
 }

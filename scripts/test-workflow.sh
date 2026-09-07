@@ -22,6 +22,17 @@ if grep -E -- 'package-artifact\.sh --platform linux-(x86_64|aarch64)( |$)' "$wo
     exit 1
 fi
 test "$(grep -c 'sudo chown -R' "$workflow")" -ge 2
+test "$(grep -c 'apt_install_retry()' "$workflow")" -eq 2
+# shellcheck disable=SC2016
+test "$(grep -c '\"$attempt\" -le 3' "$workflow")" -eq 2
+test "$(grep -c 'find /var/lib/apt/lists -mindepth 1 -depth -delete' "$workflow")" -eq 2
+if grep -F 'find /var/lib/apt/lists -mindepth 1 -maxdepth 1' "$workflow" >/dev/null; then
+    printf '%s\n' 'apt list cleanup must be recursive' >&2
+    exit 1
+fi
+grep -F 'expected two libusb version URLs before replacement' "$root/scripts/test-static-relink.sh" >/dev/null
+# shellcheck disable=SC2016
+grep -F '[ "$modified_marker_count" -ge 1 ]' "$root/scripts/test-static-relink.sh" >/dev/null
 # shellcheck disable=SC2016
 grep -F 'Authorization: Bearer $GITHUB_TOKEN' "$root/.github/workflows/check-libusb.yml" >/dev/null
 grep -F '7つのbinary archive' "$root/SPEC.md" >/dev/null

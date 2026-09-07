@@ -57,7 +57,17 @@ jobs:
       - name: Build glibc 2.31 IFD and package both variants
         run: |
           docker run --rm -e GITHUB_SHA="$GITHUB_SHA" -v "$GITHUB_WORKSPACE:/src" -w /src debian:11 sh -euxc '
-            apt-get update; apt-get install -y --no-install-recommends cmake ninja-build g++ pkg-config libpcsclite-dev binutils python3;
+            apt_install_retry() {
+              attempt=1;
+              while [ "$attempt" -le 3 ]; do
+                find /var/lib/apt/lists -mindepth 1 -depth -delete;
+                if apt-get update && apt-get install -y --no-install-recommends "$@"; then return 0; fi
+                [ "$attempt" -lt 3 ] || return 1;
+                sleep "$attempt";
+                attempt=$((attempt + 1));
+              done
+            };
+            apt_install_retry cmake ninja-build g++ pkg-config libpcsclite-dev binutils python3;
             scripts/build-linux-ifd.sh --libc glibc --output /src/build-ifd-glibc;
             python3 -c "import ctypes; getattr(ctypes.CDLL(\"/src/build-ifd-glibc/px4-userland-ifd.so\"), \"IFDHCreateChannel\")";
             scripts/package-artifact.sh --platform linux-glibc-x86_64 --version "$(tr -d "\n" < VERSION)" --static-build-dir build-static --ifd-library build-ifd-glibc/px4-userland-ifd.so --reader-template packaging/pcsc/reader.conf.d/px4-userland.conf.in --source-ref "$GITHUB_SHA" --output-dir release-candidate;
@@ -115,7 +125,17 @@ jobs:
             find "$extracted" -depth -delete'
           # glibc IFD is built on a Debian 11 aarch64 runner to prove the 2.31 floor.
           docker run --rm -e GITHUB_SHA="$GITHUB_SHA" -v "$GITHUB_WORKSPACE:/src" -w /src debian:11 sh -euxc '
-            apt-get update; apt-get install -y --no-install-recommends cmake ninja-build g++ pkg-config libpcsclite-dev python3 binutils;
+            apt_install_retry() {
+              attempt=1;
+              while [ "$attempt" -le 3 ]; do
+                find /var/lib/apt/lists -mindepth 1 -depth -delete;
+                if apt-get update && apt-get install -y --no-install-recommends "$@"; then return 0; fi
+                [ "$attempt" -lt 3 ] || return 1;
+                sleep "$attempt";
+                attempt=$((attempt + 1));
+              done
+            };
+            apt_install_retry cmake ninja-build g++ pkg-config libpcsclite-dev python3 binutils;
             scripts/build-linux-ifd.sh --libc glibc --output /src/build-ifd-glibc;
             python3 -c "import ctypes; getattr(ctypes.CDLL(\"/src/build-ifd-glibc/px4-userland-ifd.so\"), \"IFDHCreateChannel\")";
             scripts/package-artifact.sh --platform linux-glibc-aarch64 --version "$(tr -d "\n" < VERSION)" --static-build-dir build-static --ifd-library build-ifd-glibc/px4-userland-ifd.so --reader-template packaging/pcsc/reader.conf.d/px4-userland.conf.in --source-ref "$GITHUB_SHA" --output-dir release-candidate'
