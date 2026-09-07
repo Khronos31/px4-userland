@@ -260,24 +260,28 @@ bool test_reader_config_template()
     constexpr std::string_view runtime = "/tmp/px4-ifd";
     constexpr std::string_view serial = "00001205000960";
     constexpr std::string_view library = "/tmp/px4-ifd/libpx4-userland-ifd.so";
-    CHECK(replace_placeholder(config, "@PX4_RUNTIME_DIR@", runtime));
-    CHECK(replace_placeholder(config, "@PX4_BASE_SERIAL@", serial));
-    CHECK(replace_placeholder(config, "@PX4_IFD_LIBRARY@", library));
-    CHECK(config.find("@PX4_") == std::string::npos);
+    for (const std::string_view access : {"user", "group"}) {
+        std::string rendered = config;
+        CHECK(replace_placeholder(rendered, "@PX4_RUNTIME_DIR@", runtime));
+        CHECK(replace_placeholder(rendered, "@PX4_BASE_SERIAL@", serial));
+        CHECK(replace_placeholder(rendered, "@PX4_ACCESS@", access));
+        CHECK(replace_placeholder(rendered, "@PX4_IFD_LIBRARY@", library));
+        CHECK(rendered.find("@PX4_") == std::string::npos);
 
-    const std::string device_setting = reader_setting(config, "DEVICENAME");
-    const std::string library_setting = reader_setting(config, "LIBPATH");
-    CHECK(!device_setting.empty() && device_setting.front() != '"' &&
-          device_setting.back() != '"' && device_setting.find(';') == std::string::npos);
-    CHECK(!library_setting.empty() && library_setting.front() != '"' &&
-          library_setting.back() != '"');
-    CHECK(device_setting ==
-          "px4-userland:runtime=/tmp/px4-ifd:device=00001205000960:access=user");
-    CHECK(library_setting == library);
-    const auto parsed = parse_ifd_device_name(device_setting.c_str());
-    CHECK(parsed && parsed.value().runtime_directory == runtime &&
-          parsed.value().device_instance == serial &&
-          !parsed.value().group_access);
+        const std::string device_setting = reader_setting(rendered, "DEVICENAME");
+        const std::string library_setting = reader_setting(rendered, "LIBPATH");
+        CHECK(!device_setting.empty() && device_setting.front() != '"' &&
+              device_setting.back() != '"' && device_setting.find(';') == std::string::npos);
+        CHECK(!library_setting.empty() && library_setting.front() != '"' &&
+              library_setting.back() != '"');
+        CHECK(device_setting == "px4-userland:runtime=/tmp/px4-ifd:device=00001205000960:access=" +
+                                   std::string(access));
+        CHECK(library_setting == library);
+        const auto parsed = parse_ifd_device_name(device_setting.c_str());
+        CHECK(parsed && parsed.value().runtime_directory == runtime &&
+              parsed.value().device_instance == serial &&
+              parsed.value().group_access == (access == "group"));
+    }
     return true;
 }
 
