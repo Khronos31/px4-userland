@@ -68,6 +68,30 @@ if grep -F 'rm -rf' "$root/README.md" >/dev/null; then
 fi
 grep -F 'px4-ts --device BASE_SERIAL --receiver 0..7 --system isdb-t|isdb-s --frequency-khz N [--runtime-dir PATH] [--group]' "$root/README.md" >/dev/null
 grep -F '3つすべてに' "$root/README.md" >/dev/null
+grep -F '完全静的CLI + glibc/musl別IFD' "$root/README.md" >/dev/null
+test "$(grep -c 'name: Release candidate Linux x86_64 Ubuntu artifact smoke' "$workflow")" -eq 1
+test "$(grep -c 'name: Release candidate Linux x86_64 Alpine artifact smoke' "$workflow")" -eq 1
+test "$(grep -c 'name: Release candidate Linux aarch64 Ubuntu artifact smoke' "$workflow")" -eq 1
+test "$(grep -c 'name: Release candidate Linux aarch64 Alpine artifact smoke' "$workflow")" -eq 1
+test "$(grep -c 'name: Run exact candidate static CLIs and glibc IFD on Ubuntu$' "$workflow")" -eq 1
+test "$(grep -c 'name: Run exact candidate static CLIs and glibc IFD on Ubuntu arm64' "$workflow")" -eq 1
+test "$(grep -c 'name: Run exact candidate static CLIs and musl IFD in Alpine$' "$workflow")" -eq 1
+test "$(grep -c 'name: Run exact candidate static CLIs and musl IFD in Alpine arm64' "$workflow")" -eq 1
+test "$(grep -c 'needs: release-candidate' "$workflow")" -eq 4
+for job in \
+    release-candidate-linux-ubuntu-x86_64 \
+    release-candidate-linux-alpine-x86_64 \
+    release-candidate-linux-ubuntu-aarch64 \
+    release-candidate-linux-alpine-aarch64; do
+    block=$(awk -v job="$job" '
+        $0 == "  " job ":" { in_job = 1; next }
+        in_job && /^  [^ ]/ { exit }
+        in_job { print }
+    ' "$workflow")
+    checkout_line=$(printf '%s\n' "$block" | grep -n 'actions/checkout@' | head -n 1 | cut -d: -f1)
+    download_line=$(printf '%s\n' "$block" | grep -n 'actions/download-artifact@' | head -n 1 | cut -d: -f1)
+    test -n "$checkout_line" && test -n "$download_line" && test "$checkout_line" -lt "$download_line"
+done
 if grep -F '8 binary archive' "$root/SPEC.md" >/dev/null || grep -F '5つのbinary archive' "$root/SPEC.md" >/dev/null; then
     printf '%s\n' 'SPEC archive count is stale' >&2
     exit 1

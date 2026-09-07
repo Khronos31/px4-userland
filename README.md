@@ -13,7 +13,7 @@
 
 | OS / 環境 | 状態 | 備考 |
 |---|---|---|
-| Linux | 対応（aarch64: 実機未検証） | x86_64 / aarch64（musl 動的リンクバイナリ） |
+| Linux | 対応（aarch64: 実機未検証） | x86_64 / aarch64（完全静的CLI + glibc/musl別IFD） |
 | macOS | 対応 | Apple Silicon（arm64） |
 | Android | 対応 | Termux（aarch64 / armv7a 実行ファイル）およびアプリ組み込み |
 | Windows | 非対応 | 対象外 |
