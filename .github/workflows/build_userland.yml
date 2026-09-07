@@ -56,11 +56,11 @@ jobs:
             for program in px4d px4-ts px4ctl; do /src/build-static/$program --help; done'
       - name: Build glibc 2.31 IFD and package both variants
         run: |
-          docker run --rm -e GITHUB_SHA="$GITHUB_SHA" -v "$GITHUB_WORKSPACE:/src" -w /src debian:11 sh -euxc '
+          docker run --rm -e GITHUB_SHA="$GITHUB_SHA" -v "$GITHUB_WORKSPACE:/src" -w /src debian:11@sha256:6f519a81440354a85eb592c5f32109ab80605f6b892455983a6f618bf87fabe sh -euxc '
             find /etc/apt/sources.list.d -type f -delete;
             printf "%s\\n" \
-              "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20250301T000000Z bullseye main" \
-              "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20250301T000000Z bullseye-security main" \
+              "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20260825T000000Z bullseye main" \
+              "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20260825T000000Z bullseye-security main" \
               > /etc/apt/sources.list;
             apt_install_retry() {
               attempt=1;
@@ -129,11 +129,11 @@ jobs:
             for program in px4d px4-ts px4ctl; do "$extracted/$program" --help; done;
             find "$extracted" -depth -delete'
           # glibc IFD is built on a Debian 11 aarch64 runner to prove the 2.31 floor.
-          docker run --rm -e GITHUB_SHA="$GITHUB_SHA" -v "$GITHUB_WORKSPACE:/src" -w /src debian:11 sh -euxc '
+          docker run --rm -e GITHUB_SHA="$GITHUB_SHA" -v "$GITHUB_WORKSPACE:/src" -w /src debian:11@sha256:6f519a81440354a85eb592c5f32109ab80605f6b892455983a6f618bf87fabe sh -euxc '
             find /etc/apt/sources.list.d -type f -delete;
             printf "%s\\n" \
-              "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20250301T000000Z bullseye main" \
-              "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20250301T000000Z bullseye-security main" \
+              "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20260825T000000Z bullseye main" \
+              "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20260825T000000Z bullseye-security main" \
               > /etc/apt/sources.list;
             apt_install_retry() {
               attempt=1;

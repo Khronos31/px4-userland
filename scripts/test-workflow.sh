@@ -26,9 +26,14 @@ test "$(grep -c 'apt_install_retry()' "$workflow")" -eq 2
 # shellcheck disable=SC2016
 test "$(grep -c '\"$attempt\" -le 3' "$workflow")" -eq 2
 test "$(grep -c 'find /var/lib/apt/lists -mindepth 1 -depth -delete' "$workflow")" -eq 2
-test "$(grep -c 'http://snapshot.debian.org/archive/debian/20250301T000000Z bullseye main' "$workflow")" -eq 2
-test "$(grep -c 'http://snapshot.debian.org/archive/debian-security/20250301T000000Z bullseye-security main' "$workflow")" -eq 2
+test "$(grep -c 'debian:11@sha256:6f519a81440354a85eb592c5f32109ab80605f6b892455983a6f618bf87fabe sh -euxc' "$workflow")" -eq 2
+test "$(grep -c 'http://snapshot.debian.org/archive/debian/20260825T000000Z bullseye main' "$workflow")" -eq 2
+test "$(grep -c 'http://snapshot.debian.org/archive/debian-security/20260825T000000Z bullseye-security main' "$workflow")" -eq 2
 test "$(grep -c 'check-valid-until=no' "$workflow")" -eq 4
+if grep -E 'debian:11([[:space:]]|$)' "$workflow" >/dev/null; then
+    printf '%s\n' 'Debian 11 image must be digest-pinned' >&2
+    exit 1
+fi
 if grep -F 'find /var/lib/apt/lists -mindepth 1 -maxdepth 1' "$workflow" >/dev/null; then
     printf '%s\n' 'apt list cleanup must be recursive' >&2
     exit 1
