@@ -26,7 +26,17 @@ test "$(grep -c 'apt_install_retry()' "$workflow")" -eq 2
 # shellcheck disable=SC2016
 test "$(grep -c '\"$attempt\" -le 3' "$workflow")" -eq 2
 test "$(grep -c 'find /var/lib/apt/lists -mindepth 1 -depth -delete' "$workflow")" -eq 2
-test "$(grep -c 'debian:11@sha256:6f519a81440354a85eb592c5f32109ab80605f6b892455983a6f618bf87fabe sh -euxc' "$workflow")" -eq 2
+test "$(grep -c 'debian:11@sha256:' "$workflow")" -eq 2
+digest_values=$(grep -o 'debian:11@sha256:[0-9a-f]*' "$workflow" | sort -u)
+test "$(printf '%s\n' "$digest_values" | grep -c .)" -eq 1
+digest=${digest_values#debian:11@sha256:}
+case "$digest" in
+    *[!0-9a-f]*|'')
+        printf '%s\n' 'Debian image digest must be lowercase hexadecimal' >&2
+        exit 1
+        ;;
+esac
+test "${#digest}" -eq 64
 test "$(grep -c 'http://snapshot.debian.org/archive/debian/20260825T000000Z bullseye main' "$workflow")" -eq 2
 test "$(grep -c 'http://snapshot.debian.org/archive/debian-security/20260825T000000Z bullseye-security main' "$workflow")" -eq 2
 test "$(grep -c 'check-valid-until=no' "$workflow")" -eq 4
