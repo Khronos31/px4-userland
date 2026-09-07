@@ -176,8 +176,8 @@ cleanup()
 }
 trap cleanup EXIT HUP INT TERM
 prefix=$work/prefix
-archive=$work/libusb-1.0.28.tar.bz2
-libusb_source=$work/libusb-1.0.28
+archive=$work/libusb-1.0.30.tar.bz2
+libusb_source=$work/libusb-1.0.30
 cmake_build=$work/cmake
 link_map_dir=$work/link-maps
 output_probe=$output/px4-ts-probe-$abi
@@ -196,8 +196,8 @@ for prefix_map in "$libusb_source" "$work" "$ndk"; do
     libusb_prefix_maps="$libusb_prefix_maps -fmacro-prefix-map=$prefix_map=."
 done
 
-libusb_url=https://github.com/libusb/libusb/releases/download/v1.0.28/libusb-1.0.28.tar.bz2
-libusb_sha256=966bb0d231f94a474eaae2e67da5ec844d3527a1f386456394ff432580634b29
+libusb_url=https://github.com/libusb/libusb/releases/download/v1.0.30/libusb-1.0.30.tar.bz2
+libusb_sha256=fea36f34f9156400209595e300840767ab1a385ede1dc7ee893015aea9c6dbaf
 if [ -n "$libusb_source_input" ]; then
     mkdir -p "$libusb_source"
     (cd -- "$libusb_source_input" && tar -cf - .) |
@@ -343,7 +343,7 @@ if [ -n "$evidence" ]; then
     evidence_tmp=$(mktemp -d "$evidence.tmp.XXXXXX")
     mkdir -p "$evidence_tmp/libusb" "$evidence_tmp/ndk" \
         "$evidence_tmp/maps" "$evidence_tmp/inventory"
-    cp "$archive" "$evidence_tmp/libusb/libusb-1.0.28.tar.bz2"
+    cp "$archive" "$evidence_tmp/libusb/libusb-1.0.30.tar.bz2"
     cp "$libusb_source/COPYING" "$evidence_tmp/libusb/COPYING"
     cp "$ndk/source.properties" "$evidence_tmp/ndk/source.properties"
     cp "$ndk/NOTICE" "$evidence_tmp/ndk/NOTICE"
@@ -357,7 +357,7 @@ if [ -n "$evidence" ]; then
         printf 'android_abi=%s\n' "$abi"
         printf 'android_api=%s\n' "$api"
         printf 'ndk_revision=%s\n' "$revision"
-        printf 'libusb_version=1.0.28\n'
+        printf 'libusb_version=1.0.30\n'
         printf 'libusb_archive_sha256=%s\n' "$libusb_sha256"
     } >"$evidence_tmp/build.properties"
 fi

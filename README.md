@@ -30,7 +30,7 @@ IT930x ファームウェアは本ソフトウェアに同梱されていませ�
 
 ### 実行時ライブラリ
 
-- **Linux**: x86_64 では `/lib/ld-musl-x86_64.so.1`、aarch64 では `/lib/ld-musl-aarch64.so.1`、ホスト環境の `libusb-1.0.so.0`、C++ ランタイム。PC/SC リーダーとして利用する場合は `pcscd` などの PC/SC デーモン。aarch64 はCIでのビルド・監査のみで、実機未検証です。
+- **Linux**: `px4d`、`px4-ts`、`px4ctl` はPT_INTERPとDT_NEEDEDを持たないmusl完全静的ELFです。PC/SCリーダーとして利用する場合は、hostの`pcscd`が読み込むlibc別（glibcまたはmusl）のIFD Handlerが必要です。aarch64はCIでのビルド・監査のみで、実機未検証です。
 - **macOS**: ホスト環境の libusb、PC/SC デーモン。
 - **Android**: ホストまたはアプリケーション側で USB パーミッションを取得し、ファイルディスクリプタを渡す必要があります（libusb は静的リンク済み）。
 
@@ -199,7 +199,7 @@ PX-Q3U4 内蔵の IC カードリーダーは `px4d` が管理します。本ソ
 
 ### 必要環境
 
-- CMake 3.20 以上
+- CMake 3.16 以上
 - C++17 対応コンパイラ
 - スレッドライブラリ（Threads）
 - libusb 1.0.23 以上
@@ -207,10 +207,19 @@ PX-Q3U4 内蔵の IC カードリーダーは `px4d` が管理します。本ソ
 
 ### 手順
 
+Linuxのrelease buildでは、Alpine/musl上で`build-linux-static.sh`により3つの
+production executableを作り、hostのPC/SC IFDは`build-linux-ifd.sh`で別に作る。
+配布物は`linux-glibc-x86_64`、`linux-musl-x86_64`、`linux-glibc-aarch64`、
+`linux-musl-aarch64`の名前を使い、generic Linux archiveは作らない。
+
 ```sh
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build
+scripts/build-linux-static.sh --output build-linux-static
+scripts/build-linux-ifd.sh --libc glibc --output build-linux-ifd-glibc
+scripts/build-linux-ifd.sh --libc musl --output build-linux-ifd-musl
 ```
+
+固定sourceからの再buildやrelinkが必要な場合は、対応source archiveに含まれる
+`BUILD-RELINK.md`の手順と`third_party/libusb-1.0.30.tar.bz2`を使用する。
 
 主な CMake オプション（詳細は [`CMakeLists.txt`](CMakeLists.txt) を参照）:
 - `-DPX4_ENABLE_LIBUSB=ON|OFF`（既定値: ON）: libusb トランスポートのビルド

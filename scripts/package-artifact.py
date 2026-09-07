@@ -9,6 +9,7 @@ import gzip
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path, PurePosixPath
 import shutil
 import sys
@@ -78,7 +79,7 @@ def validate_libusb_member(member: tarfile.TarInfo) -> bool:
     member_path = PurePosixPath(member.name)
     if ".." in member_path.parts:
         fail(f"unsafe libusb source member: {member.name}")
-    if member_path != PurePosixPath("libusb-1.0.28") and not member.name.startswith("libusb-1.0.28/"):
+    if member_path != PurePosixPath("libusb-1.0.30") and not member.name.startswith("libusb-1.0.30/"):
         fail(f"unexpected libusb source member: {member.name}")
     if member.isdir():
         return False
@@ -132,8 +133,8 @@ def write_checksums(stage: Path) -> None:
 
 
 def verify_pinned_libusb(archive: Path, stage: Path) -> None:
-    if archive.name != "libusb-1.0.28.tar.bz2" or sha256(archive) != LIBUSB_SHA256:
-        fail("Android requires the exact verified libusb-1.0.28 source archive")
+    if archive.name != "libusb-1.0.30.tar.bz2" or sha256(archive) != LIBUSB_SHA256:
+        fail("Android requires the exact verified libusb-1.0.30 source archive")
     try:
         with tarfile.open(archive, "r:bz2") as stream:
             names = []
@@ -141,9 +142,9 @@ def verify_pinned_libusb(archive: Path, stage: Path) -> None:
                 if not validate_libusb_member(member):
                     continue
                 names.append(member.name)
-            if "libusb-1.0.28/COPYING" not in names:
+            if "libusb-1.0.30/COPYING" not in names:
                 fail("verified libusb archive has no COPYING")
-            copying = stream.extractfile(stream.getmember("libusb-1.0.28/COPYING"))
+            copying = stream.extractfile(stream.getmember("libusb-1.0.30/COPYING"))
             if copying is None:
                 fail("cannot extract libusb COPYING")
             (stage / "libusb").mkdir()
@@ -157,17 +158,30 @@ def render_dependency_notice(repo_root: Path, version: str, platform: str,
     template = repo_root / "packaging" / "DEPENDENCY-NOTICE.txt.in"
     if not template.is_file():
         fail(f"missing dependency notice template: {template}")
-    if platform.startswith("android"):
+    if platform.startswith("linux-"):
+        libc = "glibc" if platform.startswith("linux-glibc-") else "musl"
+        dependency_text = (
+            "dependency.libusb.version=1.0.30\n"
+            "dependency.libusb.linkage=static\n"
+            "dependency.libusb.license=LGPL-2.1-or-later\n"
+            f"dependency.libc={libc}\n"
+            "dependency.executables=static-musl\n"
+            f"corresponding-source-archive=px4-userland-{version}-source.tar.gz\n\n"
+            "Linux production executables are fully static musl ELFs. The PC/SC IFD Handler is a separate "
+            f"{libc} shared object loaded by the host pcscd. The libusb source and relink recipe are not in this "
+            f"binary archive; obtain px4-userland-{version}-source.tar.gz from the same candidate handoff.\n"
+        )
+    elif platform.startswith("android"):
         if not ndk_revision:
             fail("Android dependency notice requires an exact NDK revision")
         dependency_text = (
-            "dependency.libusb.version=1.0.28\n"
+            "dependency.libusb.version=1.0.30\n"
             "dependency.libusb.linkage=static\n"
             "dependency.libusb.license=LGPL-2.1-or-later\n"
             f"dependency.ndk.revision={ndk_revision}\n"
             "dependency.ndk.materials=ndk/source.properties,ndk/NOTICE,ndk/NOTICE.toolchain\n"
             "corresponding-source-archive=present\n\n"
-            "This Android archive statically includes libusb 1.0.28 and portions of the NDK C++ runtime. "
+            "This Android archive statically includes libusb 1.0.30 and portions of the NDK C++ runtime. "
             "See libusb/COPYING, the NDK notice materials, THIRD_PARTY_NOTICES.md, evidence/, and the "
             "corresponding-source archive.\n"
         )
@@ -190,7 +204,7 @@ def self_test_android_notice_and_archive(repo_root: Path) -> None:
     revision = "27.0.12077973"
     notice = render_dependency_notice(repo_root, version, platform, revision)
     required = {
-        "dependency.libusb.version": "1.0.28",
+        "dependency.libusb.version": "1.0.30",
         "dependency.libusb.linkage": "static",
         "dependency.libusb.license": "LGPL-2.1-or-later",
         "dependency.ndk.revision": revision,
@@ -242,6 +256,10 @@ def self_test_android_notice_and_archive(repo_root: Path) -> None:
             "schema": 1,
             "version": version,
             "platform": platform,
+            "libc": "android",
+            "architecture": "aarch64",
+            "embedded_libusb": {"version": "1.0.30", "linkage": "static"},
+            "source_ref": "self-test",
             "programs": list(PROGRAMS),
             "production_only": True,
             "files": {},
@@ -277,6 +295,8 @@ def main() -> int:
     parser.add_argument("--platform", choices=sorted(PLATFORMS))
     parser.add_argument("--version")
     parser.add_argument("--build-dir", type=Path)
+    parser.add_argument("--static-build-dir", type=Path,
+                        help="musl static production executables for Linux archives")
     parser.add_argument("--binary-suffix", default="", help="explicit suffix used by build outputs, e.g. arm64-v8a")
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--reader-template", type=Path)
@@ -286,6 +306,7 @@ def main() -> int:
     parser.add_argument("--ndk-root", type=Path)
     parser.add_argument("--link-map-dir", type=Path)
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument("--source-ref", default=os.environ.get("GITHUB_SHA", "working-tree"))
     args = parser.parse_args()
     if args.self_test:
         if args.libusb_source_archive:
@@ -309,13 +330,13 @@ def main() -> int:
                         raise
                 else:
                     fail("malformed VERSION self-test was accepted")
-            archive = Path(temporary) / "libusb-1.0.28.tar.bz2"
+            archive = Path(temporary) / "libusb-1.0.30.tar.bz2"
             with tarfile.open(archive, "w:bz2") as stream:
-                directory = tarfile.TarInfo("libusb-1.0.28")
+                directory = tarfile.TarInfo("libusb-1.0.30")
                 directory.type = tarfile.DIRTYPE
                 stream.addfile(directory)
                 payload = b"license\n"
-                file_info = tarfile.TarInfo("libusb-1.0.28/COPYING")
+                file_info = tarfile.TarInfo("libusb-1.0.30/COPYING")
                 file_info.size = len(payload)
                 stream.addfile(file_info, __import__("io").BytesIO(payload))
             with tarfile.open(archive, "r:bz2") as stream:
@@ -333,9 +354,14 @@ def main() -> int:
         print("libusb packaging self-test: directory accepted, synthetic SHA mismatch rejected")
         print("Android dependency notice and archive audit self-test: PASS")
         return 0
-    for required in (args.platform, args.version, args.build_dir, args.output_dir):
+    for required in (args.platform, args.version, args.output_dir):
         if required is None:
-            parser.error("--platform, --version, --build-dir, and --output-dir are required")
+            parser.error("--platform, --version, and --output-dir are required")
+    if args.platform.startswith("linux-"):
+        if args.static_build_dir is None:
+            parser.error("Linux requires --static-build-dir")
+    elif args.build_dir is None:
+        parser.error("non-Linux platforms require --build-dir")
     if not VERSION_RE.fullmatch(args.version):
         fail(f"version must be strict N.N.N, got {args.version!r}")
     repository_version = source_version(args.repo_root.resolve())
@@ -353,11 +379,12 @@ def main() -> int:
         stage.mkdir()
         for name in ("LICENSE", "README.md", "THIRD_PARTY_NOTICES.md"):
             copy_regular(args.repo_root / name, stage / name)
+        binary_root = (args.static_build_dir if args.platform.startswith("linux-") else args.build_dir).resolve()
         for program in ("px4d", "px4-ts", "px4ctl"):
-            source = args.build_dir.resolve() / f"{program}{('-' + args.binary_suffix) if args.binary_suffix else ''}"
+            source = binary_root / f"{program}{('-' + args.binary_suffix) if args.binary_suffix else ''}"
             copy_regular(source, stage / program)
             (stage / program).chmod(0o755)
-        if platform_kind in ("linux", "darwin"):
+        if platform_kind.startswith("linux") or platform_kind == "darwin":
             if not args.reader_template:
                 fail("--reader-template is required for native platforms")
             copy_regular(args.reader_template.resolve(), stage / "reader.conf.d" / "px4-userland.conf")
@@ -386,7 +413,7 @@ def main() -> int:
                    render_dependency_notice(args.repo_root, args.version, args.platform, revision))
         audit_args = argparse.Namespace(
             platform=args.platform,
-            build_dir=args.build_dir,
+            build_dir=binary_root,
             binary_suffix=args.binary_suffix,
             repo_root=args.repo_root,
             ifd_library=args.ifd_library,
@@ -402,6 +429,13 @@ def main() -> int:
             "schema": 1,
             "version": args.version,
             "platform": args.platform,
+            "libc": ("glibc" if args.platform.startswith("linux-glibc-") else
+                      "musl" if args.platform.startswith("linux-musl-") else
+                      "android" if args.platform.startswith("android-") else "darwin"),
+            "architecture": args.platform.rsplit("-", 1)[-1],
+            "embedded_libusb": {"version": "1.0.30", "linkage": "static"}
+                if args.platform.startswith("linux-") or args.platform.startswith("android-") else None,
+            "source_ref": args.source_ref,
             "programs": ["px4d", "px4-ts", "px4ctl"],
             "production_only": True,
             "files": {},

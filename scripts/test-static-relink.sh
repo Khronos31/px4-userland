@@ -1,0 +1,57 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# Clean-tree proof that a modified LGPL libusb is incorporated in a relink.
+set -eu
+root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+archive=
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+    --libusb-source-archive)
+        [ "$#" -ge 2 ] || exit 2
+        archive=$2
+        shift 2
+        ;;
+    --help)
+        printf '%s\n' "usage: $0 --libusb-source-archive FILE"
+        exit 0
+        ;;
+    *)
+        printf '%s\n' "unknown argument: $1" >&2
+        exit 2
+        ;;
+    esac
+done
+[ -f "$archive" ] || { printf '%s\n' '--libusb-source-archive is required' >&2; exit 2; }
+command -v python3 >/dev/null || { printf '%s\n' 'python3 is required' >&2; exit 1; }
+work=$(mktemp -d /tmp/px4-static-relink.XXXXXX)
+cleanup() { find "$work" -depth -delete; }
+trap cleanup EXIT HUP INT TERM
+mkdir -p "$work/libusb" "$work/original-source" "$work/modified-source" "$work/original" "$work/modified"
+tar -xjf "$archive" -C "$work/libusb" --strip-components=1
+cp -a "$work/libusb/." "$work/original-source/"
+cp -a "$work/libusb/." "$work/modified-source/"
+python3 - "$work/modified-source/libusb/core.c" <<'PY'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+data = p.read_text()
+old = "https://libusb.info"
+new = "https://libusb.relink-test.invalid"
+if data.count(old) != 1:
+    raise SystemExit("expected one libusb version URL")
+p.write_text(data.replace(old, new), newline="\n")
+PY
+"$root/scripts/build-linux-static.sh" --output "$work/original" --libusb-source-dir "$work/original-source"
+"$root/scripts/build-linux-static.sh" --output "$work/modified" --libusb-source-dir "$work/modified-source"
+orig=$(sha256sum "$work/original/px4d" | awk '{print $1}')
+changed=$(sha256sum "$work/modified/px4d" | awk '{print $1}')
+[ "$orig" != "$changed" ] || { printf '%s\n' 'relink did not change px4d' >&2; exit 1; }
+strings "$work/modified/px4d" | grep -F 'libusb.relink-test.invalid' >/dev/null || {
+    printf '%s\n' 'modified libusb marker is absent from relinked px4d' >&2
+    exit 1
+}
+if strings "$work/original/px4d" | grep -F 'libusb.relink-test.invalid' >/dev/null; then
+    printf '%s\n' 'modified marker unexpectedly present in original px4d' >&2
+    exit 1
+fi
+printf '%s\n' 'static libusb relink incorporated modified source: PASS'

@@ -6,6 +6,7 @@ python3 "$script_dir/audit-artifact.py" --self-test
 python3 "$script_dir/audit-artifact.py" --help | grep -F -- '--ndk-root' >/dev/null
 python3 "$script_dir/package-artifact.py" --self-test
 python3 "$script_dir/android-link-inventory.py" --help >/dev/null
+"$script_dir/test-workflow.sh"
 test_root=$(mktemp -d /tmp/px4-package-self-test.XXXXXX)
 trap 'find "$test_root" -depth -delete' EXIT
 version=$(tr -d '\n' < "$script_dir/../VERSION")
@@ -20,22 +21,22 @@ mkdir -p "$test_root/ifd.bundle/Contents/MacOS"
 printf '%s\n' synthetic >"$test_root/ifd.bundle/Contents/Info.plist"
 printf '%s\n' synthetic >"$test_root/ifd.bundle/Contents/MacOS/libpx4-userland-ifd.dylib"
 PATH="$script_dir/testdata:$PATH" python3 "$script_dir/package-artifact.py" \
-    --platform linux-x86_64 --version "$version" --build-dir "$test_root/build" \
+    --platform linux-musl-x86_64 --version "$version" --static-build-dir "$test_root/build" \
     --ifd-library "$test_root/build/ifd.so" \
     --reader-template "$script_dir/../packaging/pcsc/reader.conf.d/px4-userland.conf.in" \
     --output-dir "$test_root/out"
 PATH="$script_dir/testdata:$PATH" python3 "$script_dir/package-artifact.py" \
-    --platform linux-x86_64 --version "$version" --build-dir "$test_root/build" \
+    --platform linux-musl-x86_64 --version "$version" --static-build-dir "$test_root/build" \
     --ifd-library "$test_root/build/ifd.so" \
     --reader-template "$script_dir/../packaging/pcsc/reader.conf.d/px4-userland.conf.in" \
     --output-dir "$test_root/out-second"
-first_sha=$(sha256sum "$test_root/out/px4-userland-$version-linux-x86_64.tar.gz" | awk '{print $1}')
-second_sha=$(sha256sum "$test_root/out-second/px4-userland-$version-linux-x86_64.tar.gz" | awk '{print $1}')
+first_sha=$(sha256sum "$test_root/out/px4-userland-$version-linux-musl-x86_64.tar.gz" | awk '{print $1}')
+second_sha=$(sha256sum "$test_root/out-second/px4-userland-$version-linux-musl-x86_64.tar.gz" | awk '{print $1}')
 [ "$first_sha" = "$second_sha" ] || {
     printf '%s\n' 'deterministic package self-test failed' >&2
     exit 1
 }
-if tar -xOzf "$test_root/out/px4-userland-$version-linux-x86_64.tar.gz" evidence/binary-audit.json | grep -F "$test_root" >/dev/null; then
+if tar -xOzf "$test_root/out/px4-userland-$version-linux-musl-x86_64.tar.gz" evidence/binary-audit.json | grep -F "$test_root" >/dev/null; then
     printf '%s\n' 'binary-audit.json leaked temporary input path' >&2
     exit 1
 fi
@@ -45,15 +46,23 @@ PATH="$script_dir/testdata:$PATH" python3 "$script_dir/package-artifact.py" \
     --reader-template "$script_dir/../packaging/pcsc/reader.conf.d/px4-userland.conf.in" \
     --output-dir "$test_root/out-macos"
 PX4_TEST_ARCH=aarch64 PATH="$script_dir/testdata:$PATH" python3 "$script_dir/package-artifact.py" \
-    --platform linux-aarch64 --version "$version" --build-dir "$test_root/build" \
+    --platform linux-musl-aarch64 --version "$version" --static-build-dir "$test_root/build" \
     --ifd-library "$test_root/build/ifd.so" \
     --reader-template "$script_dir/../packaging/pcsc/reader.conf.d/px4-userland.conf.in" \
     --output-dir "$test_root/out-aarch64"
 PX4_TEST_ARCH=aarch64 PATH="$script_dir/testdata:$PATH" python3 "$script_dir/audit-artifact.py" \
-    --platform linux-aarch64 \
-    --archive "$test_root/out-aarch64/px4-userland-$version-linux-aarch64.tar.gz"
+    --platform linux-musl-aarch64 \
+    --archive "$test_root/out-aarch64/px4-userland-$version-linux-musl-aarch64.tar.gz"
+PX4_TEST_LIBC=glibc PATH="$script_dir/testdata:$PATH" python3 "$script_dir/package-artifact.py" \
+    --platform linux-glibc-x86_64 --version "$version" --static-build-dir "$test_root/build" \
+    --ifd-library "$test_root/build/ifd.so" \
+    --reader-template "$script_dir/../packaging/pcsc/reader.conf.d/px4-userland.conf.in" \
+    --source-ref self-test --output-dir "$test_root/out-glibc"
+PX4_TEST_LIBC=glibc PATH="$script_dir/testdata:$PATH" python3 "$script_dir/audit-artifact.py" \
+    --platform linux-glibc-x86_64 \
+    --archive "$test_root/out-glibc/px4-userland-$version-linux-glibc-x86_64.tar.gz"
 if PATH="$script_dir/testdata:$PATH" PX4_TEST_LINKAGE=bad-all \
-    python3 "$script_dir/audit-artifact.py" --platform linux-x86_64 --build-dir "$test_root/build" \
+    python3 "$script_dir/audit-artifact.py" --platform linux-musl-x86_64 --build-dir "$test_root/build" \
     --ifd-library "$test_root/build/ifd.so"; then
     printf '%s\n' 'negative Linux libusb linkage test failed' >&2
     exit 1
@@ -135,10 +144,10 @@ with tarfile.open(archive, "r:gz") as stream:
 PY
     printf '%s\n' 'real Android package and final archive audit: PASS'
 fi
-real_libusb_archive=${PX4_LIBUSB_1_0_28_ARCHIVE:-}
+real_libusb_archive=${PX4_LIBUSB_1_0_30_ARCHIVE:-}
 if [ -n "$real_libusb_archive" ]; then
     [ -f "$real_libusb_archive" ] || {
-        printf '%s\n' "PX4_LIBUSB_1_0_28_ARCHIVE is not a file: $real_libusb_archive" >&2
+        printf '%s\n' "PX4_LIBUSB_1_0_30_ARCHIVE is not a file: $real_libusb_archive" >&2
         exit 1
     }
     python3 "$script_dir/package-artifact.py" --self-test \

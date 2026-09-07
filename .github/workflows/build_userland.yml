@@ -27,86 +27,199 @@ on:
   workflow_dispatch:
 
 jobs:
-  ubuntu-glibc:
-    name: Ubuntu glibc
+  ubuntu-glibc-tests:
+    name: Ubuntu glibc x86_64 unit and integration tests
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y cmake ninja-build g++ pkg-config libusb-1.0-0-dev libpcsclite-dev
-      - name: Build and test
+      - name: Build and run the complete CTest suite
         run: |
-          pkg-config --modversion libpcsclite
-          cmake -S . -B build-userland -G Ninja -DPX4_BUILD_TESTS=ON -DPX4_REQUIRE_PCSC_IFD=ON
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y cmake ninja-build g++ pkg-config libusb-1.0-0-dev libpcsclite-dev
+          cmake -S . -B build-userland -G Ninja -DCMAKE_BUILD_TYPE=Release -DPX4_BUILD_TESTS=ON -DPX4_REQUIRE_PCSC_IFD=ON
           cmake --build build-userland
-          ctest --test-dir build-userland -R '^px4_ifd_(tests|symbols)$' --no-tests=error --output-on-failure
           ctest --test-dir build-userland --output-on-failure
 
-  alpine-musl:
-    name: Alpine musl
+  linux-x86_64:
+    name: Linux x86_64 static and libc-qualified IFD
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Build and test in Alpine
+      - name: Build static executables in Alpine 3.22
         run: |
-          docker run --rm \
-          -v "$GITHUB_WORKSPACE:/src" \
-          -w /src \
-          alpine:3.20 \
-          sh -euxc \
-          'apk add --no-cache cmake samurai g++ pkgconf libusb-dev pcsc-lite-dev python3 binutils;
-          pkg-config --modversion libpcsclite;
-          cmake -S . -B build-userland -G Ninja -DCMAKE_BUILD_TYPE=Release -DPX4_BUILD_TESTS=ON -DPX4_REQUIRE_PCSC_IFD=ON;
-          cmake --build build-userland;
-          ctest --test-dir build-userland -R "^px4_ifd_(tests|symbols)$" --no-tests=error --output-on-failure;
-          ctest --test-dir build-userland --output-on-failure;
-          version=$(tr -d "\\n" < VERSION);
-          ifd=$(find build-userland -type f -name "libpx4-userland-ifd.so" -print -quit);
-          test -n "$ifd";
-          mkdir -p /src/release-candidate/linux;
-          scripts/package-artifact.sh --platform linux-x86_64 --version "$version" \
-          --build-dir build-userland --ifd-library "$ifd" \
-          --reader-template packaging/pcsc/reader.conf.d/px4-userland.conf.in \
-          --output-dir /src/release-candidate/linux'
-      - name: Upload Linux candidate archive
+          docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src alpine:3.22 sh -euxc '
+            apk add --no-cache cmake samurai gcc g++ make pkgconf libusb-dev pcsc-lite-dev python3 binutils curl tar bzip2 linux-headers;
+            cmake -S . -B build-userland -G Ninja -DCMAKE_BUILD_TYPE=Release -DPX4_BUILD_TESTS=ON -DPX4_REQUIRE_PCSC_IFD=ON;
+            cmake --build build-userland;
+            ctest --test-dir build-userland --output-on-failure;
+            scripts/build-linux-static.sh --output /src/build-static;
+            for program in px4d px4-ts px4ctl; do /src/build-static/$program --help; done'
+      - name: Build glibc 2.31 IFD and package both variants
+        run: |
+          docker run --rm -e GITHUB_SHA="$GITHUB_SHA" -v "$GITHUB_WORKSPACE:/src" -w /src debian:11 sh -euxc '
+            apt-get update; apt-get install -y --no-install-recommends cmake ninja-build g++ pkg-config libpcsclite-dev binutils python3;
+            scripts/build-linux-ifd.sh --libc glibc --output /src/build-ifd-glibc;
+            python3 -c "import ctypes; getattr(ctypes.CDLL(\"/src/build-ifd-glibc/px4-userland-ifd.so\"), \"IFDHCreateChannel\")";
+            scripts/package-artifact.sh --platform linux-glibc-x86_64 --version "$(tr -d "\n" < VERSION)" --static-build-dir build-static --ifd-library build-ifd-glibc/px4-userland-ifd.so --reader-template packaging/pcsc/reader.conf.d/px4-userland.conf.in --source-ref "$GITHUB_SHA" --output-dir release-candidate;
+            true'
+      - name: Build and test matching musl IFD
+        run: |
+          docker run --rm -e GITHUB_SHA="$GITHUB_SHA" -v "$GITHUB_WORKSPACE:/src" -w /src alpine:3.22 sh -euxc '
+            apk add --no-cache cmake samurai g++ pkgconf pcsc-lite-dev python3 binutils tar bzip2 linux-headers;
+            scripts/build-linux-ifd.sh --libc musl --output /src/build-ifd-musl;
+            python3 -c "import ctypes; getattr(ctypes.CDLL(\"/src/build-ifd-musl/px4-userland-ifd.so\"), \"IFDHCreateChannel\")";
+            scripts/package-artifact.sh --platform linux-musl-x86_64 --version "$(tr -d "\n" < VERSION)" --static-build-dir build-static --ifd-library build-ifd-musl/px4-userland-ifd.so --reader-template packaging/pcsc/reader.conf.d/px4-userland.conf.in --source-ref "$GITHUB_SHA" --output-dir release-candidate;
+            extracted=/tmp/packaged-musl-x86_64; mkdir -p "$extracted";
+            tar -xzf release-candidate/px4-userland-$(tr -d "\n" < VERSION)-linux-musl-x86_64.tar.gz -C "$extracted";
+            for program in px4d px4-ts px4ctl; do "$extracted/$program" --help; done;
+            find "$extracted" -depth -delete'
+      - name: Audit and static start checks on Ubuntu
+        run: |
+          version="$(tr -d '\n' < VERSION)"
+          for libc in glibc musl; do scripts/audit-artifact.sh --platform "linux-$libc-x86_64" --archive "release-candidate/px4-userland-$version-linux-$libc-x86_64.tar.gz"; done
+          for program in px4d px4-ts px4ctl; do build-static/$program --help; done
+          sudo chown -R "$(id -u):$(id -g)" build-userland build-static build-ifd-glibc build-ifd-musl release-candidate
+      - name: Upload Linux x86_64 candidate archives
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: rc-linux
-          path: release-candidate/linux/*.tar.gz
+          name: rc-linux-x86_64
+          path: release-candidate/*.tar.gz
           if-no-files-found: error
+      - name: Clean mounted Linux build outputs
+        if: always()
+        run: |
+          sudo chown -R "$(id -u):$(id -g)" build-userland build-static build-ifd-glibc build-ifd-musl release-candidate 2>/dev/null || true
+          for path in build-userland build-static build-ifd-glibc build-ifd-musl release-candidate; do
+            if [ -e "$path" ]; then find "$path" -depth -delete; fi
+          done
 
-  alpine-musl-aarch64:
-    name: Alpine musl (Linux aarch64 native)
+  linux-aarch64:
+    name: Linux aarch64 static and libc-qualified IFD
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Build and test in native arm64 Alpine
+      - name: Build static and matching IFD variants in Alpine 3.22
         run: |
-          docker run --rm \
-          -v "$GITHUB_WORKSPACE:/src" \
-          -w /src \
-          alpine:3.20 \
-          sh -euxc \
-          'apk add --no-cache cmake samurai g++ pkgconf libusb-dev pcsc-lite-dev python3 binutils;
-          pkg-config --modversion libpcsclite;
-          cmake -S . -B build-userland -G Ninja -DCMAKE_BUILD_TYPE=Release -DPX4_BUILD_TESTS=ON -DPX4_REQUIRE_PCSC_IFD=ON;
-          cmake --build build-userland;
-          ctest --test-dir build-userland -R "^px4_ifd_(tests|symbols)$" --no-tests=error --output-on-failure;
-          ctest --test-dir build-userland --output-on-failure;
-          version=$(tr -d "\\n" < VERSION);
-          ifd=$(find build-userland -type f -name "libpx4-userland-ifd.so" -print -quit);
-          test -n "$ifd";
-          mkdir -p /src/release-candidate/linux-aarch64;
-          scripts/package-artifact.sh --platform linux-aarch64 --version "$version" \
-          --build-dir build-userland --ifd-library "$ifd" \
-          --reader-template packaging/pcsc/reader.conf.d/px4-userland.conf.in \
-          --output-dir /src/release-candidate/linux-aarch64'
-      - name: Upload Linux aarch64 candidate archive
+          docker run --rm -e GITHUB_SHA="$GITHUB_SHA" -v "$GITHUB_WORKSPACE:/src" -w /src alpine:3.22 sh -euxc '
+            apk add --no-cache cmake samurai gcc g++ make pkgconf libusb-dev pcsc-lite-dev python3 binutils curl tar bzip2 linux-headers;
+            cmake -S . -B build-userland -G Ninja -DCMAKE_BUILD_TYPE=Release -DPX4_BUILD_TESTS=ON -DPX4_REQUIRE_PCSC_IFD=ON;
+            cmake --build build-userland;
+            ctest --test-dir build-userland --output-on-failure;
+            scripts/build-linux-static.sh --output /src/build-static;
+            scripts/build-linux-ifd.sh --libc musl --output /src/build-ifd-musl;
+            python3 -c "import ctypes; getattr(ctypes.CDLL(\"/src/build-ifd-musl/px4-userland-ifd.so\"), \"IFDHCreateChannel\")";
+            scripts/package-artifact.sh --platform linux-musl-aarch64 --version "$(tr -d "\n" < VERSION)" --static-build-dir build-static --ifd-library build-ifd-musl/px4-userland-ifd.so --reader-template packaging/pcsc/reader.conf.d/px4-userland.conf.in --source-ref "$GITHUB_SHA" --output-dir release-candidate;
+            extracted=/tmp/packaged-musl-aarch64; mkdir -p "$extracted";
+            tar -xzf release-candidate/px4-userland-$(tr -d "\n" < VERSION)-linux-musl-aarch64.tar.gz -C "$extracted";
+            for program in px4d px4-ts px4ctl; do "$extracted/$program" --help; done;
+            find "$extracted" -depth -delete'
+          # glibc IFD is built on a Debian 11 aarch64 runner to prove the 2.31 floor.
+          docker run --rm -e GITHUB_SHA="$GITHUB_SHA" -v "$GITHUB_WORKSPACE:/src" -w /src debian:11 sh -euxc '
+            apt-get update; apt-get install -y --no-install-recommends cmake ninja-build g++ pkg-config libpcsclite-dev python3 binutils;
+            scripts/build-linux-ifd.sh --libc glibc --output /src/build-ifd-glibc;
+            python3 -c "import ctypes; getattr(ctypes.CDLL(\"/src/build-ifd-glibc/px4-userland-ifd.so\"), \"IFDHCreateChannel\")";
+            scripts/package-artifact.sh --platform linux-glibc-aarch64 --version "$(tr -d "\n" < VERSION)" --static-build-dir build-static --ifd-library build-ifd-glibc/px4-userland-ifd.so --reader-template packaging/pcsc/reader.conf.d/px4-userland.conf.in --source-ref "$GITHUB_SHA" --output-dir release-candidate'
+      - name: Audit candidate archives
+        run: |
+          version="$(tr -d '\n' < VERSION)"
+          for program in px4d px4-ts px4ctl; do build-static/$program --help; done
+          for libc in glibc musl; do scripts/audit-artifact.sh --platform "linux-$libc-aarch64" --archive "release-candidate/px4-userland-$version-linux-$libc-aarch64.tar.gz"; done
+          sudo chown -R "$(id -u):$(id -g)" build-userland build-static build-ifd-glibc build-ifd-musl release-candidate
+      - name: Upload Linux aarch64 candidate archives
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: rc-linux-aarch64
-          path: release-candidate/linux-aarch64/*.tar.gz
+          path: release-candidate/*.tar.gz
           if-no-files-found: error
+      - name: Clean mounted Linux build outputs
+        if: always()
+        run: |
+          sudo chown -R "$(id -u):$(id -g)" build-userland build-static build-ifd-glibc build-ifd-musl release-candidate 2>/dev/null || true
+          for path in build-userland build-static build-ifd-glibc build-ifd-musl release-candidate; do
+            if [ -e "$path" ]; then find "$path" -depth -delete; fi
+          done
+
+  static-start-x86_64:
+    name: Downloaded static x86_64 executable start checks
+    needs: linux-x86_64
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: rc-linux-x86_64
+          path: ${{ runner.temp }}/downloaded-x86_64
+      - name: Start exact downloaded static executables
+        run: |
+          set -eu
+          for archive in "$RUNNER_TEMP"/downloaded-x86_64/*.tar.gz; do
+            extract="$RUNNER_TEMP/extract-$(basename "$archive" .tar.gz)"
+            mkdir -p "$extract"
+            tar -xzf "$archive" -C "$extract"
+            for program in px4d px4-ts px4ctl; do "$extract/$program" --help; done
+          done
+          find "$RUNNER_TEMP/downloaded-x86_64" "$RUNNER_TEMP"/extract-* -depth -delete 2>/dev/null || true
+
+  static-start-aarch64:
+    name: Downloaded static aarch64 executable start checks
+    needs: linux-aarch64
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: rc-linux-aarch64
+          path: ${{ runner.temp }}/downloaded-aarch64
+      - name: Start exact downloaded static executables
+        run: |
+          set -eu
+          for archive in "$RUNNER_TEMP"/downloaded-aarch64/*.tar.gz; do
+            extract="$RUNNER_TEMP/extract-$(basename "$archive" .tar.gz)"
+            mkdir -p "$extract"
+            tar -xzf "$archive" -C "$extract"
+            for program in px4d px4-ts px4ctl; do "$extract/$program" --help; done
+          done
+          find "$RUNNER_TEMP/downloaded-aarch64" "$RUNNER_TEMP"/extract-* -depth -delete 2>/dev/null || true
+
+  source-relink-x86_64:
+    name: Corresponding-source static relink proof x86_64
+    needs: source-archive
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: rc-source
+          path: ${{ runner.temp }}/source-archive
+      - name: Relink modified libusb source in Alpine
+        run: |
+          set -eu
+          source_root="$RUNNER_TEMP/source-root"
+          mkdir -p "$source_root"
+          tar -xzf "$RUNNER_TEMP"/source-archive/*.tar.gz -C "$source_root"
+          docker run --rm -v "$source_root:/src" -w /src/repository alpine:3.22 sh -euxc '
+            apk add --no-cache cmake samurai gcc g++ make pkgconf python3 binutils curl tar bzip2 linux-headers;
+            test -f /src/third_party/libusb-1.0.30.tar.bz2;
+            scripts/test-static-relink.sh --libusb-source-archive /src/third_party/libusb-1.0.30.tar.bz2'
+          find "$source_root" -depth -delete
+
+  source-relink-aarch64:
+    name: Corresponding-source static relink proof aarch64
+    needs: source-archive
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: rc-source
+          path: ${{ runner.temp }}/source-archive
+      - name: Relink modified libusb source in native Alpine
+        run: |
+          set -eu
+          source_root="$RUNNER_TEMP/source-root"
+          mkdir -p "$source_root"
+          tar -xzf "$RUNNER_TEMP"/source-archive/*.tar.gz -C "$source_root"
+          docker run --rm -v "$source_root:/src" -w /src/repository alpine:3.22 sh -euxc '
+            apk add --no-cache cmake samurai gcc g++ make pkgconf python3 binutils curl tar bzip2 linux-headers;
+            test -f /src/third_party/libusb-1.0.30.tar.bz2;
+            scripts/test-static-relink.sh --libusb-source-archive /src/third_party/libusb-1.0.30.tar.bz2'
+          find "$source_root" -depth -delete
 
   macos:
     name: macOS
@@ -174,7 +287,7 @@ jobs:
           version="$(tr -d '\n' < VERSION)"
           scripts/package-artifact.sh --platform "${{ matrix.platform }}" --version "$version" \
             --build-dir "$artifact_root/output" --binary-suffix "$ABI" \
-            --libusb-source-archive "$artifact_root/evidence/libusb/libusb-1.0.28.tar.bz2" \
+            --libusb-source-archive "$artifact_root/evidence/libusb/libusb-1.0.30.tar.bz2" \
             --ndk-root "$ANDROID_NDK_HOME" \
             --link-map-dir "$artifact_root/evidence/maps" \
             --output-dir "$artifact_root/package"
@@ -195,10 +308,10 @@ jobs:
           fetch-depth: 1
       - name: Build and audit source archive
         run: |
-          libusb="$RUNNER_TEMP/libusb-1.0.28.tar.bz2"
+          libusb="$RUNNER_TEMP/libusb-1.0.30.tar.bz2"
           curl -fsSL --retry 2 -o "$libusb" \
-            https://github.com/libusb/libusb/releases/download/v1.0.28/libusb-1.0.28.tar.bz2
-          echo '966bb0d231f94a474eaae2e67da5ec844d3527a1f386456394ff432580634b29  '"$libusb" | sha256sum -c -
+            https://github.com/libusb/libusb/releases/download/v1.0.30/libusb-1.0.30.tar.bz2
+          echo 'fea36f34f9156400209595e300840767ab1a385ede1dc7ee893015aea9c6dbaf  '"$libusb" | sha256sum -c -
           version="$(tr -d '\n' < VERSION)"
           mkdir -p "$RUNNER_TEMP/release-candidate/source"
           scripts/package-source.sh --version "$version" --source-root "$GITHUB_WORKSPACE" \
@@ -213,7 +326,7 @@ jobs:
 
   release-candidate:
     name: Assemble release-candidate artifact
-    needs: [alpine-musl, alpine-musl-aarch64, macos, android-api-24, source-archive]
+    needs: [ubuntu-glibc-tests, linux-x86_64, linux-aarch64, static-start-x86_64, static-start-aarch64, source-relink-x86_64, source-relink-aarch64, macos, android-api-24, source-archive]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -247,8 +360,10 @@ jobs:
 
           version = sys.argv[1]
           expected = {
-              f'px4-userland-{version}-linux-x86_64.tar.gz',
-              f'px4-userland-{version}-linux-aarch64.tar.gz',
+              f'px4-userland-{version}-linux-glibc-x86_64.tar.gz',
+              f'px4-userland-{version}-linux-musl-x86_64.tar.gz',
+              f'px4-userland-{version}-linux-glibc-aarch64.tar.gz',
+              f'px4-userland-{version}-linux-musl-aarch64.tar.gz',
               f'px4-userland-{version}-darwin-arm64.tar.gz',
               f'px4-userland-{version}-android-aarch64.tar.gz',
               f'px4-userland-{version}-android-armv7a.tar.gz',
@@ -258,23 +373,28 @@ jobs:
               path.name for path in Path('release-candidate').iterdir()
               if path.is_file() and path.name.endswith('.tar.gz')
           }
-          if len(actual) != 6 or actual != expected:
+          if len(actual) != 8 or actual != expected:
               raise SystemExit(f'exact archive set required: expected={sorted(expected)}, actual={sorted(actual)}')
           PY
           cd release-candidate
-          linux_archive="px4-userland-$version-linux-x86_64.tar.gz"
-          linux_aarch64_archive="px4-userland-$version-linux-aarch64.tar.gz"
+          linux_glibc_archive="px4-userland-$version-linux-glibc-x86_64.tar.gz"
+          linux_musl_archive="px4-userland-$version-linux-musl-x86_64.tar.gz"
+          linux_glibc_aarch64_archive="px4-userland-$version-linux-glibc-aarch64.tar.gz"
+          linux_musl_aarch64_archive="px4-userland-$version-linux-musl-aarch64.tar.gz"
           macos_archive="px4-userland-$version-darwin-arm64.tar.gz"
           android_aarch64_archive="px4-userland-$version-android-aarch64.tar.gz"
           android_armv7a_archive="px4-userland-$version-android-armv7a.tar.gz"
           source_archive="px4-userland-$version-source.tar.gz"
-          ../scripts/audit-artifact.sh --platform linux-x86_64 --archive "$linux_archive"
-          ../scripts/audit-artifact.sh --platform linux-aarch64 --archive "$linux_aarch64_archive"
+          ../scripts/audit-artifact.sh --platform linux-glibc-x86_64 --archive "$linux_glibc_archive"
+          ../scripts/audit-artifact.sh --platform linux-musl-x86_64 --archive "$linux_musl_archive"
+          ../scripts/audit-artifact.sh --platform linux-glibc-aarch64 --archive "$linux_glibc_aarch64_archive"
+          ../scripts/audit-artifact.sh --platform linux-musl-aarch64 --archive "$linux_musl_aarch64_archive"
           ../scripts/audit-artifact.sh --platform darwin-arm64 --archive "$macos_archive"
           ../scripts/audit-artifact.sh --platform android-aarch64 --archive "$android_aarch64_archive"
           ../scripts/audit-artifact.sh --platform android-armv7a --archive "$android_armv7a_archive"
           ../scripts/audit-artifact.sh --source-archive --archive "$source_archive"
-          sha256sum "$linux_archive" "$linux_aarch64_archive" "$macos_archive" "$android_aarch64_archive" \
+          sha256sum "$linux_glibc_archive" "$linux_musl_archive" "$linux_glibc_aarch64_archive" \
+            "$linux_musl_aarch64_archive" "$macos_archive" "$android_aarch64_archive" \
             "$android_armv7a_archive" "$source_archive" > SHA256SUMS
           sha256sum -c SHA256SUMS
       - name: Upload single release-candidate artifact

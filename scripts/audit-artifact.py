@@ -18,26 +18,34 @@ import tempfile
 
 
 PLATFORMS = {
-    "linux-x86_64": "linux",
-    "linux-aarch64": "linux",
+    "linux-glibc-x86_64": "linux-glibc",
+    "linux-glibc-aarch64": "linux-glibc",
+    "linux-musl-x86_64": "linux-musl",
+    "linux-musl-aarch64": "linux-musl",
     "darwin-arm64": "darwin",
     "android-aarch64": "android",
     "android-armv7a": "android",
 }
 LINUX_TARGETS = {
-    "linux-x86_64": {
+    "linux-glibc-x86_64": {
         "machine": "Advanced Micro Devices X86-64",
-        "interpreter": "/lib/ld-musl-x86_64.so.1",
-        "libc": "libc.musl-x86_64.so.1",
+        "libc": "libc.so.6", "floor": "2.31",
     },
-    "linux-aarch64": {
+    "linux-glibc-aarch64": {
         "machine": "AArch64",
-        "interpreter": "/lib/ld-musl-aarch64.so.1",
-        "libc": "libc.musl-aarch64.so.1",
+        "libc": "libc.so.6", "floor": "2.31",
+    },
+    "linux-musl-x86_64": {
+        "machine": "Advanced Micro Devices X86-64",
+        "libc": "libc.musl-x86_64.so.1", "floor": None,
+    },
+    "linux-musl-aarch64": {
+        "machine": "AArch64",
+        "libc": "libc.musl-aarch64.so.1", "floor": None,
     },
 }
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
-LIBUSB_SHA256 = "966bb0d231f94a474eaae2e67da5ec844d3527a1f386456394ff432580634b29"
+LIBUSB_SHA256 = "fea36f34f9156400209595e300840767ab1a385ede1dc7ee893015aea9c6dbaf"
 COMMON = {
     "LICENSE",
     "README.md",
@@ -219,12 +227,16 @@ def validate_binary_evidence_record(record: object, platform: str) -> dict:
     if not isinstance(record, dict):
         fail("binary evidence artifact record must be an object")
     if platform.startswith("linux-"):
-        fields = {"artifact", "format", "interpreter", "needed", "sha256"}
+        fields = {"artifact", "format", "interpreter", "needed", "sha256", "libc", "glibc_floor"}
         if set(record) != fields or record.get("format") != "ELF":
             fail("invalid Linux binary evidence schema")
         if not isinstance(record.get("interpreter"), (str, type(None))):
             fail("invalid Linux binary evidence interpreter")
         validate_string_list(record.get("needed"), "needed")
+        if record.get("libc") not in ("glibc", "musl"):
+            fail("invalid Linux binary evidence libc")
+        if record.get("glibc_floor") not in (None, "2.31"):
+            fail("invalid Linux binary evidence glibc floor")
     elif platform == "darwin-arm64":
         fields = {"artifact", "format", "install_id", "dependencies", "sha256"}
         if set(record) != fields or record.get("format") != "Mach-O":
@@ -266,8 +278,10 @@ def verify_binary_evidence(archive: Path, members: dict[str, tarfile.TarInfo],
         fail("binary evidence programs must contain px4d, px4-ts, and px4ctl exactly once")
 
     expected_extra = {
-        "linux-x86_64": "ifd/px4-userland-ifd.so",
-        "linux-aarch64": "ifd/px4-userland-ifd.so",
+        "linux-glibc-x86_64": "ifd/px4-userland-ifd.so",
+        "linux-glibc-aarch64": "ifd/px4-userland-ifd.so",
+        "linux-musl-x86_64": "ifd/px4-userland-ifd.so",
+        "linux-musl-aarch64": "ifd/px4-userland-ifd.so",
         "darwin-arm64": "ifd/px4-userland-ifd.bundle/Contents/MacOS/libpx4-userland-ifd.dylib",
     }.get(platform)
     extra = evidence.get("extra")
@@ -285,9 +299,11 @@ def verify_binary_evidence(archive: Path, members: dict[str, tarfile.TarInfo],
             fail("binary evidence extra artifact does not match platform")
         records = program_records + [extra_record]
 
+    expected_libc = {
+        "linux-glibc-x86_64": "glibc", "linux-glibc-aarch64": "glibc",
+        "linux-musl-x86_64": "musl", "linux-musl-aarch64": "musl",
+    }.get(platform)
     expected_interpreter = {
-        "linux-x86_64": "/lib/ld-musl-x86_64.so.1",
-        "linux-aarch64": "/lib/ld-musl-aarch64.so.1",
         "android-aarch64": "/system/bin/linker64",
         "android-armv7a": "/system/bin/linker",
     }.get(platform)
@@ -296,9 +312,11 @@ def verify_binary_evidence(archive: Path, members: dict[str, tarfile.TarInfo],
         if artifact not in members:
             fail(f"binary evidence artifact is not archived: {artifact}")
         if platform.startswith("linux-"):
-            required_interpreter = expected_interpreter if artifact in PROGRAMS else None
-            if record["interpreter"] != required_interpreter:
-                fail(f"Linux binary evidence interpreter mismatch: {artifact}")
+            expected_record_libc = expected_libc if artifact not in PROGRAMS else "musl"
+            if record["interpreter"] is not None or record["libc"] != expected_record_libc:
+                fail(f"Linux binary evidence static/libc mismatch: {artifact}")
+            if artifact not in PROGRAMS and expected_libc == "glibc" and record["glibc_floor"] != "2.31":
+                fail(f"glibc Linux binary evidence floor mismatch: {artifact}")
         elif platform.startswith("android") and record["interpreter"] != expected_interpreter:
             fail(f"Android binary evidence interpreter mismatch: {artifact}")
         actual = hashlib.sha256(read_archive_file(archive, artifact)).hexdigest()
@@ -325,6 +343,19 @@ def verify_manifest(archive: Path, members: dict[str, tarfile.TarInfo], platform
         fail(f"invalid manifest.json: {error}")
     if manifest.get("schema") != 1 or manifest.get("platform") != platform:
         fail("manifest schema/platform mismatch")
+    expected_libc = ("glibc" if platform.startswith("linux-glibc-") else
+                     "musl" if platform.startswith("linux-musl-") else
+                     "android" if platform.startswith("android-") else "darwin")
+    if manifest.get("libc") != expected_libc or manifest.get("architecture") != platform.rsplit("-", 1)[-1]:
+        fail("manifest libc/architecture metadata mismatch")
+    if not isinstance(manifest.get("source_ref"), str) or not manifest["source_ref"]:
+        fail("manifest source_ref metadata is missing")
+    embedded = manifest.get("embedded_libusb")
+    if platform.startswith("linux-") or platform.startswith("android-"):
+        if embedded != {"version": "1.0.30", "linkage": "static"}:
+            fail("manifest embedded libusb metadata mismatch")
+    elif embedded is not None:
+        fail("unexpected embedded libusb metadata")
     validate_version(str(manifest.get("version", "")))
     if sorted(manifest.get("programs", [])) != sorted(PROGRAMS):
         fail("manifest does not describe exactly the three production programs")
@@ -374,24 +405,36 @@ def audit_linux(path: Path, logical_name: str, *, platform: str, shared: bool, r
     machine = re.search(r"^\s*Machine:\s*(.+)$", header, re.MULTILINE)
     if not machine or machine.group(1).strip() != target["machine"]:
         fail(f"wrong Linux ELF machine for {platform}: {path}")
-    if not shared:
-        interpreter = re.search(r"Requesting program interpreter: ([^]]+)", program)
-        if not interpreter or interpreter.group(1) != target["interpreter"]:
-            fail(f"wrong Linux musl interpreter for {platform}: {path}")
+    interpreter = re.search(r"Requesting program interpreter: ([^]]+)", program)
+    if not shared and interpreter:
+        fail(f"static Linux executable has PT_INTERP: {path}")
+    if shared and interpreter:
+        fail(f"Linux IFD shared object has PT_INTERP: {path}")
     needed = parse_needed(dynamic)
-    if require_libusb and "libusb-1.0.so.0" not in needed:
-        fail(f"shared libusb is missing from {path}")
-    if not require_libusb and "libusb-1.0.so.0" in needed:
-        fail(f"unexpected direct shared libusb dependency: {path}")
+    if not shared and needed:
+        fail(f"static Linux executable has DT_NEEDED: {path}: {sorted(needed)}")
+    if shared:
+        if needed != {target["libc"]}:
+            fail(f"IFD must only require matching libc: {path}: {sorted(needed)}")
+    elif require_libusb:
+        # Static libusb is intentionally present in the executable, so it must
+        # not appear as a dynamic dependency.
+        if "libusb-1.0.so.0" in needed:
+            fail(f"static executable has shared libusb dependency: {path}")
     if reject_pcsc and any("pcsc" in library.lower() for library in needed):
         fail(f"unexpected direct PC/SC client dependency: {path}")
-    if target["libc"] not in needed:
-        fail(f"musl libc is missing from {path}")
     if "RPATH" in dynamic or "RUNPATH" in dynamic:
         fail(f"RPATH/RUNPATH is forbidden: {path}")
+    versions = run([readelf, "--version-info", str(path)])
+    glibc_versions = [tuple(int(part) for part in value.split("."))
+                      for value in re.findall(r"GLIBC_([0-9]+(?:\.[0-9]+)+)", versions)]
+    if shared and target["floor"] and glibc_versions and max(glibc_versions) > tuple(int(p) for p in target["floor"].split(".")):
+        fail(f"glibc IFD exceeds floor {target['floor']}: {path}")
     return {"artifact": logical_name, "format": "ELF",
-            "interpreter": target["interpreter"] if not shared else None,
-            "needed": sorted(needed)}
+            "interpreter": None, "needed": sorted(needed),
+            "libc": ("musl" if not shared else
+                     "glibc" if target["libc"] == "libc.so.6" else "musl"),
+            "glibc_floor": target["floor"] if shared else None}
 
 
 def audit_darwin(path: Path, logical_name: str, *, require_libusb: bool,
@@ -553,7 +596,7 @@ def audit_binary_archive(args: argparse.Namespace) -> dict:
             fail(f"Android archive does not retain an NDK r27/r27d revision: {revision or 'unknown'}")
         fields = notice_fields(notice)
         required_fields = {
-            "dependency.libusb.version": "1.0.28",
+            "dependency.libusb.version": "1.0.30",
             "dependency.libusb.linkage": "static",
             "dependency.libusb.license": "LGPL-2.1-or-later",
             "dependency.ndk.revision": revision,
@@ -568,6 +611,14 @@ def audit_binary_archive(args: argparse.Namespace) -> dict:
             fail("Android binary evidence NDK revision does not match source.properties")
         if fields.get("dependency.ndk.revision") != android_evidence["ndk_revision"]:
             fail("Android binary evidence NDK revision does not match dependency notice")
+    elif args.platform.startswith("linux-"):
+        fields = notice_fields(notice)
+        if fields.get("dependency.libusb.linkage") != "static" or fields.get("dependency.libusb.version") != "1.0.30":
+            fail("Linux dependency notice does not describe static pinned libusb")
+        if fields.get("dependency.libc") != ("glibc" if args.platform.startswith("linux-glibc") else "musl"):
+            fail("Linux dependency notice libc mismatch")
+        if fields.get("corresponding-source-archive") != f"px4-userland-{manifest['version']}-source.tar.gz":
+            fail("Linux dependency notice must point to the separately published source archive")
     else:
         fields = notice_fields(notice)
         if fields.get("dependency.libusb.linkage") != "dynamic" or fields.get("dependency.libusb.provider") != "host":
@@ -591,22 +642,26 @@ def audit_source_archive(args: argparse.Namespace) -> dict:
         "LICENSE",
         "README.md",
         "THIRD_PARTY_NOTICES.md",
-        "third_party/libusb-1.0.28-source.tar.bz2",
+        "third_party/libusb-1.0.30.tar.bz2",
         "repository/LICENSE",
         "repository/README.md",
         "repository/THIRD_PARTY_NOTICES.md",
+        "repository/scripts/build-linux-static.sh",
+        "repository/scripts/build-linux-ifd.sh",
+        "repository/scripts/test-static-relink.sh",
+        "repository/packaging/REBUILD.md.in",
     }
     if not required.issubset(members):
         fail(f"source archive is missing: {sorted(required-set(members))}")
     for name in members:
-        if name not in required and not name.startswith("repository/") and not name.startswith("third_party/libusb-1.0.28/"):
+        if name not in required and not name.startswith("repository/") and not name.startswith("third_party/libusb-1.0.30/"):
             fail(f"unexpected source archive member: {name}")
         if name.startswith("repository/") and source_forbidden.search(name):
             fail(f"forbidden source archive member: {name}")
-        if name.startswith("third_party/libusb-1.0.28/") and source_forbidden.search(name):
+        if name.startswith("third_party/libusb-1.0.30/") and source_forbidden.search(name):
             fail(f"forbidden libusb source member: {name}")
     manifest = json.loads(read_archive_file(args.archive.resolve(), "source-manifest.json"))
-    if manifest.get("schema") != 1 or manifest.get("libusb_version") != "1.0.28":
+    if manifest.get("schema") != 1 or manifest.get("libusb_version") != "1.0.30":
         fail("invalid source manifest")
     version = str(manifest.get("version", ""))
     validate_version(version)
@@ -635,7 +690,7 @@ def audit_source_archive(args: argparse.Namespace) -> dict:
         fail("source manifest does not record the pinned libusb checksum")
     if "COPYING" not in "\n".join(members):
         fail("libusb COPYING is missing from source archive")
-    embedded = read_archive_file(args.archive.resolve(), "third_party/libusb-1.0.28-source.tar.bz2")
+    embedded = read_archive_file(args.archive.resolve(), "third_party/libusb-1.0.30.tar.bz2")
     if hashlib.sha256(embedded).hexdigest() != LIBUSB_SHA256:
         fail("embedded libusb source archive checksum mismatch")
     try:
@@ -643,20 +698,20 @@ def audit_source_archive(args: argparse.Namespace) -> dict:
             names = []
             for member in stream.getmembers():
                 safe_member(member.name)
-                if member.name != "libusb-1.0.28" and not member.name.startswith("libusb-1.0.28/"):
+                if member.name != "libusb-1.0.30" and not member.name.startswith("libusb-1.0.30/"):
                     fail(f"unexpected embedded libusb member: {member.name}")
                 if member.isdir():
                     continue
                 if member.issym() or member.islnk() or not member.isfile():
                     fail(f"embedded libusb member is not regular: {member.name}")
                 names.append(member.name)
-            if "libusb-1.0.28/COPYING" not in names:
+            if "libusb-1.0.30/COPYING" not in names:
                 fail("embedded libusb source has no COPYING")
     except (OSError, tarfile.TarError) as error:
         fail(f"cannot inspect embedded libusb source: {error}")
     source_notice = read_archive_file(args.archive.resolve(), "DEPENDENCY-NOTICE.txt").decode("utf-8")
     source_fields = notice_fields(source_notice)
-    if source_fields.get("dependency.libusb.version") != "1.0.28" or \
+    if source_fields.get("dependency.libusb.version") != "1.0.30" or \
             source_fields.get("corresponding-source-archive") != "present":
         fail("source dependency notice is missing stable dependency fields")
     verify_checksums(args.archive.resolve(), members)
@@ -687,7 +742,7 @@ def self_test() -> int:
         else:
             fail("self-test accepted traversal")
 
-        platform = "linux-x86_64"
+        platform = "linux-musl-x86_64"
         archive_name = f"px4-userland-0.1.0-{platform}.tar.gz"
         binary_payloads = {
             program: f"synthetic {program}\n".encode("ascii") for program in PROGRAMS
@@ -698,8 +753,11 @@ def self_test() -> int:
             "README.md": b"readme\n",
             "THIRD_PARTY_NOTICES.md": b"notices\n",
             "DEPENDENCY-NOTICE.txt": (
-                b"dependency.libusb.linkage=dynamic\n"
-                b"dependency.libusb.provider=host\n"
+                b"dependency.libusb.version=1.0.30\n"
+                b"dependency.libusb.linkage=static\n"
+                b"dependency.libc=musl\n"
+                b"dependency.executables=static-musl\n"
+                b"corresponding-source-archive=px4-userland-0.1.0-source.tar.gz\n"
             ),
             "reader.conf.d/px4-userland.conf": b"reader\n",
             **binary_payloads,
@@ -714,6 +772,10 @@ def self_test() -> int:
                 "schema": 1,
                 "version": "0.1.0",
                 "platform": platform,
+                "libc": "musl",
+                "architecture": "x86_64",
+                "embedded_libusb": {"version": "1.0.30", "linkage": "static"},
+                "source_ref": "self-test",
                 "programs": list(PROGRAMS),
                 "production_only": True,
                 "files": {
@@ -741,8 +803,10 @@ def self_test() -> int:
                 return {
                     "artifact": name,
                     "format": "ELF",
-                    "interpreter": "/lib/ld-musl-x86_64.so.1" if name in PROGRAMS else None,
+                    "interpreter": None,
                     "needed": [],
+                    "libc": "musl",
+                    "glibc_floor": None,
                     "sha256": hashlib.sha256(files[name]).hexdigest(),
                 }
 

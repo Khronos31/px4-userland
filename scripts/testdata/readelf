@@ -16,19 +16,31 @@ x86_64)
     exit 1
     ;;
 esac
+if [ "${PX4_TEST_LIBC:-musl}" = glibc ]; then
+    libc='libc.so.6'
+fi
 case "$*" in
 *-h*)
     printf '%s\n' 'ELF Header:' '  Type: DYN (Position-Independent Executable file)' "  Machine: $machine"
     ;;
 *-lW*)
-    printf '%s\n' "      [Requesting program interpreter: $interpreter]"
+    case "$*" in
+    *ifd.so*) ;;
+    *) if [ "${PX4_TEST_SHARED:-0}" = 1 ]; then :; fi ;;
+    esac
     ;;
 *-d*)
+    case "$*" in
+    *ifd.so*)
+        printf '%s\n' " 0x0000000000000001 (NEEDED) Shared library: [$libc]"
+        ;;
+    *)
     case "${PX4_TEST_LINKAGE:-normal}:$*" in
-    bad-all:*|*:*-d*px4d*)
+    bad-all:*)
         printf '%s\n' ' 0x0000000000000001 (NEEDED) Shared library: [libusb-1.0.so.0]'
         ;;
     esac
-    printf '%s\n' " 0x0000000000000001 (NEEDED) Shared library: [$libc]"
+    ;;
+    esac
     ;;
 esac

@@ -104,14 +104,14 @@ def add_git_snapshot(root: Path, ref: str, stage: Path) -> tuple[str, str]:
 
 
 def add_libusb(archive: Path, stage: Path) -> None:
-    if archive.name != "libusb-1.0.28.tar.bz2" or sha256(archive) != LIBUSB_SHA256:
-        fail("source archive requires the exact verified libusb 1.0.28 archive")
+    if archive.name != "libusb-1.0.30.tar.bz2" or sha256(archive) != LIBUSB_SHA256:
+        fail("source archive requires the exact verified libusb 1.0.30 archive")
     destination = stage / "third_party"
-    write_file(destination / "libusb-1.0.28-source.tar.bz2", archive.read_bytes())
+    write_file(destination / "libusb-1.0.30.tar.bz2", archive.read_bytes())
     with tarfile.open(archive, "r:bz2") as stream:
         for member in stream.getmembers():
             safe_name(member.name)
-            if member.name != "libusb-1.0.28" and not member.name.startswith("libusb-1.0.28/"):
+            if member.name != "libusb-1.0.30" and not member.name.startswith("libusb-1.0.30/"):
                 fail(f"invalid libusb source member: {member.name}")
             if member.isdir():
                 continue
@@ -121,7 +121,7 @@ def add_libusb(archive: Path, stage: Path) -> None:
             if handle is None:
                 fail(f"cannot extract libusb source member: {member.name}")
             write_file(destination / member.name, handle.read(), member.mode & 0o7777)
-    if not (destination / "libusb-1.0.28" / "COPYING").is_file():
+    if not (destination / "libusb-1.0.30" / "COPYING").is_file():
         fail("exact libusb source has no COPYING")
 
 
@@ -190,12 +190,13 @@ def main() -> int:
         notice = notice.replace("@VERSION@", args.version).replace("@PLATFORM@", "corresponding-source")
         notice = notice.replace(
             "@DEPENDENCY_TEXT@",
-            "dependency.libusb.version=1.0.28\n"
+            "dependency.libusb.version=1.0.30\n"
             "dependency.libusb.license=LGPL-2.1-or-later\n"
+            "dependency.libusb.linkage=static\n"
             "corresponding-source-archive=present\n\n"
-            "This archive contains the exact repository source snapshot and verified libusb 1.0.28 source "
-            "needed to rebuild or relink the Android binaries. See BUILD-RELINK.md, THIRD_PARTY_NOTICES.md, "
-            "and third_party/libusb-1.0.28/COPYING.\n",
+            "This archive contains the exact repository source snapshot and verified libusb 1.0.30 source "
+            "needed to rebuild or relink the Linux static and Android binaries. See BUILD-RELINK.md, THIRD_PARTY_NOTICES.md, "
+            "and third_party/libusb-1.0.30/COPYING.\n",
         )
         write_file(stage / "DEPENDENCY-NOTICE.txt", notice.encode())
         manifest = {
@@ -204,7 +205,7 @@ def main() -> int:
             "kind": "corresponding-source",
             "repository_commit": commit,
             "repository_tree": tree,
-            "libusb_version": "1.0.28",
+            "libusb_version": "1.0.30",
             "libusb_archive_sha256": LIBUSB_SHA256,
             "forbidden_materials_excluded": [".git", "build outputs", "firmware", "APK/add-on", "vendor drivers"],
             "files": {},

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.16)
 
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" PX4_VERSION_LINE)
 string(LENGTH "${PX4_VERSION_LINE}" PX4_VERSION_LENGTH)
