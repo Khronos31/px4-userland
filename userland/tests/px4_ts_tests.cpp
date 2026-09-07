@@ -853,6 +853,10 @@ bool run_fake(FakeMode mode, Px4TsArguments arguments, Error expected,
 bool test_argument_contract()
 {
     CHECK(terrestrial_arguments().valid);
+    const Px4TsArguments default_timeout = parse(
+        {"px4-ts", "--device", "00001205000960", "--receiver", "0",
+         "--system", "isdb-t", "--frequency-khz", "40000"});
+    CHECK(default_timeout.valid && default_timeout.tune_timeout_ms == 10000U);
     CHECK(parse({"px4-ts", "--device", "00001205000960", "--receiver", "7",
                  "--system", "isdb-s", "--frequency-khz", "146875", "--slot", "0"}).valid);
     CHECK(parse({"px4-ts", "--device", "00001205000960", "--receiver", "0",

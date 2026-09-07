@@ -231,7 +231,7 @@ void print_px4_ts_usage(void* output) noexcept
                  "  --stream-id N | --slot 0..11   (isdb-s, exactly one)\n"
                  "  --bandwidth-hz N               (isdb-t default 6000000)\n"
                  "  --lnb-voltage 0|15             (isdb-s; 15 is daemon-dependent)\n"
-                 "  --tune-timeout-ms 100..30000  (default 5000)\n"
+                 "  --tune-timeout-ms 100..30000  (default 10000)\n"
                  "  --output PATH|- --duration-seconds N | --packet-count N\n"
                  "  --runtime-dir PATH --group --help\n");
 }

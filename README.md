@@ -166,7 +166,7 @@ px4-ts --device BASE_SERIAL --receiver 0..7 --system isdb-t|isdb-s --frequency-k
   - `--packet-count N`: 指定 TS パケット数の受信後に終了します。
 - その他のオプション:
   - `--output PATH`: 出力先ファイルパスを指定します（`-` で標準出力、既定値: `-`）。
-  - `--tune-timeout-ms N`: チューニング待機時間（ミリ秒、範囲: 100〜30000、既定値: 5000）。
+  - `--tune-timeout-ms N`: チューニング待機時間（ミリ秒、範囲: 100〜30000、既定値: 10000）。
   - `--lnb-voltage 0|15`: LNB 出力電圧（既定値: 0）。15V 給電には `px4d --allow-lnb-power` との併用が必要です。
   - `--runtime-dir PATH`: `px4d` と共有するランタイムルートディレクトリ（省略時は `$XDG_RUNTIME_DIR`）。
 

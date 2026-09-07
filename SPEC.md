@@ -335,7 +335,7 @@ B-CASの実カードをQ3U4受入試験の対象とする。ACASは模擬試験�
 | `0x80ff` | `STREAM_END` | server event only | final countersと`u32 error_code` |
 
 - `system`は1=`ISDB_T`、2=`ISDB_S`、`lnb_voltage`は0または15、未使用のstream ID/slotは`0xffff`とする。
-- tune timeoutは100..30,000msとし、CLI既定値は5,000msとする。範囲外をclampせず`INVALID_ARGUMENT`で拒否する。
+- tune timeoutは100..30,000msとし、CLI既定値は10,000msとする。範囲外をclampせず`INVALID_ARGUMENT`で拒否する。
 - CARD_TRANSMITのrequest/response上限は各4,096 byteとし、APDU全体の期限は5.3節の3,000msを超えない。
 - event subscriptionはHELLO capabilitiesの`EVENTS` bitを要求したconnectionだけに行う。eventはresponseの途中へ
   byte単位で割り込まず、frame単位でのみ挿入できる。
