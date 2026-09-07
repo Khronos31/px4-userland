@@ -58,6 +58,12 @@ COMMON = {
     "evidence/binary-audit.json",
 }
 PROGRAMS = ("px4d", "px4-ts", "px4ctl")
+READER_PLACEHOLDERS = {
+    "@PX4_RUNTIME_DIR@",
+    "@PX4_BASE_SERIAL@",
+    "@PX4_ACCESS@",
+    "@PX4_IFD_LIBRARY@",
+}
 ANDROID_INVENTORY_MEMBERS = tuple(
     f"evidence/inventory/{program}-static-archives.tsv" for program in PROGRAMS
 )
@@ -387,6 +393,18 @@ def parse_needed(dynamic: str) -> set[str]:
     return set(re.findall(r"Shared library: \[([^]]+)\]", dynamic))
 
 
+def validate_reader_template(data: bytes) -> None:
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        fail("reader configuration is not UTF-8")
+    placeholders = set(re.findall(r"@[A-Z][A-Z0-9_]*@", text))
+    if placeholders != READER_PLACEHOLDERS:
+        fail(f"reader configuration placeholder mismatch: {sorted(placeholders)}")
+    if text.count("@PX4_ACCESS@") != 1 or "access=@PX4_ACCESS@" not in text:
+        fail("reader configuration must expose exactly one PX4 access placeholder")
+
+
 def readelf_path() -> str:
     for candidate in ("readelf", "llvm-readelf"):
         found = next((part for part in os.get_exec_path() if Path(part, candidate).is_file()), None)
@@ -591,6 +609,8 @@ def audit_binary_archive(args: argparse.Namespace) -> dict:
     expected_name = f"px4-userland-{manifest['version']}-{args.platform}.tar.gz"
     if args.archive.name != expected_name:
         fail(f"archive name does not match platform/version: {args.archive.name}")
+    if args.platform.startswith("linux-") or args.platform == "darwin-arm64":
+        validate_reader_template(read_archive_file(args.archive.resolve(), "reader.conf.d/px4-userland.conf"))
     notice = read_archive_file(args.archive.resolve(), "DEPENDENCY-NOTICE.txt").decode("utf-8")
     evidence = verify_binary_evidence(args.archive.resolve(), members, args.platform)
     if args.platform.startswith("android"):
@@ -764,7 +784,11 @@ def self_test() -> int:
                 b"dependency.executables=static-musl\n"
                 b"corresponding-source-archive=px4-userland-0.1.0-source.tar.gz\n"
             ),
-            "reader.conf.d/px4-userland.conf": b"reader\n",
+            "reader.conf.d/px4-userland.conf": (
+                b"DEVICENAME px4-userland:runtime=@PX4_RUNTIME_DIR@:"
+                b"device=@PX4_BASE_SERIAL@:access=@PX4_ACCESS@\n"
+                b"LIBPATH @PX4_IFD_LIBRARY@\n"
+            ),
             **binary_payloads,
         }
 
@@ -825,6 +849,20 @@ def self_test() -> int:
         valid_evidence = evidence_for(base_files)
         write_test_archive(valid, valid_evidence)
         audit_binary_archive(argparse.Namespace(archive=valid, platform=platform))
+
+        invalid_readers = {
+            "missing-placeholder": base_files["reader.conf.d/px4-userland.conf"].replace(
+                b":access=@PX4_ACCESS@", b":access=user"
+            ),
+            "extra-placeholder": base_files["reader.conf.d/px4-userland.conf"] + b"# @PX4_EXTRA@\n",
+        }
+        for description, reader in invalid_readers.items():
+            try:
+                validate_reader_template(reader)
+            except AuditError:
+                pass
+            else:
+                fail(f"self-test accepted reader template with {description}")
 
         def expect_archive_rejected(path: Path, description: str) -> None:
             try:

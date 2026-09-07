@@ -40,6 +40,8 @@ if tar -xOzf "$test_root/out/px4-userland-$version-linux-musl-x86_64.tar.gz" evi
     printf '%s\n' 'binary-audit.json leaked temporary input path' >&2
     exit 1
 fi
+tar -xOzf "$test_root/out/px4-userland-$version-linux-musl-x86_64.tar.gz" \
+    reader.conf.d/px4-userland.conf | grep -F 'access=@PX4_ACCESS@' >/dev/null
 PATH="$script_dir/testdata:$PATH" python3 "$script_dir/package-artifact.py" \
     --platform darwin-arm64 --version "$version" --build-dir "$test_root/build" \
     --ifd-bundle "$test_root/ifd.bundle" \

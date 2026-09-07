@@ -54,6 +54,20 @@ grep -F '[ "$modified_marker_count" -ge 1 ]' "$root/scripts/test-static-relink.s
 # shellcheck disable=SC2016
 grep -F 'Authorization: Bearer $GITHUB_TOKEN' "$root/.github/workflows/check-libusb.yml" >/dev/null
 grep -F '7つのbinary archive' "$root/SPEC.md" >/dev/null
+grep -F 'access=@PX4_ACCESS@' "$root/packaging/pcsc/reader.conf.d/px4-userland.conf.in" >/dev/null
+grep -F 'sudo install -d -o root -g pcscd -m 0750 /run/px4-userland' "$root/README.md" >/dev/null
+grep -F 'mktemp -d' "$root/README.md" >/dev/null
+grep -F 'px4-userland.XXXXXX' "$root/README.md" >/dev/null
+grep -F 'px4d_pid=$!' "$root/README.md" >/dev/null
+grep -F ' -lt 30' "$root/README.md" >/dev/null
+grep -F 'rmdir ' "$root/README.md" >/dev/null
+grep -F 'trap cleanup EXIT' "$root/README.md" >/dev/null
+if grep -F 'rm -rf' "$root/README.md" >/dev/null; then
+    printf '%s\n' 'README private runtime cleanup must remain narrow' >&2
+    exit 1
+fi
+grep -F 'px4-ts --device BASE_SERIAL --receiver 0..7 --system isdb-t|isdb-s --frequency-khz N [--runtime-dir PATH] [--group]' "$root/README.md" >/dev/null
+grep -F '3つすべてに' "$root/README.md" >/dev/null
 if grep -F '8 binary archive' "$root/SPEC.md" >/dev/null || grep -F '5つのbinary archive' "$root/SPEC.md" >/dev/null; then
     printf '%s\n' 'SPEC archive count is stale' >&2
     exit 1

@@ -50,47 +50,73 @@ sudo tar -xzf px4-userland-<version>-linux-<arch>.tar.gz -C /opt/px4-userland
 - `@PX4_RUNTIME_DIR@`: `px4d` とクライアントが共有するランタイムディレクトリ（例: `/run/px4-userland`）
 - `@PX4_BASE_SERIAL@`: 対象 PX-Q3U4 の 14 桁 base serial（2 つの USB シリアルに共通する 14 桁部分）
 - `@PX4_IFD_LIBRARY@`: Linux では `ifd/px4-userland-ifd.so`、macOS では `ifd/px4-userland-ifd.bundle` の絶対パス
+- `@PX4_ACCESS@`: `user`（px4d と pcscd を同じユーザーで動かす private mode）または `group`（pcscd のサービスユーザーと px4d が共有する group mode）
 
-Linux での配置例（`<pcsc-reader-config-dir>` は利用する pcsc-lite パッケージの reader 設定 include ディレクトリに置き換えます）:
+Linux の group mode 配置例（`<pcsc-reader-config-dir>` は利用する pcsc-lite パッケージの reader 設定 include ディレクトリに置き換えます）:
 
 ```sh
+sudo install -d -o root -g pcscd -m 0750 /run/px4-userland
 sed \
   -e 's|@PX4_RUNTIME_DIR@|/run/px4-userland|g' \
   -e 's|@PX4_BASE_SERIAL@|00001205000960|g' \
   -e 's|@PX4_IFD_LIBRARY@|/opt/px4-userland/ifd/px4-userland-ifd.so|g' \
+  -e 's|@PX4_ACCESS@|group|g' \
   /opt/px4-userland/reader.conf.d/px4-userland.conf \
   | sudo install -D /dev/stdin "<pcsc-reader-config-dir>/px4-userland.conf"
+
+# pcscd.service が User=pcscd の場合、px4d の実効 primary group と
+# reader 設定を合わせ、IPC の group mode を明示します。
+sudo -g pcscd /opt/px4-userland/px4d \
+  --device 00001205000960 --firmware /path/to/firmware.bin \
+  --runtime-dir /run/px4-userland --group
 ```
+
+この例はrootの実効uidと `pcscd` のprimary groupを使います（service managerで同じ実効groupを指定しても構いません）。private mode では `@PX4_ACCESS@` を `user` に置換し、`px4d` と `pcscd` を同じユーザーで実行します。`group` を使う場合は、pcscd のサービスユーザーが `pcscd` group に属し、runtime directory もその group で共有できるように設定してください。
 
 macOS では `@PX4_IFD_LIBRARY@` に `ifd/px4-userland-ifd.bundle` の絶対パスを指定します。reader 設定の `LIBPATH` は bundle ディレクトリを指し、bundle 内部の dylib を直接指しません。配置後は利用する PC/SC デーモン（`pcscd`）を再起動またはリロードして設定を反映します。
 
 ## 最短の使用例
 
-1. デーモン（`px4d`）を起動します。
+1. private modeでデーモン（`px4d`）を起動します。一時runtime rootは`mktemp -d`が作る0700ディレクトリを使い、px4d終了後に削除します。
 
 ```sh
+runtime_dir=$(mktemp -d "${TMPDIR:-/tmp}/px4-userland.XXXXXX")
+cleanup() {
+  kill "$px4d_pid" 2>/dev/null || :
+  wait "$px4d_pid" 2>/dev/null || :
+  rmdir "$runtime_dir" 2>/dev/null || :
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
 /opt/px4-userland/px4d \
   --device 00001205000960 \
   --firmware /path/to/firmware.bin \
-  --runtime-dir /run/px4-userland
-```
-
-2. 地上波（ISDB-T）を受信し、MPEG-TS を標準出力からファイルへ保存します。
-
-```sh
+  --runtime-dir "$runtime_dir" >/dev/null 2>&1 &
+px4d_pid=$!
+ready=0
+i=0
+while test "$i" -lt 30; do
+  if /opt/px4-userland/px4ctl --device 00001205000960 \
+      --runtime-dir "$runtime_dir" status >/dev/null 2>&1; then
+    ready=1
+    break
+  fi
+  kill -0 "$px4d_pid" 2>/dev/null || break
+  sleep 1
+  i=$((i + 1))
+done
+test "$ready" = 1 || { echo 'px4d did not become ready' >&2; exit 1; }
 /opt/px4-userland/px4-ts \
-  --device 00001205000960 \
-  --receiver 2 \
-  --system isdb-t \
-  --frequency-khz 557142 \
-  --runtime-dir /run/px4-userland \
-  --output - \
-  --duration-seconds 30 > stream.ts
+  --device 00001205000960 --receiver 2 --system isdb-t \
+  --frequency-khz 557142 --runtime-dir "$runtime_dir" \
+  --output - --duration-seconds 30 > stream.ts
 ```
+
+この一連の例はpx4dをバックグラウンドで起動し、最大30秒のreadiness確認後に受信します。終了時はpx4dを停止・reapしてからruntime rootを`rmdir`します。
 
 ## CLI 仕様
 
-`px4d`、`px4-ts`、`px4ctl` は、同一ホスト内で同じランタイムルートディレクトリ（`--runtime-dir`、省略時の既定値は `$XDG_RUNTIME_DIR`）と 14 桁の base serial（`--device`）を用いてプロセス間通信（IPC）を行います。実際のエンドポイントは、ランタイムルート下の `px4-userland/<BASE_SERIAL>/` に作成されます。
+`px4d`、`px4-ts`、`px4ctl` は、同一ホスト内で同じランタイムルートディレクトリ（`--runtime-dir`、省略時の既定値は `$XDG_RUNTIME_DIR`）と 14 桁の base serial（`--device`）を用いてプロセス間通信（IPC）を行います。実際のエンドポイントは、ランタイムルート下の `px4-userland/<BASE_SERIAL>/` に作成されます。group mode endpointへ接続する場合は、3つすべてに `--group` を指定し、実効primary groupも共有groupにします。
 
 ### 受信機（Receiver）番号の割り当て
 
@@ -110,7 +136,7 @@ PX-Q3U4 に搭載されている 8 つの受信機は以下の番号に割り当
 PX-Q3U4 の USB デバイス（2 系統）、8 つの受信機、内蔵 IC カードリーダーを一括して所有・管理します。フォアグラウンドで動作します。
 
 ```sh
-px4d --device BASE_SERIAL --firmware PATH [--runtime-dir PATH] [--allow-lnb-power]
+px4d --device BASE_SERIAL --firmware PATH [--runtime-dir PATH] [--group] [--allow-lnb-power]
 ```
 
 - `--device BASE_SERIAL`: 対象 PX-Q3U4 の 14 桁 base serial を指定します。
@@ -124,7 +150,7 @@ px4d --device BASE_SERIAL --firmware PATH [--runtime-dir PATH] [--allow-lnb-powe
 `px4d` に接続し、指定した受信機から MPEG-TS ストリームを受信して標準出力またはファイルへ出力します。
 
 ```sh
-px4-ts --device BASE_SERIAL --receiver 0..7 --system isdb-t|isdb-s --frequency-khz N [OPTIONS]
+px4-ts --device BASE_SERIAL --receiver 0..7 --system isdb-t|isdb-s --frequency-khz N [--runtime-dir PATH] [--group] [OPTIONS]
 ```
 
 - `--device BASE_SERIAL`: 対象デバイスの base serial（必須）。
@@ -165,7 +191,7 @@ px4-ts --device BASE_SERIAL --receiver 0..7 --system isdb-t|isdb-s --frequency-k
 デバイスの状態確認や内蔵 IC カードリーダーの操作を行います。
 
 ```sh
-px4ctl --device BASE_SERIAL [--runtime-dir PATH] <サブコマンド>
+px4ctl --device BASE_SERIAL [--runtime-dir PATH] [--group] <サブコマンド>
 ```
 
 #### サブコマンド一覧

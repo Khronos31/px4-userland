@@ -2,7 +2,9 @@
 # px4-userland pcsc-lite reader template. Replace all @...@ placeholders.
 # On macOS, the LIBPATH value is the px4-userland-ifd.bundle directory,
 # not its nested Contents/MacOS dylib.
+# access=user is private to one account; access=group is for a pcscd service
+# account sharing a group with px4d, which must then be started with --group.
 FRIENDLYNAME "PLEX PX-Q3U4 Internal Card Reader"
-DEVICENAME   px4-userland:runtime=@PX4_RUNTIME_DIR@:device=@PX4_BASE_SERIAL@:access=user
+DEVICENAME   px4-userland:runtime=@PX4_RUNTIME_DIR@:device=@PX4_BASE_SERIAL@:access=@PX4_ACCESS@
 LIBPATH      @PX4_IFD_LIBRARY@
 CHANNELID    0
