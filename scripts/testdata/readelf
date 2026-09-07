@@ -3,12 +3,10 @@
 case "${PX4_TEST_ARCH:-x86_64}" in
 aarch64)
     machine='AArch64'
-    interpreter='/lib/ld-musl-aarch64.so.1'
     libc='libc.musl-aarch64.so.1'
     ;;
 x86_64)
     machine='Advanced Micro Devices X86-64'
-    interpreter='/lib/ld-musl-x86_64.so.1'
     libc='libc.musl-x86_64.so.1'
     ;;
 *)
@@ -29,10 +27,23 @@ case "$*" in
     *) if [ "${PX4_TEST_SHARED:-0}" = 1 ]; then :; fi ;;
     esac
     ;;
-*-d*)
-    case "$*" in
-    *ifd.so*)
+    *-d*)
+        case "$*" in
+        *ifd.so*)
         printf '%s\n' " 0x0000000000000001 (NEEDED) Shared library: [$libc]"
+        if [ "${PX4_TEST_LIBC:-musl}" = glibc ]; then
+            printf '%s\n' ' 0x0000000000000001 (NEEDED) Shared library: [libpthread.so.0]'
+            if [ "${PX4_TEST_ARCH:-x86_64}" = x86_64 ]; then
+                printf '%s\n' ' 0x0000000000000001 (NEEDED) Shared library: [ld-linux-x86-64.so.2]'
+            else
+                printf '%s\n' ' 0x0000000000000001 (NEEDED) Shared library: [ld-linux-aarch64.so.1]'
+            fi
+            if [ "${PX4_TEST_NEEDED:-allowed}" = bad-glibc ]; then
+                printf '%s\n' ' 0x0000000000000001 (NEEDED) Shared library: [libdl.so.2]'
+            fi
+        elif [ "${PX4_TEST_NEEDED:-allowed}" = bad-musl ]; then
+            printf '%s\n' ' 0x0000000000000001 (NEEDED) Shared library: [libpthread.so.0]'
+        fi
         ;;
     *)
     case "${PX4_TEST_LINKAGE:-normal}:$*" in

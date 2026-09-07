@@ -30,18 +30,20 @@ LINUX_TARGETS = {
     "linux-glibc-x86_64": {
         "machine": "Advanced Micro Devices X86-64",
         "libc": "libc.so.6", "floor": "2.31",
+        "needed": {"libc.so.6", "libpthread.so.0", "ld-linux-x86-64.so.2"},
     },
     "linux-glibc-aarch64": {
         "machine": "AArch64",
         "libc": "libc.so.6", "floor": "2.31",
+        "needed": {"libc.so.6", "libpthread.so.0", "ld-linux-aarch64.so.1"},
     },
     "linux-musl-x86_64": {
         "machine": "Advanced Micro Devices X86-64",
-        "libc": "libc.musl-x86_64.so.1", "floor": None,
+        "libc": "libc.musl-x86_64.so.1", "floor": None, "needed": None,
     },
     "linux-musl-aarch64": {
         "machine": "AArch64",
-        "libc": "libc.musl-aarch64.so.1", "floor": None,
+        "libc": "libc.musl-aarch64.so.1", "floor": None, "needed": None,
     },
 }
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
@@ -414,8 +416,11 @@ def audit_linux(path: Path, logical_name: str, *, platform: str, shared: bool, r
     if not shared and needed:
         fail(f"static Linux executable has DT_NEEDED: {path}: {sorted(needed)}")
     if shared:
-        if needed != {target["libc"]}:
-            fail(f"IFD must only require matching libc: {path}: {sorted(needed)}")
+        if target["needed"] is None:
+            if needed != {target["libc"]}:
+                fail(f"musl IFD must only require matching libc: {path}: {sorted(needed)}")
+        elif target["libc"] not in needed or not needed <= target["needed"]:
+            fail(f"glibc IFD has unexpected host ABI dependency: {path}: {sorted(needed)}")
     elif require_libusb:
         # Static libusb is intentionally present in the executable, so it must
         # not appear as a dynamic dependency.

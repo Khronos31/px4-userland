@@ -67,6 +67,18 @@ if PATH="$script_dir/testdata:$PATH" PX4_TEST_LINKAGE=bad-all \
     printf '%s\n' 'negative Linux libusb linkage test failed' >&2
     exit 1
 fi
+if PATH="$script_dir/testdata:$PATH" PX4_TEST_LIBC=glibc PX4_TEST_NEEDED=bad-glibc \
+    python3 "$script_dir/audit-artifact.py" --platform linux-glibc-x86_64 --build-dir "$test_root/build" \
+    --ifd-library "$test_root/build/ifd.so"; then
+    printf '%s\n' 'negative glibc IFD dependency test failed' >&2
+    exit 1
+fi
+if PATH="$script_dir/testdata:$PATH" PX4_TEST_NEEDED=bad-musl \
+    python3 "$script_dir/audit-artifact.py" --platform linux-musl-x86_64 --build-dir "$test_root/build" \
+    --ifd-library "$test_root/build/ifd.so"; then
+    printf '%s\n' 'negative musl IFD dependency test failed' >&2
+    exit 1
+fi
 if PATH="$script_dir/testdata:$PATH" PX4_TEST_OTOOL_MODE=bad-pcsc \
     python3 "$script_dir/audit-artifact.py" --platform darwin-arm64 --build-dir "$test_root/build" \
     --ifd-bundle "$test_root/ifd.bundle"; then
