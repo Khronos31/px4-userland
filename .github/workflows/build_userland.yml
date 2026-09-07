@@ -59,8 +59,8 @@ jobs:
           docker run --rm -e GITHUB_SHA="$GITHUB_SHA" -v "$GITHUB_WORKSPACE:/src" -w /src debian:11 sh -euxc '
             find /etc/apt/sources.list.d -type f -delete;
             printf "%s\\n" \
-              "deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20250301T000000Z bullseye main" \
-              "deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/20250301T000000Z bullseye-security main" \
+              "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20250301T000000Z bullseye main" \
+              "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20250301T000000Z bullseye-security main" \
               > /etc/apt/sources.list;
             apt_install_retry() {
               attempt=1;
@@ -132,8 +132,8 @@ jobs:
           docker run --rm -e GITHUB_SHA="$GITHUB_SHA" -v "$GITHUB_WORKSPACE:/src" -w /src debian:11 sh -euxc '
             find /etc/apt/sources.list.d -type f -delete;
             printf "%s\\n" \
-              "deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20250301T000000Z bullseye main" \
-              "deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/20250301T000000Z bullseye-security main" \
+              "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20250301T000000Z bullseye main" \
+              "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20250301T000000Z bullseye-security main" \
               > /etc/apt/sources.list;
             apt_install_retry() {
               attempt=1;
