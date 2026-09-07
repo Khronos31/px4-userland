@@ -26,6 +26,9 @@ test "$(grep -c 'apt_install_retry()' "$workflow")" -eq 2
 # shellcheck disable=SC2016
 test "$(grep -c '\"$attempt\" -le 3' "$workflow")" -eq 2
 test "$(grep -c 'find /var/lib/apt/lists -mindepth 1 -depth -delete' "$workflow")" -eq 2
+test "$(grep -c 'snapshot.debian.org/archive/debian/20250301T000000Z bullseye main' "$workflow")" -eq 2
+test "$(grep -c 'snapshot.debian.org/archive/debian-security/20250301T000000Z bullseye-security main' "$workflow")" -eq 2
+test "$(grep -c 'check-valid-until=no' "$workflow")" -eq 4
 if grep -F 'find /var/lib/apt/lists -mindepth 1 -maxdepth 1' "$workflow" >/dev/null; then
     printf '%s\n' 'apt list cleanup must be recursive' >&2
     exit 1
