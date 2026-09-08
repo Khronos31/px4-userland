@@ -54,6 +54,24 @@ sudo udevadm control --reload-rules
 
 サービスとして運用する場合は、`$USER` ではなく `px4d` のサービスアカウントを `video` group に追加してください。
 
+#### Alpine Linux / BusyBox mdev
+
+以下は root shell で実行します。配布アーカイブの hotplug ルールだけを、Alpine の汎用 `$MODALIAS`/USB ルールより前に `/etc/mdev.conf` の先頭へ追加してください。helper と OpenRC の `.start` script は root でインストールします。
+
+```sh
+addgroup <実行ユーザー> video
+install -d -m 0755 /usr/local/libexec /usr/local/share /etc/local.d
+install -m 0755 mdev/px4-userland-mdev.sh /usr/local/libexec/px4-userland-mdev
+install -m 0755 mdev/px4-userland-mdev.start /etc/local.d/px4-userland-mdev.start
+install -m 0644 mdev/px4-userland-mdev.conf /usr/local/share/px4-userland-mdev.conf
+vi /etc/mdev.conf
+rc-update add local default
+mdev -s
+/usr/local/libexec/px4-userland-mdev --scan
+```
+
+`vi /etc/mdev.conf` では `/usr/local/share/px4-userland-mdev.conf` の hotplug ルールを先頭へ追加します。OpenRC の `local` は boot 時に `mdev -s` の後で `--scan` を実行します。`ls -l /dev/bus/usb/001/008` などで対象ノードが `root video`・`0660` になったことを確認してください。`px4d`、`px4-ts`、`px4ctl` は `video` group の通常ユーザーで実行し、root は使いません。再接続時は hotplug ルールが反映されます。
+
 ここでの `video` は USB デバイスノード用の group です。PC/SC の `@PX4_ACCESS@=group` で指定する IPC 用 group（例: `pcscd`）とは別要件で、同一サービスアカウントを両方で使う場合は両方の group 権限が必要です。この udev ルールは Android のホスト許可 FD、HAOS アドオン、macOS には適用しません。
 
 ## 導入方法

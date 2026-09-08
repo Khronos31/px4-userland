@@ -57,6 +57,9 @@ COMMON = {
     "SHA256SUMS",
     "evidence/binary-audit.json",
 }
+LINUX_MDEV = {
+    "mdev/px4-userland-mdev.conf", "mdev/px4-userland-mdev.sh", "mdev/px4-userland-mdev.start",
+}
 PROGRAMS = ("px4d", "px4-ts", "px4ctl")
 DARWIN_IFD_ARTIFACT = "ifd/px4-userland-ifd.bundle/Contents/MacOS/libpx4-userland-ifd.dylib"
 IFD_EXPORTS = (
@@ -704,12 +707,26 @@ def audit_binaries(args: argparse.Namespace) -> dict:
     return result
 
 
+def verify_linux_mdev_modes(modes: dict[str, int], platform: str) -> None:
+    if not platform.startswith("linux-"):
+        return
+    expected_modes = {
+        "mdev/px4-userland-mdev.conf": 0o644,
+        "mdev/px4-userland-mdev.sh": 0o755,
+        "mdev/px4-userland-mdev.start": 0o755,
+    }
+    for name, expected_mode in expected_modes.items():
+        actual_mode = modes.get(name)
+        if actual_mode != expected_mode:
+            fail(f"Linux mdev file has mode {actual_mode!r}, expected {expected_mode:o}: {name}")
+
+
 def audit_binary_archive(args: argparse.Namespace) -> dict:
     validate_platform(args.platform)
     members = archive_members(args.archive.resolve())
     expected = set(COMMON) | set(PROGRAMS)
     if args.platform.startswith("linux-"):
-        expected |= {"ifd/px4-userland-ifd.so", "reader.conf.d/px4-userland.conf"}
+        expected |= {"ifd/px4-userland-ifd.so", "reader.conf.d/px4-userland.conf"} | LINUX_MDEV
     elif args.platform == "darwin-arm64":
         expected |= {
             "ifd/px4-userland-ifd.bundle/Contents/Info.plist",
@@ -722,6 +739,7 @@ def audit_binary_archive(args: argparse.Namespace) -> dict:
             expected.add(f"evidence/inventory/{program}-static-archives.tsv")
     if set(members) != expected:
         fail(f"archive member allowlist mismatch; unexpected={sorted(set(members)-expected)}, missing={sorted(expected-set(members))}")
+    verify_linux_mdev_modes({name: member.mode for name, member in members.items()}, args.platform)
     audit_archive_elf_debug_sections(args.archive.resolve(), members, args.platform)
     manifest = verify_manifest(args.archive.resolve(), members, args.platform)
     expected_name = f"px4-userland-{manifest['version']}-{args.platform}.tar.gz"
@@ -907,10 +925,13 @@ def self_test() -> int:
                 b"device=@PX4_BASE_SERIAL@:access=@PX4_ACCESS@\n"
                 b"LIBPATH @PX4_IFD_LIBRARY@\n"
             ),
+            "mdev/px4-userland-mdev.conf": b"mdev rule\n",
+            "mdev/px4-userland-mdev.sh": b"#!/bin/sh\n",
+            "mdev/px4-userland-mdev.start": b"#!/bin/sh\n",
             **binary_payloads,
         }
 
-        def write_test_archive(path: Path, evidence: dict) -> None:
+        def write_test_archive(path: Path, evidence: dict, mode_overrides: dict[str, int] | None = None) -> None:
             files = dict(base_files)
             files["evidence/binary-audit.json"] = (
                 json.dumps(evidence, indent=2, sort_keys=True) + "\n"
@@ -943,6 +964,10 @@ def self_test() -> int:
                 for name, payload in sorted(files.items()):
                     info = tarfile.TarInfo(name)
                     info.size = len(payload)
+                    default_mode = 0o755 if name in {
+                        "mdev/px4-userland-mdev.sh", "mdev/px4-userland-mdev.start"
+                    } else 0o644
+                    info.mode = (mode_overrides or {}).get(name, default_mode)
                     stream.addfile(info, io.BytesIO(payload))
 
         def audit_test_archive(path: Path, section_mode: str = "stripped") -> None:
@@ -986,6 +1011,22 @@ def self_test() -> int:
         write_test_archive(valid, valid_evidence)
         audit_test_archive(valid)
         audit_test_archive(valid, "dynsym-unwind")
+
+        expected_mdev_modes = {
+            "mdev/px4-userland-mdev.conf": 0o644,
+            "mdev/px4-userland-mdev.sh": 0o755,
+            "mdev/px4-userland-mdev.start": 0o755,
+        }
+        for name, expected_mode in expected_mdev_modes.items():
+            invalid_mode = 0o600 if name.endswith(".conf") else 0o744
+            invalid_archive = root / f"invalid-{name.rsplit('/', 1)[-1]}.tar.gz"
+            write_test_archive(invalid_archive, valid_evidence, {name: invalid_mode})
+            try:
+                audit_test_archive(invalid_archive)
+            except AuditError:
+                pass
+            else:
+                fail(f"invalid mdev mode archive self-test did not fail: {name}")
 
         for section_mode in ("debug", "zdebug", "symtab"):
             try:

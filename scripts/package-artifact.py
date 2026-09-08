@@ -439,6 +439,9 @@ def main() -> int:
             if not args.reader_template:
                 fail("--reader-template is required for native platforms")
             copy_regular(args.reader_template.resolve(), stage / "reader.conf.d" / "px4-userland.conf")
+        if args.platform.startswith("linux-"):
+            for name in ("px4-userland-mdev.conf", "px4-userland-mdev.sh", "px4-userland-mdev.start"):
+                copy_regular(args.repo_root / "packaging/mdev" / name, stage / "mdev" / name)
         revision = None
         if args.platform.startswith("linux-"):
             if not args.ifd_library:
