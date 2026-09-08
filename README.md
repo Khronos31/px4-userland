@@ -36,6 +36,8 @@ IT930x ファームウェアは本ソフトウェアに同梱されていませ�
 
 ### Linux の USB アクセス権限
 
+Linux ディストリビューション別の実機検証済み構成例は [Linux環境別の検証済み構成例](docs/platforms/README.md) を参照してください。
+
 Linux では `px4d` の実行ユーザーが PX-Q3U4（USB ID `0511:084a`）の USB デバイスノードを読み書きできる必要があります。権限がない場合は `LIBUSB_ERROR_ACCESS` になります。通常の `px4d` 実行に毎回 `sudo` を使う必要はありません。
 
 udev 環境では、対象を PX-Q3U4 だけに限定したルールを root で配置します。
@@ -56,23 +58,7 @@ sudo udevadm control --reload-rules
 
 #### Alpine Linux / BusyBox mdev
 
-以下は root shell で実行します。配布アーカイブの hotplug ルールだけを、Alpine の汎用 `$MODALIAS`/USB ルールより前に `/etc/mdev.conf` の先頭へ追加してください。helper と OpenRC の `.start` script は root でインストールします。
-
-```sh
-addgroup <実行ユーザー> video
-install -d -m 0755 /usr/local/libexec /usr/local/share /etc/local.d
-install -m 0755 mdev/px4-userland-mdev.sh /usr/local/libexec/px4-userland-mdev
-install -m 0755 mdev/px4-userland-mdev.start /etc/local.d/px4-userland-mdev.start
-install -m 0644 mdev/px4-userland-mdev.conf /usr/local/share/px4-userland-mdev.conf
-vi /etc/mdev.conf
-rc-update add local default
-mdev -s
-/usr/local/libexec/px4-userland-mdev --scan
-```
-
-`vi /etc/mdev.conf` では `/usr/local/share/px4-userland-mdev.conf` の hotplug ルールを先頭へ追加します。OpenRC の `local` は boot 時に `mdev -s` の後で `--scan` を実行します。`ls -l /dev/bus/usb/001/008` などで対象ノードが `root video`・`0660` になったことを確認してください。`px4d`、`px4-ts`、`px4ctl` は `video` group の通常ユーザーで実行し、root は使いません。再接続時は hotplug ルールが反映されます。
-
-ここでの `video` は USB デバイスノード用の group です。PC/SC の `@PX4_ACCESS@=group` で指定する IPC 用 group（例: `pcscd`）とは別要件で、同一サービスアカウントを両方で使う場合は両方の group 権限が必要です。この udev ルールは Android のホスト許可 FD、HAOS アドオン、macOS には適用しません。
+Alpine Linux（BusyBox mdev、コールドプラグスキャンヘルパー、OpenRC 設定）での実機検証済み手順は [Alpine Linux の構成例](docs/platforms/alpine-mdev.md) を参照してください。USB ノードのパーミッションや video グループの要件は上記と同様です。
 
 ## 導入方法
 
@@ -98,7 +84,7 @@ Linux の group mode 配置例（`<pcsc-reader-config-dir>` は利用する pcsc
 sudo install -d -o root -g pcscd -m 0750 /run/px4-userland
 sed \
   -e 's|@PX4_RUNTIME_DIR@|/run/px4-userland|g' \
-  -e 's|@PX4_BASE_SERIAL@|00001205000960|g' \
+  -e 's|@PX4_BASE_SERIAL@|<base-serial>|g' \
   -e 's|@PX4_IFD_LIBRARY@|/opt/px4-userland/ifd/px4-userland-ifd.so|g' \
   -e 's|@PX4_ACCESS@|group|g' \
   /opt/px4-userland/reader.conf.d/px4-userland.conf \
@@ -107,13 +93,17 @@ sed \
 # pcscd.service が User=pcscd の場合、px4d の実効 primary group と
 # reader 設定を合わせ、IPC の group mode を明示します。
 sudo -g pcscd /opt/px4-userland/px4d \
-  --device 00001205000960 --firmware /path/to/firmware.bin \
+  --device '<base-serial>' --firmware /path/to/firmware.bin \
   --runtime-dir /run/px4-userland --group
 ```
 
 この例はrootの実効uidと `pcscd` のprimary groupを使います（service managerで同じ実効groupを指定しても構いません）。private mode では `@PX4_ACCESS@` を `user` に置換し、`px4d` と `pcscd` を同じユーザーで実行します。`group` を使う場合は、pcscd のサービスユーザーが `pcscd` group に属し、runtime directory もその group で共有できるように設定してください。
 
 macOS では `@PX4_IFD_LIBRARY@` に `ifd/px4-userland-ifd.bundle` の絶対パスを指定します。reader 設定の `LIBPATH` は bundle ディレクトリを指し、bundle 内部の dylib を直接指しません。配置後は利用する PC/SC デーモン（`pcscd`）を再起動またはリロードして設定を反映します。
+
+#### Alpine Linux での PC/SC 設定
+
+Alpine Linux で musl 版 IFD、pcsc-lite、OpenRC、共有グループ、ランタイムディレクトリを組み合わせた実機検証手順は [Alpine Linux の構成例](docs/platforms/alpine-mdev.md) を参照してください。PC/SC リーダーの基本設定やプレースホルダーは上記と同様です。
 
 ## 最短の使用例
 
@@ -129,14 +119,14 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 /opt/px4-userland/px4d \
-  --device 00001205000960 \
+  --device '<base-serial>' \
   --firmware /path/to/firmware.bin \
   --runtime-dir "$runtime_dir" >/dev/null 2>&1 &
 px4d_pid=$!
 ready=0
 i=0
 while test "$i" -lt 30; do
-  if /opt/px4-userland/px4ctl --device 00001205000960 \
+  if /opt/px4-userland/px4ctl --device '<base-serial>' \
       --runtime-dir "$runtime_dir" status >/dev/null 2>&1; then
     ready=1
     break
@@ -147,7 +137,7 @@ while test "$i" -lt 30; do
 done
 test "$ready" = 1 || { echo 'px4d did not become ready' >&2; exit 1; }
 /opt/px4-userland/px4-ts \
-  --device 00001205000960 --receiver 2 --system isdb-t \
+  --device '<base-serial>' --receiver 2 --system isdb-t \
   --frequency-khz 557142 --runtime-dir "$runtime_dir" \
   --output - --duration-seconds 30 > stream.ts
 ```
