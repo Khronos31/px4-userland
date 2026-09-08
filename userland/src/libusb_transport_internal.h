@@ -76,7 +76,6 @@ public:
     virtual int cancel_transfer(Transfer transfer) noexcept = 0;
     virtual void free_transfer(Transfer transfer) noexcept = 0;
     virtual int handle_events(Context context, unsigned int timeout_ms) noexcept = 0;
-    virtual bool requires_detach_quiescence() const noexcept { return false; }
 };
 
 class NativeLibusbApi final : public LibusbApi {
@@ -117,14 +116,7 @@ public:
     int cancel_transfer(Transfer transfer) noexcept override;
     void free_transfer(Transfer transfer) noexcept override;
     int handle_events(Context context, unsigned int timeout_ms) noexcept override;
-    bool requires_detach_quiescence() const noexcept override;
 };
-
-bool wait_for_libusb_detach_quiescence(
-    LibusbApi& api, LibusbApi::Context context,
-    const std::array<LibusbApi::Handle, 2U>& handles,
-    bool detach_hazard_observed,
-    std::size_t max_event_calls, unsigned int event_timeout_ms) noexcept;
 
 class LibusbSession final {
 public:
@@ -136,7 +128,6 @@ public:
     LibusbSession& operator=(const LibusbSession&) = delete;
 
     LibusbApi::Context context() const noexcept { return context_; }
-    void abandon_context() noexcept { context_ = nullptr; }
 
 private:
     LibusbSession(LibusbApi& api, LibusbApi::Context context) noexcept;
@@ -250,7 +241,6 @@ struct Q3U4RuntimeState final {
     RuntimeApiGate stream_api_gate;
     RuntimeEventGate event_gate;
     std::atomic<bool> abandoned{false};
-    std::atomic<bool> detach_hazard_observed{false};
 };
 
 class LibusbTransport final : public Transport {
@@ -398,8 +388,7 @@ public:
         const std::vector<int>& fds, std::string_view base_serial = {}) noexcept;
     static Result<std::unique_ptr<Q3U4Runtime>> create_shutdown_fixture(
         std::unique_ptr<LibusbApi> api,
-        const std::array<LibusbApi::Handle, 2U>& handles,
-        bool detach_hazard_observed) noexcept;
+        const std::array<LibusbApi::Handle, 2U>& handles) noexcept;
 };
 
 }  // namespace px4::userland

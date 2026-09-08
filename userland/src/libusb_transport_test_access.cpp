@@ -63,8 +63,7 @@ Result<std::unique_ptr<Q3U4Runtime>> RuntimeTestAccess::open_fds(
 
 Result<std::unique_ptr<Q3U4Runtime>> RuntimeTestAccess::create_shutdown_fixture(
     std::unique_ptr<LibusbApi> api,
-    const std::array<LibusbApi::Handle, 2U>& handles,
-    bool detach_hazard_observed) noexcept
+    const std::array<LibusbApi::Handle, 2U>& handles) noexcept
 {
     if (!api) return Result<std::unique_ptr<Q3U4Runtime>>::failure(Error::INVALID_ARGUMENT);
     auto session = LibusbSession::create(*api, false);
@@ -87,7 +86,6 @@ Result<std::unique_ptr<Q3U4Runtime>> RuntimeTestAccess::create_shutdown_fixture(
             return Result<std::unique_ptr<Q3U4Runtime>>::failure(Error::INTERNAL);
         }
     }
-    impl->state_->detach_hazard_observed.store(detach_hazard_observed);
     std::unique_ptr<Q3U4Runtime> runtime(
         new (std::nothrow) Q3U4Runtime(std::move(impl)));
     if (!runtime) return Result<std::unique_ptr<Q3U4Runtime>>::failure(Error::INTERNAL);
