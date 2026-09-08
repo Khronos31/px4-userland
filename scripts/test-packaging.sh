@@ -17,6 +17,12 @@ printf '%s\n' px4d px4-ts px4ctl | while IFS= read -r program; do
 done
 printf '%s\n' synthetic >"$test_root/build/ifd.so"
 chmod 0755 "$test_root/build/ifd.so"
+mkdir -p "$test_root/macos-build"
+for program in px4d px4-ts px4ctl; do
+    # shellcheck disable=SC2016
+    printf '%s\n' '#!/bin/sh' 'test "${1:-}" = --help' >"$test_root/macos-build/$program"
+    chmod 0755 "$test_root/macos-build/$program"
+done
 mkdir -p "$test_root/ifd.bundle/Contents/MacOS"
 printf '%s\n' synthetic >"$test_root/ifd.bundle/Contents/Info.plist"
 printf '%s\n' synthetic >"$test_root/ifd.bundle/Contents/MacOS/libpx4-userland-ifd.dylib"
@@ -42,11 +48,68 @@ if tar -xOzf "$test_root/out/px4-userland-$version-linux-musl-x86_64.tar.gz" evi
 fi
 tar -xOzf "$test_root/out/px4-userland-$version-linux-musl-x86_64.tar.gz" \
     reader.conf.d/px4-userland.conf | grep -F 'access=@PX4_ACCESS@' >/dev/null
-PATH="$script_dir/testdata:$PATH" python3 "$script_dir/package-artifact.py" \
-    --platform darwin-arm64 --version "$version" --build-dir "$test_root/build" \
+for section_mode in debug zdebug symtab; do
+    if PX4_TEST_SECTIONS="$section_mode" PATH="$script_dir/testdata:$PATH" \
+        python3 "$script_dir/audit-artifact.py" --platform linux-musl-x86_64 \
+        --build-dir "$test_root/build" --ifd-library "$test_root/build/ifd.so"; then
+        printf '%s\n' "negative Linux binary $section_mode audit test failed" >&2
+        exit 1
+    fi
+    if PX4_TEST_SECTIONS="$section_mode" PATH="$script_dir/testdata:$PATH" \
+        python3 "$script_dir/audit-artifact.py" --platform linux-musl-x86_64 \
+        --archive "$test_root/out/px4-userland-$version-linux-musl-x86_64.tar.gz"; then
+        printf '%s\n' "negative Linux $section_mode audit test failed" >&2
+        exit 1
+    fi
+done
+PX4_TEST_SECTIONS=dynsym-unwind PATH="$script_dir/testdata:$PATH" \
+    python3 "$script_dir/audit-artifact.py" --platform linux-musl-x86_64 \
+    --archive "$test_root/out/px4-userland-$version-linux-musl-x86_64.tar.gz"
+PX4_TEST_STRIP_LOG="$test_root/strip.log" PATH="$script_dir/testdata:$PATH" python3 "$script_dir/package-artifact.py" \
+    --platform darwin-arm64 --version "$version" --build-dir "$test_root/macos-build" \
     --ifd-bundle "$test_root/ifd.bundle" \
     --reader-template "$script_dir/../packaging/pcsc/reader.conf.d/px4-userland.conf.in" \
     --output-dir "$test_root/out-macos"
+tar -xOzf "$test_root/out-macos/px4-userland-$version-darwin-arm64.tar.gz" \
+    evidence/binary-audit.json | grep -F '"dwarf_sections": []' >/dev/null
+tar -xOzf "$test_root/out-macos/px4-userland-$version-darwin-arm64.tar.gz" \
+    evidence/binary-audit.json | grep -F '"nsyms": 0' >/dev/null
+test "$(wc -l < "$test_root/strip.log")" -eq 8
+grep -F -- '-S -x ' "$test_root/strip.log" >/dev/null
+grep -F -- '-N ' "$test_root/strip.log" >/dev/null
+if grep -F "$test_root/build" "$test_root/strip.log" >/dev/null; then
+    printf '%s\n' 'macOS strip touched the build tree' >&2
+    exit 1
+fi
+for otool_mode in bad-dwarf bad-symbols; do
+    if PX4_TEST_OTOOL_MODE="$otool_mode" PATH="$script_dir/testdata:$PATH" \
+    python3 "$script_dir/package-artifact.py" \
+    --platform darwin-arm64 --version "$version" --build-dir "$test_root/macos-build" \
+    --ifd-bundle "$test_root/ifd.bundle" \
+    --reader-template "$script_dir/../packaging/pcsc/reader.conf.d/px4-userland.conf.in" \
+    --output-dir "$test_root/out-macos-$otool_mode"; then
+    printf '%s\n' "negative macOS $otool_mode audit test failed" >&2
+    exit 1
+    fi
+done
+if PX4_TEST_NM_MODE=bad-ifd-exports PATH="$script_dir/testdata:$PATH" \
+    python3 "$script_dir/package-artifact.py" \
+    --platform darwin-arm64 --version "$version" --build-dir "$test_root/macos-build" \
+    --ifd-bundle "$test_root/ifd.bundle" \
+    --reader-template "$script_dir/../packaging/pcsc/reader.conf.d/px4-userland.conf.in" \
+    --output-dir "$test_root/out-macos-bad-ifd-exports"; then
+    printf '%s\n' 'negative macOS IFD export audit test failed' >&2
+    exit 1
+fi
+python3_bin=$(command -v python3)
+dirname_bin=$(command -v dirname)
+no_otool_path="$test_root/no-otool-bin"
+mkdir "$no_otool_path"
+ln -s "$python3_bin" "$no_otool_path/python3"
+ln -s "$dirname_bin" "$no_otool_path/dirname"
+PATH="$no_otool_path" "$script_dir/audit-artifact.sh" \
+    --platform darwin-arm64 \
+    --archive "$test_root/out-macos/px4-userland-$version-darwin-arm64.tar.gz"
 PX4_TEST_ARCH=aarch64 PATH="$script_dir/testdata:$PATH" python3 "$script_dir/package-artifact.py" \
     --platform linux-musl-aarch64 --version "$version" --static-build-dir "$test_root/build" \
     --ifd-library "$test_root/build/ifd.so" \
@@ -82,13 +145,13 @@ if PATH="$script_dir/testdata:$PATH" PX4_TEST_NEEDED=bad-musl \
     exit 1
 fi
 if PATH="$script_dir/testdata:$PATH" PX4_TEST_OTOOL_MODE=bad-pcsc \
-    python3 "$script_dir/audit-artifact.py" --platform darwin-arm64 --build-dir "$test_root/build" \
+    python3 "$script_dir/audit-artifact.py" --platform darwin-arm64 --build-dir "$test_root/macos-build" \
     --ifd-bundle "$test_root/ifd.bundle"; then
     printf '%s\n' 'negative macOS PCSC linkage test failed' >&2
     exit 1
 fi
 if PATH="$script_dir/testdata:$PATH" PX4_TEST_OTOOL_MODE=bad-ifd-libusb \
-    python3 "$script_dir/audit-artifact.py" --platform darwin-arm64 --build-dir "$test_root/build" \
+    python3 "$script_dir/audit-artifact.py" --platform darwin-arm64 --build-dir "$test_root/macos-build" \
     --ifd-bundle "$test_root/ifd.bundle"; then
     printf '%s\n' 'negative macOS IFD libusb linkage test failed' >&2
     exit 1

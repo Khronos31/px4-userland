@@ -35,7 +35,7 @@ jobs:
       - name: Build and run the complete CTest suite
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y cmake ninja-build g++ pkg-config libusb-1.0-0-dev libpcsclite-dev
+          sudo apt-get install --no-install-recommends -y cmake ninja-build g++ pkg-config binutils libusb-1.0-0-dev libpcsclite-dev
           cmake -S . -B build-userland -G Ninja -DCMAKE_BUILD_TYPE=Release -DPX4_BUILD_TESTS=ON -DPX4_REQUIRE_PCSC_IFD=ON
           cmake --build build-userland
           ctest --test-dir build-userland --output-on-failure
@@ -257,7 +257,11 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Install build tools
-        run: brew install ninja libusb pcsc-lite pkgconf
+        run: |
+          brew install ninja libusb pcsc-lite pkgconf
+          command -v otool
+          command -v nm
+          command -v strip
       - name: Build and test
         run: |
           pcsc_prefix="$(brew --prefix pcsc-lite)"
@@ -304,7 +308,7 @@ jobs:
           ndk-version: r27d
           add-to-path: false
       - name: Install Android build tools
-        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y cmake ninja-build
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y binutils cmake ninja-build
       - name: Build Android command-line artifacts
         env:
           ABI: ${{ matrix.abi }}
@@ -368,6 +372,8 @@ jobs:
           pattern: rc-*
           merge-multiple: true
           path: release-candidate
+      - name: Install native ELF audit tools
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y binutils
       - name: Verify and checksum candidate archives
         run: |
           set -eu

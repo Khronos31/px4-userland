@@ -27,6 +27,10 @@ elif command -v samurai >/dev/null; then make_program=$(command -v samurai)
 else printf '%s\n' 'ninja or samurai is required' >&2; exit 1
 fi
 command -v gcc >/dev/null || { printf '%s\n' 'a musl gcc is required' >&2; exit 1; }
+nm_tool=$(command -v nm || command -v llvm-nm || true)
+strip_tool=$(command -v strip || command -v llvm-strip || true)
+[ -n "$nm_tool" ] || { printf '%s\n' 'target-native nm is required' >&2; exit 1; }
+[ -n "$strip_tool" ] || { printf '%s\n' 'target-native strip is required' >&2; exit 1; }
 mkdir -p "$output"
 output=$(CDPATH='' cd -- "$output" && pwd)
 work=$(mktemp -d /tmp/px4-linux-static.XXXXXX)
@@ -70,6 +74,22 @@ cmake -S "$root" -B "$build" -G Ninja -DCMAKE_MAKE_PROGRAM="$make_program" -DCMA
     -DCMAKE_CXX_FLAGS='-static -static-libstdc++ -static-libgcc' \
     -DCMAKE_EXE_LINKER_FLAGS='-static -static-libstdc++ -static-libgcc'
 cmake --build "$build" --target px4d px4-ts px4ctl
+
+# Verify static libusb provenance before removing the symbol table.  The
+# release artifacts must retain runtime code, but never their build symbols.
+nm_output=$("$nm_tool" "$build/px4d")
+for symbol in libusb_init libusb_wrap_sys_device libusb_close; do
+    printf '%s\n' "$nm_output" | grep -E "[[:space:]]$symbol$" >/dev/null || {
+        printf '%s\n' "missing static libusb symbol in px4d: $symbol" >&2
+        exit 1
+    }
+done
+
+# Strip only after the static-link provenance check and before anything is
+# copied into the release staging directory or audited.
+for program in px4d px4-ts px4ctl; do
+    "$strip_tool" --strip-all "$build/$program"
+done
 for program in px4d px4-ts px4ctl; do
     cp "$build/$program" "$output/$program"
     chmod 0755 "$output/$program"

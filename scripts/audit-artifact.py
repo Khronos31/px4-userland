@@ -58,6 +58,12 @@ COMMON = {
     "evidence/binary-audit.json",
 }
 PROGRAMS = ("px4d", "px4-ts", "px4ctl")
+DARWIN_IFD_ARTIFACT = "ifd/px4-userland-ifd.bundle/Contents/MacOS/libpx4-userland-ifd.dylib"
+IFD_EXPORTS = (
+    "IFDHCreateChannel", "IFDHCreateChannelByName", "IFDHCloseChannel",
+    "IFDHGetCapabilities", "IFDHSetCapabilities", "IFDHSetProtocolParameters",
+    "IFDHPowerICC", "IFDHTransmitToICC", "IFDHControl", "IFDHICCPresence",
+)
 READER_PLACEHOLDERS = {
     "@PX4_RUNTIME_DIR@",
     "@PX4_BASE_SERIAL@",
@@ -246,12 +252,18 @@ def validate_binary_evidence_record(record: object, platform: str) -> dict:
         if record.get("glibc_floor") not in (None, "2.31"):
             fail("invalid Linux binary evidence glibc floor")
     elif platform == "darwin-arm64":
-        fields = {"artifact", "format", "install_id", "dependencies", "sha256"}
+        fields = {"artifact", "format", "install_id", "dependencies", "dwarf_sections", "nsyms", "sha256"}
         if set(record) != fields or record.get("format") != "Mach-O":
             fail("invalid macOS binary evidence schema")
         if not isinstance(record.get("install_id"), (str, type(None))):
             fail("invalid macOS binary evidence install_id")
         validate_string_list(record.get("dependencies"), "dependencies")
+        validate_string_list(record.get("dwarf_sections"), "dwarf_sections")
+        if record["dwarf_sections"]:
+            fail("macOS binary evidence records DWARF sections")
+        if (isinstance(record.get("nsyms"), bool) or
+                not isinstance(record.get("nsyms"), int) or record["nsyms"] != 0):
+            fail("macOS binary evidence records symbols")
     else:
         fields = {"artifact", "format", "interpreter", "needed", "sha256"}
         if set(record) != fields or record.get("format") != "Android ELF":
@@ -290,7 +302,7 @@ def verify_binary_evidence(archive: Path, members: dict[str, tarfile.TarInfo],
         "linux-glibc-aarch64": "ifd/px4-userland-ifd.so",
         "linux-musl-x86_64": "ifd/px4-userland-ifd.so",
         "linux-musl-aarch64": "ifd/px4-userland-ifd.so",
-        "darwin-arm64": "ifd/px4-userland-ifd.bundle/Contents/MacOS/libpx4-userland-ifd.dylib",
+        "darwin-arm64": DARWIN_IFD_ARTIFACT,
     }.get(platform)
     extra = evidence.get("extra")
     if not isinstance(extra, list):
@@ -413,10 +425,20 @@ def readelf_path() -> str:
     fail("readelf or llvm-readelf is required")
 
 
+def audit_elf_debug_sections(path: Path, readelf: str) -> None:
+    sections = run([readelf, "-SW", str(path)])
+    names = re.findall(r"^\s*\[\s*\d+\]\s+(\S+)", sections, re.MULTILINE)
+    forbidden = [name for name in names if name.startswith((".debug", ".zdebug")) or
+                 name in (".symtab", ".symtab_shndx")]
+    if forbidden:
+        fail(f"debug or regular symbol sections are forbidden: {path}: {forbidden}")
+
+
 def audit_linux(path: Path, logical_name: str, *, platform: str, shared: bool, require_libusb: bool,
                 reject_pcsc: bool = False) -> dict:
     target = LINUX_TARGETS[platform]
     readelf = readelf_path()
+    audit_elf_debug_sections(path, readelf)
     header = run([readelf, "-h", str(path)])
     program = run([readelf, "-lW", str(path)])
     dynamic = run([readelf, "-d", str(path)])
@@ -460,8 +482,51 @@ def audit_linux(path: Path, logical_name: str, *, platform: str, shared: bool, r
             "glibc_floor": target["floor"] if shared else None}
 
 
+def audit_macho_load_commands(path: Path) -> tuple[list[str], int]:
+    load_commands = run(["otool", "-l", str(path)])
+    if re.search(r"^\s*segname\s+__DWARF\s*$", load_commands, re.MULTILINE):
+        fail(f"DWARF segment is forbidden: {path}")
+    dwarf_sections = re.findall(r"^\s*sectname\s+__(?:debug|zdebug)[^\s]*\s*$",
+                                load_commands, re.MULTILINE)
+    if dwarf_sections:
+        fail(f"DWARF sections are forbidden: {path}: {dwarf_sections}")
+    symtab_commands = re.findall(r"^\s*cmd\s+LC_SYMTAB\s*$", load_commands, re.MULTILINE)
+    if len(symtab_commands) != 1:
+        fail(f"Mach-O must contain exactly one LC_SYMTAB: {path}: {len(symtab_commands)}")
+    symtab = re.search(r"^\s*cmd\s+LC_SYMTAB\s*$.*?(?=^\s*cmd\s+\S|\Z)",
+                       load_commands, re.MULTILINE | re.DOTALL)
+    if not symtab:
+        fail(f"LC_SYMTAB is missing: {path}")
+    symbols = re.search(r"^\s*nsyms\s+(\d+)\s*$", symtab.group(0), re.MULTILINE)
+    if not symbols:
+        fail(f"LC_SYMTAB nsyms is missing: {path}")
+    nsyms = int(symbols.group(1))
+    if nsyms != 0:
+        fail(f"Mach-O symbols are forbidden: {path}: nsyms={nsyms}")
+    return dwarf_sections, nsyms
+
+
+def nm_path() -> str:
+    for candidate in ("nm", "llvm-nm"):
+        found = next((part for part in os.get_exec_path() if Path(part, candidate).is_file()), None)
+        if found:
+            return str(Path(found, candidate))
+    fail("nm or llvm-nm is required for the macOS IFD audit")
+
+
+def audit_macho_ifd_exports(path: Path) -> None:
+    output = run([nm_path(), "-gU", str(path)])
+    symbols = {line.split()[-1].lstrip("_") for line in output.splitlines() if line.split()}
+    expected = set(IFD_EXPORTS)
+    if symbols != expected:
+        fail(f"macOS IFD export set mismatch: {path}: {sorted(symbols)}")
+
+
 def audit_darwin(path: Path, logical_name: str, *, require_libusb: bool,
                  reject_pcsc: bool = False) -> dict:
+    dwarf_sections, nsyms = audit_macho_load_commands(path)
+    if logical_name == DARWIN_IFD_ARTIFACT:
+        audit_macho_ifd_exports(path)
     output = run(["otool", "-L", str(path)])
     own_id = None
     if logical_name.endswith(".dylib"):
@@ -488,7 +553,30 @@ def audit_darwin(path: Path, logical_name: str, *, require_libusb: bool,
         fail(f"bundled/rpath dependency is forbidden: {path}")
     stable_install_id = None if own_id is None else (own_id if own_id.startswith("@") else PurePosixPath(own_id).name)
     return {"artifact": logical_name, "format": "Mach-O", "install_id": stable_install_id,
-            "dependencies": logical_dependencies}
+            "dependencies": logical_dependencies, "dwarf_sections": dwarf_sections,
+            "nsyms": nsyms}
+
+
+def audit_archive_elf_debug_sections(archive: Path, members: dict[str, tarfile.TarInfo],
+                                     platform: str) -> None:
+    # Darwin DWARF inspection is performed by audit_binaries on macOS. The
+    # The resulting empty dwarf_sections/nsyms fields are checked against each
+    # archived binary's SHA-256 below, so this cross-platform archive audit
+    # must not attempt to run the Darwin-only otool.
+    if not platform.startswith(("linux-", "android-")):
+        return
+    binary_names = list(PROGRAMS)
+    if platform.startswith("linux-"):
+        binary_names.append("ifd/px4-userland-ifd.so")
+    with tempfile.TemporaryDirectory(prefix="px4-archive-binary-audit-") as temporary:
+        root = Path(temporary)
+        for name in binary_names:
+            if name not in members:
+                fail(f"binary audit member is missing: {name}")
+            path = root / PurePosixPath(name)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(read_archive_file(archive, name))
+            audit_elf_debug_sections(path, readelf_path())
 
 
 def audit_android(path: Path, logical_name: str, expected_interpreter: str, root: Path) -> dict:
@@ -605,6 +693,7 @@ def audit_binary_archive(args: argparse.Namespace) -> dict:
             expected.add(f"evidence/inventory/{program}-static-archives.tsv")
     if set(members) != expected:
         fail(f"archive member allowlist mismatch; unexpected={sorted(set(members)-expected)}, missing={sorted(expected-set(members))}")
+    audit_archive_elf_debug_sections(args.archive.resolve(), members, args.platform)
     manifest = verify_manifest(args.archive.resolve(), members, args.platform)
     expected_name = f"px4-userland-{manifest['version']}-{args.platform}.tar.gz"
     if args.archive.name != expected_name:
@@ -827,6 +916,24 @@ def self_test() -> int:
                     info.size = len(payload)
                     stream.addfile(info, io.BytesIO(payload))
 
+        def audit_test_archive(path: Path, section_mode: str = "stripped") -> None:
+            testdata = Path(__file__).resolve().parent / "testdata"
+            previous_path = os.environ.get("PATH")
+            previous_sections = os.environ.get("PX4_TEST_SECTIONS")
+            os.environ["PATH"] = f"{testdata}{os.pathsep}{previous_path or ''}"
+            os.environ["PX4_TEST_SECTIONS"] = section_mode
+            try:
+                audit_binary_archive(argparse.Namespace(archive=path, platform=platform))
+            finally:
+                if previous_path is None:
+                    os.environ.pop("PATH", None)
+                else:
+                    os.environ["PATH"] = previous_path
+                if previous_sections is None:
+                    os.environ.pop("PX4_TEST_SECTIONS", None)
+                else:
+                    os.environ["PX4_TEST_SECTIONS"] = previous_sections
+
         def evidence_for(files: dict[str, bytes]) -> dict:
             def record(name: str) -> dict:
                 return {
@@ -848,7 +955,16 @@ def self_test() -> int:
         valid = root / archive_name
         valid_evidence = evidence_for(base_files)
         write_test_archive(valid, valid_evidence)
-        audit_binary_archive(argparse.Namespace(archive=valid, platform=platform))
+        audit_test_archive(valid)
+        audit_test_archive(valid, "dynsym-unwind")
+
+        for section_mode in ("debug", "zdebug", "symtab"):
+            try:
+                audit_test_archive(valid, section_mode)
+            except AuditError:
+                pass
+            else:
+                fail(f"self-test accepted {section_mode} sections")
 
         invalid_readers = {
             "missing-placeholder": base_files["reader.conf.d/px4-userland.conf"].replace(
@@ -866,7 +982,7 @@ def self_test() -> int:
 
         def expect_archive_rejected(path: Path, description: str) -> None:
             try:
-                audit_binary_archive(argparse.Namespace(archive=path, platform=platform))
+                audit_test_archive(path)
             except AuditError:
                 return
             fail(f"self-test accepted {description}")

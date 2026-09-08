@@ -52,6 +52,19 @@ grep -F 'expected two libusb version URLs before replacement' "$root/scripts/tes
 # shellcheck disable=SC2016
 grep -F '[ "$modified_marker_count" -ge 1 ]' "$root/scripts/test-static-relink.sh" >/dev/null
 # shellcheck disable=SC2016
+grep -F '"$strip_tool" --strip-all' "$root/scripts/build-linux-static.sh" >/dev/null
+# shellcheck disable=SC2016
+grep -F '"$strip_tool" --strip-unneeded' "$root/scripts/build-linux-ifd.sh" >/dev/null
+grep -F 'readelf, "-SW"' "$root/scripts/audit-artifact.py" >/dev/null
+grep -F 'segname\s+__DWARF' "$root/scripts/audit-artifact.py" >/dev/null
+grep -F 'nsyms' "$root/scripts/audit-artifact.py" >/dev/null
+grep -F '"-N"' "$root/scripts/package-artifact.py" >/dev/null
+grep -F 'IFD_EXPORTS' "$root/scripts/audit-artifact.py" >/dev/null
+grep -F 'strip_darwin_stage' "$root/scripts/package-artifact.py" >/dev/null
+grep -F 'command -v strip' "$workflow" >/dev/null
+grep -F 'apt-get install --no-install-recommends -y binutils cmake ninja-build' "$workflow" >/dev/null
+grep -F 'Install native ELF audit tools' "$workflow" >/dev/null
+# shellcheck disable=SC2016
 grep -F 'Authorization: Bearer $GITHUB_TOKEN' "$root/.github/workflows/check-libusb.yml" >/dev/null
 grep -F '7つのbinary archive' "$root/SPEC.md" >/dev/null
 grep -F 'access=@PX4_ACCESS@' "$root/packaging/pcsc/reader.conf.d/px4-userland.conf.in" >/dev/null

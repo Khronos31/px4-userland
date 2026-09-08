@@ -1,0 +1,10 @@
+#!/bin/sh
+# Synthetic nm used only by test-packaging.sh; it is not a release tool.
+if [ "${PX4_TEST_NM_MODE:-normal}" = bad-ifd-exports ]; then
+    printf '%s\n' '_IFDHCreateChannel' '_IFDHCreateChannelByName' '_IFDHCloseChannel'
+    exit 0
+fi
+printf '%s\n' \
+    _IFDHCreateChannel _IFDHCreateChannelByName _IFDHCloseChannel \
+    _IFDHGetCapabilities _IFDHSetCapabilities _IFDHSetProtocolParameters \
+    _IFDHPowerICC _IFDHTransmitToICC _IFDHControl _IFDHICCPresence

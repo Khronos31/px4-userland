@@ -18,6 +18,20 @@ if [ "${PX4_TEST_LIBC:-musl}" = glibc ]; then
     libc='libc.so.6'
 fi
 case "$*" in
+*-SW*)
+    case "${PX4_TEST_SECTIONS:-stripped}" in
+    stripped) ;;
+    debug) printf '%s\n' '  [ 1] .debug_info        PROGBITS'
+        ;;
+    zdebug) printf '%s\n' '  [ 1] .zdebug_info       PROGBITS'
+        ;;
+    symtab) printf '%s\n' '  [ 1] .symtab            SYMTAB'
+        ;;
+    dynsym-unwind) printf '%s\n' '  [ 1] .dynsym            DYNSYM' '  [ 2] .eh_frame           PROGBITS'
+        ;;
+    *) printf '%s\n' "unsupported PX4_TEST_SECTIONS: ${PX4_TEST_SECTIONS}" >&2; exit 1 ;;
+    esac
+    ;;
 *-h*)
     printf '%s\n' 'ELF Header:' '  Type: DYN (Position-Independent Executable file)' "  Machine: $machine"
     ;;

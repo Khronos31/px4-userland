@@ -1,6 +1,18 @@
 #!/bin/sh
 # Synthetic otool used only by test-packaging.sh; it is not a release tool.
 printf '%s\n' "${2:-$1}"
+if [ "${1:-}" = "-l" ]; then
+    if [ "${PX4_TEST_OTOOL_MODE:-normal}" = bad-dwarf ]; then
+        printf '%s\n' '      segname __DWARF'
+    fi
+    printf '%s\n' '      cmd LC_SYMTAB'
+    if [ "${PX4_TEST_OTOOL_MODE:-normal}" = bad-symbols ]; then
+        printf '%s\n' '      nsyms 1'
+    else
+        printf '%s\n' '      nsyms 0'
+    fi
+    exit 0
+fi
 if [ "${1:-}" = "-D" ]; then
     case "$2" in
     *libpx4-userland-ifd.dylib)

@@ -31,6 +31,7 @@ VERSION_RE = _audit.VERSION_RE
 audit_binaries = _audit.audit_binaries
 audit_binary_archive = _audit.audit_binary_archive
 fail = _audit.fail
+run = _audit.run
 
 
 def sha256(path: Path) -> str:
@@ -130,6 +131,33 @@ def write_checksums(stage: Path) -> None:
         if path.is_file() and path.name != "SHA256SUMS":
             rows.append(f"{sha256(path)}  {path.relative_to(stage).as_posix()}")
     write_text(stage / "SHA256SUMS", "\n".join(rows) + "\n")
+
+
+def darwin_strip_tool() -> str:
+    tool = shutil.which("strip")
+    if tool is None:
+        fail("Apple strip is required for macOS packaging")
+    return tool
+
+
+def strip_darwin_stage(stage: Path) -> None:
+    binaries = [stage / program for program in PROGRAMS]
+    binaries.append(stage / "ifd" / "px4-userland-ifd.bundle" / "Contents" / "MacOS" /
+                    "libpx4-userland-ifd.dylib")
+    tool = darwin_strip_tool()
+    for binary in binaries:
+        if not binary.is_file() or binary.is_symlink():
+            fail(f"missing macOS staged binary: {binary}")
+        # Apple strip can retain one radr:// UUID entry after -S -x. A second
+        # -N pass removes that LC_SYMTAB entry while the native audit below
+        # verifies that the IFD's exported ABI remains intact.
+        run([tool, "-S", "-x", str(binary)])
+        run([tool, "-N", str(binary)])
+
+
+def verify_darwin_stage_runtime(stage: Path) -> None:
+    for program in PROGRAMS:
+        run([str(stage / program), "--help"])
 
 
 def verify_pinned_libusb(archive: Path, stage: Path) -> None:
@@ -274,7 +302,32 @@ def self_test_android_notice_and_archive(repo_root: Path) -> None:
         write_checksums(stage)
         archive = Path(temporary) / f"px4-userland-{version}-{platform}.tar.gz"
         deterministic_tar(stage, archive)
-        audit_binary_archive(argparse.Namespace(archive=archive, platform=platform))
+        testdata = repo_root / "scripts" / "testdata"
+        previous_path = os.environ.get("PATH")
+        previous_sections = os.environ.get("PX4_TEST_SECTIONS")
+        os.environ["PATH"] = f"{testdata}{os.pathsep}{previous_path or ''}"
+        try:
+            os.environ["PX4_TEST_SECTIONS"] = "stripped"
+            audit_binary_archive(argparse.Namespace(archive=archive, platform=platform))
+            os.environ["PX4_TEST_SECTIONS"] = "dynsym-unwind"
+            audit_binary_archive(argparse.Namespace(archive=archive, platform=platform))
+            for mode in ("debug", "zdebug", "symtab"):
+                os.environ["PX4_TEST_SECTIONS"] = mode
+                try:
+                    audit_binary_archive(argparse.Namespace(archive=archive, platform=platform))
+                except AuditError:
+                    pass
+                else:
+                    fail(f"Android archive self-test accepted {mode} sections")
+        finally:
+            if previous_path is None:
+                os.environ.pop("PATH", None)
+            else:
+                os.environ["PATH"] = previous_path
+            if previous_sections is None:
+                os.environ.pop("PX4_TEST_SECTIONS", None)
+            else:
+                os.environ["PX4_TEST_SECTIONS"] = previous_sections
         with tarfile.open(archive, "r:gz") as stream:
             for member in stream.getmembers():
                 if member.name.endswith(".map") or member.name.startswith("evidence/maps/"):
@@ -409,15 +462,21 @@ def main() -> int:
                 fail(f"Android packaging requires NDK r27, got {revision or 'unknown'}")
             for name in ("NOTICE", "NOTICE.toolchain", "source.properties"):
                 copy_regular(ndk / name, stage / "ndk" / name)
+        if args.platform == "darwin-arm64":
+            # Strip only the staged copies. The build tree remains available
+            # for diagnostics and is never used as the release evidence input.
+            strip_darwin_stage(stage)
+            verify_darwin_stage_runtime(stage)
         write_text(stage / "DEPENDENCY-NOTICE.txt",
                    render_dependency_notice(args.repo_root, args.version, args.platform, revision))
+        darwin_stage = stage / "ifd" / "px4-userland-ifd.bundle"
         audit_args = argparse.Namespace(
             platform=args.platform,
-            build_dir=binary_root,
+            build_dir=stage if args.platform == "darwin-arm64" else binary_root,
             binary_suffix=args.binary_suffix,
             repo_root=args.repo_root,
             ifd_library=args.ifd_library,
-            ifd_bundle=args.ifd_bundle,
+            ifd_bundle=darwin_stage if args.platform == "darwin-arm64" else args.ifd_bundle,
             link_map_dir=args.link_map_dir,
             ndk_root=args.ndk_root,
             inventory_dir=stage / "evidence" / "inventory",
