@@ -13,7 +13,7 @@
 
 | OS / 環境 | 状態 | 備考 |
 |---|---|---|
-| Linux | 対応（aarch64: 実機未検証） | x86_64 / aarch64（完全静的CLI + glibc/musl別IFD） |
+| Linux | 対応 | x86_64 / aarch64（完全静的CLI + glibc/musl別IFD） |
 | macOS | 対応 | Apple Silicon（arm64） |
 | Android | 対応 | Termux（aarch64 / armv7a 実行ファイル）およびアプリ組み込み |
 | Windows | 非対応 | 対象外 |
@@ -30,7 +30,7 @@ IT930x ファームウェアは本ソフトウェアに同梱されていませ�
 
 ### 実行時ライブラリ
 
-- **Linux**: `px4d`、`px4-ts`、`px4ctl` はPT_INTERPとDT_NEEDEDを持たないmusl完全静的ELFです。PC/SCリーダーとして利用する場合は、hostの`pcscd`が読み込むlibc別（glibcまたはmusl）のIFD Handlerが必要です。aarch64はCIでのビルド・監査のみで、実機未検証です。
+- **Linux**: `px4d`、`px4-ts`、`px4ctl` はPT_INTERPとDT_NEEDEDを持たないmusl完全静的ELFです。PC/SCリーダーとして利用する場合は、hostの`pcscd`が読み込むlibc別（glibcまたはmusl）のIFD Handlerが必要です。
 - **macOS**: ホスト環境の libusb、PC/SC デーモン。
 - **Android**: ホストまたはアプリケーション側で USB パーミッションを取得し、ファイルディスクリプタを渡す必要があります（libusb は静的リンク済み）。
 
