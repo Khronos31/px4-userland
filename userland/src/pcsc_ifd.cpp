@@ -158,9 +158,15 @@ PX4_IFD_EXPORT RESPONSECODE IFDHPowerICC(DWORD Lun, DWORD Action, PUCHAR Atr,
         *AtrLength = 0U;
         return IFD_NOT_SUPPORTED;
     }
-    const std::size_t capacity = length;
+    const std::size_t capacity = action == IfdPowerAction::power_down ?
+                                     length : MAX_ATR_SIZE;
+    if (action != IfdPowerAction::power_down) length = capacity;
     const IfdResult result = global_adapter().adapter.power(
         Lun, action, MutableByteView{Atr, capacity}, length);
+    if (result != IfdResult::success) {
+        *AtrLength = 0U;
+        return response_code(result);
+    }
     if (!to_dword(length, *AtrLength)) {
         *AtrLength = 0U;
         return IFD_COMMUNICATION_ERROR;

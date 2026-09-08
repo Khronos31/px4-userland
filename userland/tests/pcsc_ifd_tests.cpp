@@ -647,6 +647,11 @@ bool test_exported_abi_over_real_ipc()
     CHECK(IFDHSetProtocolParameters(0U, SCARD_PROTOCOL_T1, 0U, 0U, 0U, 0U) ==
           IFD_SUCCESS);
 
+    atr.fill(0U);
+    atr_length = 0U;
+    CHECK(IFDHPowerICC(0U, IFD_RESET, atr.data(), &atr_length) == IFD_SUCCESS);
+    CHECK(atr_length == 2U && atr[0] == 0x3bU && atr[1] == 0x00U);
+
     DWORD queried_length = 0U;
     CHECK(IFDHGetCapabilities(0U, TAG_IFD_ATR, &queried_length, nullptr) ==
           IFD_ERROR_INSUFFICIENT_BUFFER);
