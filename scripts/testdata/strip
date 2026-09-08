@@ -2,7 +2,7 @@
 # Synthetic strip used only by test-packaging.sh; it is not a release tool.
 for argument in "$@"; do
     case "$argument" in
-    -x|-S|-N) ;;
+    -x|-S) ;;
     *)
         [ -f "$argument" ] || exit 1
         ;;

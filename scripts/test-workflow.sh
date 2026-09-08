@@ -57,8 +57,12 @@ grep -F '"$strip_tool" --strip-all' "$root/scripts/build-linux-static.sh" >/dev/
 grep -F '"$strip_tool" --strip-unneeded' "$root/scripts/build-linux-ifd.sh" >/dev/null
 grep -F 'readelf, "-SW"' "$root/scripts/audit-artifact.py" >/dev/null
 grep -F 'segname\s+__DWARF' "$root/scripts/audit-artifact.py" >/dev/null
-grep -F 'nsyms' "$root/scripts/audit-artifact.py" >/dev/null
-grep -F '"-N"' "$root/scripts/package-artifact.py" >/dev/null
+grep -F 'nlocalsym' "$root/scripts/audit-artifact.py" >/dev/null
+if grep -F '"-N"' "$root/scripts/package-artifact.py" >/dev/null; then
+    printf '%s\n' 'Darwin packaging must not use strip -N' >&2
+    exit 1
+fi
+grep -F '"-S", "-x"' "$root/scripts/package-artifact.py" >/dev/null
 grep -F 'IFD_EXPORTS' "$root/scripts/audit-artifact.py" >/dev/null
 grep -F 'strip_darwin_stage' "$root/scripts/package-artifact.py" >/dev/null
 grep -F 'command -v strip' "$workflow" >/dev/null

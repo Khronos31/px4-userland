@@ -5,12 +5,21 @@ if [ "${1:-}" = "-l" ]; then
     if [ "${PX4_TEST_OTOOL_MODE:-normal}" = bad-dwarf ]; then
         printf '%s\n' '      segname __DWARF'
     fi
-    printf '%s\n' '      cmd LC_SYMTAB'
-    if [ "${PX4_TEST_OTOOL_MODE:-normal}" = bad-symbols ]; then
-        printf '%s\n' '      nsyms 1'
-    else
-        printf '%s\n' '      nsyms 0'
-    fi
+    printf '%s\n' '      cmd LC_DYSYMTAB'
+    case "${PX4_TEST_OTOOL_MODE:-normal}" in
+    allowed-local)
+        printf '%s\n' '      nlocalsym 1'
+        ;;
+    bad-local)
+        printf '%s\n' '      nlocalsym 1'
+        ;;
+    bad-two)
+        printf '%s\n' '      nlocalsym 2'
+        ;;
+    *)
+        printf '%s\n' '      nlocalsym 0'
+        ;;
+    esac
     exit 0
 fi
 if [ "${1:-}" = "-D" ]; then

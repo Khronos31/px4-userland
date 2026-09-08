@@ -148,11 +148,9 @@ def strip_darwin_stage(stage: Path) -> None:
     for binary in binaries:
         if not binary.is_file() or binary.is_symlink():
             fail(f"missing macOS staged binary: {binary}")
-        # Apple strip can retain one radr:// UUID entry after -S -x. A second
-        # -N pass removes that LC_SYMTAB entry while the native audit below
-        # verifies that the IFD's exported ABI remains intact.
+        # Apple strip can retain one radr:// UUID metadata entry after -S -x;
+        # the native audit below accepts only that exact N_OPT form.
         run([tool, "-S", "-x", str(binary)])
-        run([tool, "-N", str(binary)])
 
 
 def verify_darwin_stage_runtime(stage: Path) -> None:

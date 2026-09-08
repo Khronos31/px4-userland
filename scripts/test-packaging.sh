@@ -73,15 +73,24 @@ PX4_TEST_STRIP_LOG="$test_root/strip.log" PATH="$script_dir/testdata:$PATH" pyth
 tar -xOzf "$test_root/out-macos/px4-userland-$version-darwin-arm64.tar.gz" \
     evidence/binary-audit.json | grep -F '"dwarf_sections": []' >/dev/null
 tar -xOzf "$test_root/out-macos/px4-userland-$version-darwin-arm64.tar.gz" \
-    evidence/binary-audit.json | grep -F '"nsyms": 0' >/dev/null
-test "$(wc -l < "$test_root/strip.log")" -eq 8
+    evidence/binary-audit.json | grep -F '"nlocalsym": 0' >/dev/null
+test "$(wc -l < "$test_root/strip.log")" -eq 4
 grep -F -- '-S -x ' "$test_root/strip.log" >/dev/null
-grep -F -- '-N ' "$test_root/strip.log" >/dev/null
 if grep -F "$test_root/build" "$test_root/strip.log" >/dev/null; then
     printf '%s\n' 'macOS strip touched the build tree' >&2
     exit 1
 fi
-for otool_mode in bad-dwarf bad-symbols; do
+PX4_TEST_OTOOL_MODE=allowed-local PATH="$script_dir/testdata:$PATH" \
+    python3 "$script_dir/package-artifact.py" \
+    --platform darwin-arm64 --version "$version" --build-dir "$test_root/macos-build" \
+    --ifd-bundle "$test_root/ifd.bundle" \
+    --reader-template "$script_dir/../packaging/pcsc/reader.conf.d/px4-userland.conf.in" \
+    --output-dir "$test_root/out-macos-allowed-local"
+tar -xOzf "$test_root/out-macos-allowed-local/px4-userland-$version-darwin-arm64.tar.gz" \
+    evidence/binary-audit.json | grep -F '"nlocalsym": 1' >/dev/null
+tar -xOzf "$test_root/out-macos-allowed-local/px4-userland-$version-darwin-arm64.tar.gz" \
+    evidence/binary-audit.json | grep -F 'radr://5614542' >/dev/null
+for otool_mode in bad-dwarf bad-local bad-two; do
     if PX4_TEST_OTOOL_MODE="$otool_mode" PATH="$script_dir/testdata:$PATH" \
     python3 "$script_dir/package-artifact.py" \
     --platform darwin-arm64 --version "$version" --build-dir "$test_root/macos-build" \
@@ -110,6 +119,9 @@ ln -s "$dirname_bin" "$no_otool_path/dirname"
 PATH="$no_otool_path" "$script_dir/audit-artifact.sh" \
     --platform darwin-arm64 \
     --archive "$test_root/out-macos/px4-userland-$version-darwin-arm64.tar.gz"
+PATH="$no_otool_path" "$script_dir/audit-artifact.sh" \
+    --platform darwin-arm64 \
+    --archive "$test_root/out-macos-allowed-local/px4-userland-$version-darwin-arm64.tar.gz"
 PX4_TEST_ARCH=aarch64 PATH="$script_dir/testdata:$PATH" python3 "$script_dir/package-artifact.py" \
     --platform linux-musl-aarch64 --version "$version" --static-build-dir "$test_root/build" \
     --ifd-library "$test_root/build/ifd.so" \

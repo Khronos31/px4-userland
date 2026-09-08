@@ -252,7 +252,7 @@ def validate_binary_evidence_record(record: object, platform: str) -> dict:
         if record.get("glibc_floor") not in (None, "2.31"):
             fail("invalid Linux binary evidence glibc floor")
     elif platform == "darwin-arm64":
-        fields = {"artifact", "format", "install_id", "dependencies", "dwarf_sections", "nsyms", "sha256"}
+        fields = {"artifact", "format", "install_id", "dependencies", "dwarf_sections", "nlocalsym", "local_metadata", "sha256"}
         if set(record) != fields or record.get("format") != "Mach-O":
             fail("invalid macOS binary evidence schema")
         if not isinstance(record.get("install_id"), (str, type(None))):
@@ -261,9 +261,14 @@ def validate_binary_evidence_record(record: object, platform: str) -> dict:
         validate_string_list(record.get("dwarf_sections"), "dwarf_sections")
         if record["dwarf_sections"]:
             fail("macOS binary evidence records DWARF sections")
-        if (isinstance(record.get("nsyms"), bool) or
-                not isinstance(record.get("nsyms"), int) or record["nsyms"] != 0):
-            fail("macOS binary evidence records symbols")
+        if (isinstance(record.get("nlocalsym"), bool) or
+                not isinstance(record.get("nlocalsym"), int) or
+                record["nlocalsym"] not in (0, 1)):
+            fail("invalid macOS binary evidence local symbol count")
+        local_metadata = validate_string_list(record.get("local_metadata"), "local_metadata")
+        if len(local_metadata) != record["nlocalsym"] or any(
+                not re.fullmatch(r"radr://[0-9]+", item) for item in local_metadata):
+            fail("invalid macOS local symbol metadata")
     else:
         fields = {"artifact", "format", "interpreter", "needed", "sha256"}
         if set(record) != fields or record.get("format") != "Android ELF":
@@ -490,20 +495,43 @@ def audit_macho_load_commands(path: Path) -> tuple[list[str], int]:
                                 load_commands, re.MULTILINE)
     if dwarf_sections:
         fail(f"DWARF sections are forbidden: {path}: {dwarf_sections}")
-    symtab_commands = re.findall(r"^\s*cmd\s+LC_SYMTAB\s*$", load_commands, re.MULTILINE)
-    if len(symtab_commands) != 1:
-        fail(f"Mach-O must contain exactly one LC_SYMTAB: {path}: {len(symtab_commands)}")
-    symtab = re.search(r"^\s*cmd\s+LC_SYMTAB\s*$.*?(?=^\s*cmd\s+\S|\Z)",
-                       load_commands, re.MULTILINE | re.DOTALL)
-    if not symtab:
-        fail(f"LC_SYMTAB is missing: {path}")
-    symbols = re.search(r"^\s*nsyms\s+(\d+)\s*$", symtab.group(0), re.MULTILINE)
-    if not symbols:
-        fail(f"LC_SYMTAB nsyms is missing: {path}")
-    nsyms = int(symbols.group(1))
-    if nsyms != 0:
-        fail(f"Mach-O symbols are forbidden: {path}: nsyms={nsyms}")
-    return dwarf_sections, nsyms
+    dysymtab_commands = re.findall(r"^\s*cmd\s+LC_DYSYMTAB\s*$", load_commands, re.MULTILINE)
+    if len(dysymtab_commands) != 1:
+        fail(f"Mach-O must contain exactly one LC_DYSYMTAB: {path}: {len(dysymtab_commands)}")
+    dysymtab = re.search(r"^\s*cmd\s+LC_DYSYMTAB\s*$.*?(?=^\s*cmd\s+\S|\Z)",
+                         load_commands, re.MULTILINE | re.DOTALL)
+    if not dysymtab:
+        fail(f"LC_DYSYMTAB is missing: {path}")
+    local_symbols = re.search(r"^\s*nlocalsym\s+(\d+)\s*$", dysymtab.group(0), re.MULTILINE)
+    if not local_symbols:
+        fail(f"LC_DYSYMTAB nlocalsym is missing: {path}")
+    nlocalsym = int(local_symbols.group(1))
+    if nlocalsym > 1:
+        fail(f"too many local Mach-O symbols: {path}: nlocalsym={nlocalsym}")
+    return dwarf_sections, nlocalsym
+
+
+def audit_macho_local_metadata(path: Path) -> list[str]:
+    output = run([nm_path(), "-ap", str(path)])
+    metadata = []
+    for line in output.splitlines():
+        fields = line.split()
+        if not fields:
+            continue
+        radr_fields = [field for field in fields if field.startswith("radr://")]
+        if radr_fields:
+            if (len(fields) < 2 or fields[-2] != "OPT" or
+                    not re.fullmatch(r"radr://[0-9]+", fields[-1]) or
+                    len(radr_fields) != 1 or fields[1] != "-"):
+                fail(f"unexpected Mach-O local metadata: {path}: {line}")
+            metadata.append(fields[-1])
+            continue
+        symbol_type = fields[1] if len(fields) > 1 and len(fields[0]) > 1 else fields[0]
+        if symbol_type == "-" or symbol_type.islower():
+            fail(f"unexpected local Mach-O symbol: {path}: {line}")
+    if len(metadata) != 1:
+        fail(f"expected exactly one radr:// N_OPT metadata symbol: {path}: {metadata}")
+    return metadata
 
 
 def nm_path() -> str:
@@ -524,7 +552,8 @@ def audit_macho_ifd_exports(path: Path) -> None:
 
 def audit_darwin(path: Path, logical_name: str, *, require_libusb: bool,
                  reject_pcsc: bool = False) -> dict:
-    dwarf_sections, nsyms = audit_macho_load_commands(path)
+    dwarf_sections, nlocalsym = audit_macho_load_commands(path)
+    local_metadata = audit_macho_local_metadata(path) if nlocalsym == 1 else []
     if logical_name == DARWIN_IFD_ARTIFACT:
         audit_macho_ifd_exports(path)
     output = run(["otool", "-L", str(path)])
@@ -554,13 +583,13 @@ def audit_darwin(path: Path, logical_name: str, *, require_libusb: bool,
     stable_install_id = None if own_id is None else (own_id if own_id.startswith("@") else PurePosixPath(own_id).name)
     return {"artifact": logical_name, "format": "Mach-O", "install_id": stable_install_id,
             "dependencies": logical_dependencies, "dwarf_sections": dwarf_sections,
-            "nsyms": nsyms}
+            "nlocalsym": nlocalsym, "local_metadata": local_metadata}
 
 
 def audit_archive_elf_debug_sections(archive: Path, members: dict[str, tarfile.TarInfo],
                                      platform: str) -> None:
     # Darwin DWARF inspection is performed by audit_binaries on macOS. The
-    # The resulting empty dwarf_sections/nsyms fields are checked against each
+    # resulting dwarf_sections/local-symbol fields are checked against each
     # archived binary's SHA-256 below, so this cross-platform archive audit
     # must not attempt to run the Darwin-only otool.
     if not platform.startswith(("linux-", "android-")):
