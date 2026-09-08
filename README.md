@@ -34,6 +34,28 @@ IT930x ファームウェアは本ソフトウェアに同梱されていませ�
 - **macOS**: ホスト環境の libusb、PC/SC デーモン。
 - **Android**: ホストまたはアプリケーション側で USB パーミッションを取得し、ファイルディスクリプタを渡す必要があります（libusb は静的リンク済み）。
 
+### Linux の USB アクセス権限
+
+Linux では `px4d` の実行ユーザーが PX-Q3U4（USB ID `0511:084a`）の USB デバイスノードを読み書きできる必要があります。権限がない場合は `LIBUSB_ERROR_ACCESS` になります。通常の `px4d` 実行に毎回 `sudo` を使う必要はありません。
+
+udev 環境では、対象を PX-Q3U4 だけに限定したルールを root で配置します。
+
+```udev
+# /etc/udev/rules.d/70-px4-q3u4.rules
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="0511", ATTR{idProduct}=="084a", MODE="0660", GROUP="video"
+```
+
+`px4d` を実行するユーザー（systemd などのサービスアカウントを含む）を `video` group に追加し、ルールを再読込した後、デバイスを物理的に挿し直します。
+
+```sh
+sudo usermod -aG video "$USER"
+sudo udevadm control --reload-rules
+```
+
+サービスとして運用する場合は、`$USER` ではなく `px4d` のサービスアカウントを `video` group に追加してください。
+
+ここでの `video` は USB デバイスノード用の group です。PC/SC の `@PX4_ACCESS@=group` で指定する IPC 用 group（例: `pcscd`）とは別要件で、同一サービスアカウントを両方で使う場合は両方の group 権限が必要です。この udev ルールは Android のホスト許可 FD、HAOS アドオン、macOS には適用しません。
+
 ## 導入方法
 
 配布アーカイブを任意のディレクトリへ展開します。
