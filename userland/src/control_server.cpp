@@ -1509,8 +1509,12 @@ struct PosixControlServer::Impl final {
     {
         if (shutdown_complete) return Result<void>::success();
         shutting_down = true;
-        listener.close();
         stream_listener.close();
+        // The control listener is the first listener to create the shared
+        // product/instance directories.  Close the stream endpoint first so
+        // its socket cannot prevent the owning listener from removing those
+        // now-empty directories.
+        listener.close();
         for (std::size_t index = clients.size(); index > 0U; --index) {
             remove_client(index - 1U);
         }

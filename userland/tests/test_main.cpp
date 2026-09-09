@@ -1377,6 +1377,7 @@ bool test_identity_grouping_and_topology()
 struct FakeDevice final {
     DeviceObservation observation;
     std::uint8_t serial_index = 1U;
+    int serial_result = 0;
 };
 
 struct FakeHandle final {
@@ -1606,6 +1607,12 @@ public:
                               std::size_t output_size, std::size_t* length) noexcept override
     {
         ++serial_calls;
+        if (handle != nullptr) {
+            const auto* fake = static_cast<FakeHandle*>(handle)->device;
+            if (fake != nullptr && fake->serial_result != 0) {
+                return fake->serial_result;
+            }
+        }
         if (serial_result != 0) {
             return serial_result;
         }
@@ -2595,6 +2602,73 @@ bool test_runtime_native_transaction_and_ownership()
     CHECK(std::count(failed_lifecycle.begin(), failed_lifecycle.end(), "claim") == 2);
     CHECK(std::count(failed_lifecycle.begin(), failed_lifecycle.end(), "release") == 1);
     CHECK(std::count(failed_lifecycle.begin(), failed_lifecycle.end(), "api-destroy") == 1);
+
+    auto access_api = std::unique_ptr<FakeApi>(new FakeApi);
+    FakeApi* access_raw = access_api.get();
+    FakeDevice access_first = fake_device("00000000000071", 1U);
+    FakeDevice access_second = fake_device("00000000000071", 2U);
+    access_raw->devices = {&access_first, &access_second};
+    access_raw->open_result = LIBUSB_ERROR_ACCESS;
+    const auto access_denied = RuntimeTestAccess::open_native(
+        std::move(access_api), "00000000000071");
+    // Both Q3U4 candidates are visible, but opening their root-owned USB
+    // nodes is denied.  This must not be reported as device absence.
+    CHECK(!access_denied && access_denied.error() == Error::USB_IO);
+
+    const auto expect_invalid_base_before_usb_discovery = [](const char* requested) {
+        auto api = std::unique_ptr<FakeApi>(new FakeApi);
+        FakeDevice first = fake_device("00000000000075", 1U);
+        FakeDevice second = fake_device("00000000000075", 2U);
+        api->devices = {&first, &second};
+        api->open_result = LIBUSB_ERROR_ACCESS;
+        const auto result = RuntimeTestAccess::open_native(std::move(api), requested);
+        return !result && result.error() == Error::INVALID_ARGUMENT;
+    };
+    CHECK(expect_invalid_base_before_usb_discovery("1234567890123"));
+    CHECK(expect_invalid_base_before_usb_discovery("1234567890123x"));
+
+    auto no_serial_api = std::unique_ptr<FakeApi>(new FakeApi);
+    FakeDevice no_serial_first = fake_device("00000000000072", 1U);
+    FakeDevice no_serial_second = fake_device("00000000000072", 2U);
+    no_serial_first.observation.serial.clear();
+    no_serial_second.observation.serial.clear();
+    no_serial_api->devices = {&no_serial_first, &no_serial_second};
+    no_serial_api->open_result = LIBUSB_ERROR_ACCESS;
+    const auto access_without_serial = RuntimeTestAccess::open_native(
+        std::move(no_serial_api), "00000000000072");
+    // Native descriptor enumeration has the serial index but cannot read the
+    // serial string after access is denied.  Preserve the access error even
+    // when grouping has no serial-bearing members to select.
+    CHECK(!access_without_serial && access_without_serial.error() == Error::USB_IO);
+
+    auto serial_both_api = std::unique_ptr<FakeApi>(new FakeApi);
+    FakeApi* serial_both_raw = serial_both_api.get();
+    FakeDevice serial_both_first = fake_device("00000000000073", 1U);
+    FakeDevice serial_both_second = fake_device("00000000000073", 2U);
+    serial_both_first.observation.serial.clear();
+    serial_both_second.observation.serial.clear();
+    serial_both_first.serial_result = LIBUSB_ERROR_ACCESS;
+    serial_both_second.serial_result = LIBUSB_ERROR_ACCESS;
+    serial_both_raw->devices = {&serial_both_first, &serial_both_second};
+    const auto serial_both_denied = RuntimeTestAccess::open_native(
+        std::move(serial_both_api), "00000000000073");
+    // Both candidates fail while reading the descriptor.  The group has no
+    // selectable serial-bearing members, but the actionable USB error must be
+    // retained rather than becoming NOT_FOUND.
+    CHECK(!serial_both_denied && serial_both_denied.error() == Error::USB_IO);
+
+    auto serial_one_api = std::unique_ptr<FakeApi>(new FakeApi);
+    FakeApi* serial_one_raw = serial_one_api.get();
+    FakeDevice serial_one_first = fake_device("00000000000074", 1U);
+    FakeDevice serial_one_second = fake_device("00000000000074", 2U);
+    serial_one_first.observation.serial.clear();
+    serial_one_first.serial_result = LIBUSB_ERROR_IO;
+    serial_one_raw->devices = {&serial_one_first, &serial_one_second};
+    const auto serial_one_denied = RuntimeTestAccess::open_native(
+        std::move(serial_one_api), "00000000000074");
+    // A single failed descriptor read leaves an incomplete group.  That
+    // selection INVALID_ARGUMENT must not mask the candidate's USB_IO.
+    CHECK(!serial_one_denied && serial_one_denied.error() == Error::USB_IO);
     return true;
 }
 

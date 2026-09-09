@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "px4/posix_ipc.h"
 
+#if defined(PX4_POSIX_IPC_TEST_ACCESS)
+#include "posix_ipc_test_access.h"
+#endif
+
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
@@ -27,9 +31,14 @@ constexpr mode_t kPrivateSocketMode = 0600;
 constexpr mode_t kGroupDirectoryMode = 0750;
 constexpr mode_t kGroupSocketMode = 0660;
 constexpr const char* kProductDirectoryName = "px4-userland";
+// Keep credential queries bounded even if a platform reports an unexpectedly
+// large supplementary-group count.  This covers the supported POSIX targets;
+// an over-limit or allocation failure deliberately fails closed.
+constexpr std::size_t kMaxSupplementaryGroups = 65536U;
 
 using Clock = std::chrono::steady_clock;
 using Deadline = Clock::time_point;
+using GroupQuery = int (*)(int, gid_t*) noexcept;
 
 struct NativeIdentity final {
     std::uint64_t device;
@@ -212,10 +221,59 @@ NativeIdentity identity_of(const struct stat& status) noexcept
                           static_cast<std::uint64_t>(status.st_ino)};
 }
 
+int native_getgroups(int size, gid_t* groups) noexcept
+{
+    return ::getgroups(size, groups);
+}
+
+bool supplementary_group_contains(gid_t group, GroupQuery getgroups) noexcept
+{
+    if (getgroups == nullptr) {
+        return false;
+    }
+    const int group_count = getgroups(0, nullptr);
+    if (group_count <= 0 ||
+        static_cast<std::size_t>(group_count) > kMaxSupplementaryGroups) {
+        return false;
+    }
+
+    const std::size_t count = static_cast<std::size_t>(group_count);
+    if (count > std::numeric_limits<std::size_t>::max() / sizeof(gid_t)) {
+        return false;
+    }
+    auto* groups = static_cast<gid_t*>(std::malloc(count * sizeof(gid_t)));
+    if (groups == nullptr) {
+        return false;
+    }
+
+    const int actual_count = getgroups(group_count, groups);
+    bool found = false;
+    if (actual_count == group_count) {
+        for (int index = 0; index < actual_count; ++index) {
+            if (groups[index] == group) {
+                found = true;
+                break;
+            }
+        }
+    }
+    std::free(groups);
+    return found;
+}
+
+bool ownership_allowed_for_ids(uid_t owner_uid, gid_t owner_gid,
+                               uid_t effective_uid, gid_t effective_gid,
+                               bool group_access, GroupQuery getgroups) noexcept
+{
+    return owner_uid == effective_uid ||
+           (group_access && (owner_gid == effective_gid ||
+                             supplementary_group_contains(owner_gid, getgroups)));
+}
+
 bool ownership_allowed(const struct stat& status, bool group_access) noexcept
 {
-    return status.st_uid == ::geteuid() ||
-           (group_access && status.st_gid == ::getegid());
+    return ownership_allowed_for_ids(status.st_uid, status.st_gid, ::geteuid(),
+                                     ::getegid(), group_access,
+                                     native_getgroups);
 }
 
 Result<NativeIdentity> validate_directory(const char* path, mode_t expected_mode,
@@ -430,6 +488,18 @@ void remove_owned_directory(const char* path, const NativeIdentity& identity,
 }
 
 }  // namespace
+
+#if defined(PX4_POSIX_IPC_TEST_ACCESS)
+bool PosixIpcTestAccess::ownership_allowed(uid_t owner_uid, gid_t owner_gid,
+                                            uid_t effective_uid,
+                                            gid_t effective_gid,
+                                            bool group_access,
+                                            PosixIpcGetGroups getgroups) noexcept
+{
+    return ownership_allowed_for_ids(owner_uid, owner_gid, effective_uid,
+                                     effective_gid, group_access, getgroups);
+}
+#endif
 
 SocketStream::~SocketStream() noexcept
 {

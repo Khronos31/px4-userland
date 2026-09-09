@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "px4/posix_ipc.h"
 
+#include "posix_ipc_test_access.h"
+
 #include <array>
 #include <atomic>
 #include <cerrno>
@@ -28,6 +30,12 @@ using namespace px4::userland;
 using namespace px4::userland::ipc;
 using namespace px4::userland::ipc::posix;
 
+constexpr uid_t kTestOwnerUid = static_cast<uid_t>(1001U);
+constexpr uid_t kTestOtherUid = static_cast<uid_t>(1002U);
+constexpr gid_t kTestEffectiveGid = static_cast<gid_t>(2001U);
+constexpr gid_t kTestSupplementaryGid = static_cast<gid_t>(2002U);
+constexpr gid_t kTestUnrelatedGid = static_cast<gid_t>(2003U);
+
 #define CHECK(condition)                                                                    \
     do {                                                                                    \
         if (!(condition)) {                                                                 \
@@ -36,6 +44,64 @@ using namespace px4::userland::ipc::posix;
             return false;                                                                   \
         }                                                                                   \
     } while (false)
+
+int matching_supplementary_group(int size, gid_t* groups) noexcept
+{
+    if (size == 0) {
+        return 1;
+    }
+    if (size < 1 || groups == nullptr) {
+        return -1;
+    }
+    groups[0] = kTestSupplementaryGid;
+    return 1;
+}
+
+int failed_group_query(int, gid_t*) noexcept
+{
+    return -1;
+}
+
+int over_limit_group_query(int size, gid_t* groups) noexcept
+{
+    if (size == 0) {
+        return 65537;
+    }
+    (void)groups;
+    return -1;
+}
+
+bool test_ownership_group_authorization()
+{
+    CHECK(PosixIpcTestAccess::ownership_allowed(
+        kTestOwnerUid, kTestUnrelatedGid, kTestOwnerUid, kTestEffectiveGid,
+        false, failed_group_query));
+
+    CHECK(!PosixIpcTestAccess::ownership_allowed(
+        kTestOtherUid, kTestEffectiveGid, kTestOwnerUid, kTestEffectiveGid,
+        false, matching_supplementary_group));
+    CHECK(PosixIpcTestAccess::ownership_allowed(
+        kTestOtherUid, kTestEffectiveGid, kTestOwnerUid, kTestEffectiveGid,
+        true, failed_group_query));
+
+    CHECK(!PosixIpcTestAccess::ownership_allowed(
+        kTestOtherUid, kTestSupplementaryGid, kTestOwnerUid, kTestEffectiveGid,
+        false, matching_supplementary_group));
+    CHECK(PosixIpcTestAccess::ownership_allowed(
+        kTestOtherUid, kTestSupplementaryGid, kTestOwnerUid, kTestEffectiveGid,
+        true, matching_supplementary_group));
+    CHECK(!PosixIpcTestAccess::ownership_allowed(
+        kTestOtherUid, kTestUnrelatedGid, kTestOwnerUid, kTestEffectiveGid,
+        true, matching_supplementary_group));
+
+    CHECK(!PosixIpcTestAccess::ownership_allowed(
+        kTestOtherUid, kTestSupplementaryGid, kTestOwnerUid, kTestEffectiveGid,
+        true, failed_group_query));
+    CHECK(!PosixIpcTestAccess::ownership_allowed(
+        kTestOtherUid, kTestSupplementaryGid, kTestOwnerUid, kTestEffectiveGid,
+        true, over_limit_group_query));
+    return true;
+}
 
 class TemporaryDirectory final {
 public:
@@ -562,6 +628,24 @@ bool test_stale_active_and_cleanup_identity()
         CHECK(runtime.valid());
         std::string instance;
         CHECK(make_endpoint_directories(runtime.path(), 0700, instance));
+        const EndpointConfig config{runtime.path().c_str(), "security",
+                                    kControlEndpointName,
+                                    EndpointAccess::private_user};
+        auto listener_result = SocketListener::listen(config);
+        CHECK(listener_result);
+        SocketListener listener = std::move(listener_result.value());
+        const std::string product = runtime.path() + "/px4-userland";
+        const std::string expected_instance = instance;
+        listener.close();
+        CHECK(!std::filesystem::exists(expected_instance + "/control.sock"));
+        CHECK(std::filesystem::exists(product));
+        CHECK(std::filesystem::exists(expected_instance));
+    }
+    {
+        TemporaryDirectory runtime(0700);
+        CHECK(runtime.valid());
+        std::string instance;
+        CHECK(make_endpoint_directories(runtime.path(), 0700, instance));
         const std::string endpoint = instance + "/control.sock";
         const int stale = create_bound_stale_socket(endpoint, 0600);
         CHECK(stale >= 0);
@@ -656,7 +740,8 @@ bool test_argument_and_peer_failures()
 
 bool run_posix_ipc_tests()
 {
-    return test_private_endpoint_and_framing() &&
+    return test_ownership_group_authorization() &&
+           test_private_endpoint_and_framing() &&
            test_xdg_runtime_default() &&
            test_partial_write_and_write_timeout() &&
            test_permissions_and_unsafe_paths() &&

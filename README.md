@@ -38,7 +38,7 @@ IT930x ファームウェアは本ソフトウェアに同梱されていませ�
 
 Linux ディストリビューション別の実機検証済み構成例は [Linux環境別の検証済み構成例](docs/platforms/README.md) を参照してください。
 
-Linux では `px4d` の実行ユーザーが PX-Q3U4（USB ID `0511:084a`）の USB デバイスノードを読み書きできる必要があります。権限がない場合は `LIBUSB_ERROR_ACCESS` になります。通常の `px4d` 実行に毎回 `sudo` を使う必要はありません。
+Linux では `px4d` の実行ユーザーが PX-Q3U4（USB ID `0511:084a`）の USB デバイスノードを読み書きできる必要があります。権限がない場合、低層原因は libusb の access denied ですが、CLI 表示は `device open: USB_IO`（終了コード 7）になります。通常の `px4d` 実行に毎回 `sudo` を使う必要はありません。
 
 udev 環境では、対象を PX-Q3U4 だけに限定したルールを root で配置します。
 
@@ -90,14 +90,14 @@ sed \
   /opt/px4-userland/reader.conf.d/px4-userland.conf \
   | sudo install -D /dev/stdin "<pcsc-reader-config-dir>/px4-userland.conf"
 
-# pcscd.service が User=pcscd の場合、px4d の実効 primary group と
-# reader 設定を合わせ、IPC の group mode を明示します。
+# pcscd.service が User=pcscd の場合、共有 group（pcscd）に合わせて
+# IPC の group mode を明示します（実効 primary group または補助グループのいずれでも可）。
 sudo -g pcscd /opt/px4-userland/px4d \
   --device '<base-serial>' --firmware /path/to/firmware.bin \
   --runtime-dir /run/px4-userland --group
 ```
 
-この例はrootの実効uidと `pcscd` のprimary groupを使います（service managerで同じ実効groupを指定しても構いません）。private mode では `@PX4_ACCESS@` を `user` に置換し、`px4d` と `pcscd` を同じユーザーで実行します。`group` を使う場合は、pcscd のサービスユーザーが `pcscd` group に属し、runtime directory もその group で共有できるように設定してください。
+この例はrootの実効uidと `pcscd` のgroupを使います（service managerで共有groupを実効groupまたは補助グループに指定しても構いません）。private mode では `@PX4_ACCESS@` を `user` に置換し、`px4d` と `pcscd` を同じユーザーで実行します。`group` を使う場合は、pcscd のサービスユーザーが `pcscd` group に属し、runtime directory もその group で共有できるように設定してください。
 
 macOS では `@PX4_IFD_LIBRARY@` に `ifd/px4-userland-ifd.bundle` の絶対パスを指定します。reader 設定の `LIBPATH` は bundle ディレクトリを指し、bundle 内部の dylib を直接指しません。配置後は利用する PC/SC デーモン（`pcscd`）を再起動またはリロードして設定を反映します。
 
@@ -146,7 +146,7 @@ test "$ready" = 1 || { echo 'px4d did not become ready' >&2; exit 1; }
 
 ## CLI 仕様
 
-`px4d`、`px4-ts`、`px4ctl` は、同一ホスト内で同じランタイムルートディレクトリ（`--runtime-dir`、省略時の既定値は `$XDG_RUNTIME_DIR`）と 14 桁の base serial（`--device`）を用いてプロセス間通信（IPC）を行います。実際のエンドポイントは、ランタイムルート下の `px4-userland/<BASE_SERIAL>/` に作成されます。group mode endpointへ接続する場合は、3つすべてに `--group` を指定し、実効primary groupも共有groupにします。
+`px4d`、`px4-ts`、`px4ctl` は、同一ホスト内で同じランタイムルートディレクトリ（`--runtime-dir`、省略時の既定値は `$XDG_RUNTIME_DIR`）と 14 桁の base serial（`--device`）を用いてプロセス間通信（IPC）を行います。実際のエンドポイントは、ランタイムルート下の `px4-userland/<BASE_SERIAL>/` に作成されます。group mode endpointへ接続する場合は、3つすべてに `--group` を指定し、共有groupを実効primary groupまたは補助グループ（supplementary group）に含めます。
 
 ### 受信機（Receiver）番号の割り当て
 

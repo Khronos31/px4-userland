@@ -407,6 +407,7 @@ if(PX4_BUILD_TESTS)
 
     if(TARGET px4_userland_posix_ipc)
         target_sources(px4_userland_tests PRIVATE
+            userland/src/posix_ipc.cpp
             userland/src/control_server.cpp
             userland/tests/control_integration_tests.cpp
             userland/tests/posix_ipc_tests.cpp
@@ -419,6 +420,9 @@ if(PX4_BUILD_TESTS)
             userland/tests/px4ctl_format_tests.cpp
         )
         target_link_libraries(px4_userland_tests PRIVATE px4_userland_posix_ipc)
+        target_compile_definitions(px4_userland_tests PRIVATE
+            PX4_POSIX_IPC_TEST_ACCESS=1
+        )
     endif()
 
     if(PX4_PCSC_IFD_AVAILABLE)

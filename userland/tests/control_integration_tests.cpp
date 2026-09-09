@@ -780,6 +780,9 @@ bool test_control_server_card_flow_and_shutdown()
     CHECK(server_result);
     std::unique_ptr<PosixControlServer> server = std::move(server_result.value());
     const std::string socket_path = server->endpoint_path();
+    const std::string stream_socket_path = server->stream_endpoint_path();
+    const std::string product_path = runtime.path() + "/px4-userland";
+    const std::string instance_path = product_path + "/" + serial;
 
     std::atomic<bool> stop{false};
     std::atomic<bool> server_ok{true};
@@ -897,6 +900,9 @@ bool test_control_server_card_flow_and_shutdown()
     CHECK(service.handle_count() == 0U && !service.powered());
     CHECK(server->shutdown());
     CHECK(!std::filesystem::exists(socket_path));
+    CHECK(!std::filesystem::exists(stream_socket_path));
+    CHECK(!std::filesystem::exists(instance_path));
+    CHECK(!std::filesystem::exists(product_path));
     return true;
 }
 

@@ -1705,6 +1705,18 @@ Q3U4Runtime::~Q3U4Runtime() noexcept = default;
 
 Result<void> Q3U4Runtime::Impl::acquire_native(std::string_view base_serial) noexcept
 {
+    // Validate caller input before discovery errors are considered.  A malformed
+    // requested base serial must remain an argument error even when USB
+    // discovery also encounters an operational failure.
+    if (!base_serial.empty() && base_serial.size() != 14U) {
+        return Result<void>::failure(Error::INVALID_ARGUMENT);
+    }
+    for (const char character : base_serial) {
+        if (character < '0' || character > '9') {
+            return Result<void>::failure(Error::INVALID_ARGUMENT);
+        }
+    }
+
     DeviceDiscovery discovery;
     NativeEnumerator enumerator(*api_, session_->context());
     const auto discovered = enumerator.discover(discovery);
@@ -1722,13 +1734,28 @@ Result<void> Q3U4Runtime::Impl::acquire_native(std::string_view base_serial) noe
     }
     const auto selected = select_ready_q3u4_group(grouping.value(), base_serial);
     if (!selected) {
+        // An operational discovery error is not an incomplete grouping.  In
+        // particular, libusb may open the device but fail while reading its
+        // serial descriptor; that candidate is marked invalid_serial rather
+        // than open_failed.  Preserve such errors instead of collapsing them
+        // into NOT_FOUND.  INVALID_ARGUMENT is intentionally excluded here:
+        // serial_index == 0 and malformed serial data are validation failures,
+        // not USB access failures.
+        for (const DeviceCandidate& candidate : discovery.candidates()) {
+            if ((candidate.status == ObservationStatus::open_failed ||
+                 candidate.status == ObservationStatus::invalid_serial) &&
+                candidate.discovery_error != Error::OK &&
+                candidate.discovery_error != Error::INVALID_ARGUMENT) {
+                return Result<void>::failure(candidate.discovery_error);
+            }
+        }
         return Result<void>::failure(selected.error());
     }
     const Q3U4Group& group = grouping.value().groups[selected.value()];
     std::array<const DeviceCandidate*, 2U> candidates{nullptr, nullptr};
     for (const DeviceCandidate& candidate : discovery.candidates()) {
         for (std::size_t slot = 0U; slot < candidates.size(); ++slot) {
-            if (group.devices[slot].has_value() && candidate.status == ObservationStatus::usable &&
+            if (group.devices[slot].has_value() &&
                 candidate.observation.serial == group.devices[slot]->serial) {
                 candidates[slot] = &candidate;
             }
@@ -1736,6 +1763,14 @@ Result<void> Q3U4Runtime::Impl::acquire_native(std::string_view base_serial) noe
     }
     if (candidates[0U] == nullptr || candidates[1U] == nullptr) {
         return Result<void>::failure(Error::INTERNAL);
+    }
+    for (const DeviceCandidate* candidate : candidates) {
+        if (candidate->status != ObservationStatus::usable) {
+            if (candidate->discovery_error != Error::OK) {
+                return Result<void>::failure(candidate->discovery_error);
+            }
+            return Result<void>::failure(observation_status_error(candidate->status));
+        }
     }
 
     struct Pending final {
