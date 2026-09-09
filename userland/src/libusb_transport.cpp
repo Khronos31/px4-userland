@@ -26,8 +26,14 @@
 #include <mutex>
 #include <utility>
 
+#if defined(__FreeBSD__)
+#if !defined(LIBUSB_API_VERSION) || LIBUSB_API_VERSION < 0x01000102
+#error "libusb-1.0.16 or newer is required on FreeBSD"
+#endif
+#else
 #if !defined(LIBUSB_API_VERSION) || LIBUSB_API_VERSION < 0x01000107
 #error "libusb-1.0.23 or newer is required"
+#endif
 #endif
 
 namespace px4::userland {
@@ -343,6 +349,14 @@ int NativeLibusbApi::init(Context* context, bool no_device_discovery) noexcept
     if (result == 0) process_context = created_context;
     *reinterpret_cast<libusb_context**>(context) = created_context;
     return result;
+#elif defined(__FreeBSD__)
+    auto** native_context = reinterpret_cast<libusb_context**>(context);
+    if (no_device_discovery) {
+        // FreeBSD's base libusb has no option API.  Native Q3U4 operation
+        // requires enumeration; fd-wrapping is a Linux/Android path.
+        return LIBUSB_ERROR_NOT_SUPPORTED;
+    }
+    return libusb_init(native_context);
 #else
     auto** native_context = reinterpret_cast<libusb_context**>(context);
     if (!no_device_discovery) {

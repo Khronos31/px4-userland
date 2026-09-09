@@ -1,10 +1,12 @@
 # px4-userland 仕様
 
-Status: Frozen v0.12 (2026-09-07)
+Status: Frozen v0.13 (2026-09-09)
 
 本書の`MUST`、`MUST NOT`、`SHOULD`は規範要件を示す。実機観測で前提の誤りが判明した場合も暗黙に
 実装だけを変えず、本書のversionと変更理由を更新してから実装する。
 
+v0.13では、Android NDK API 24のx86_64をCIでcompile/ELF verifyするbuild-only経路として追加する。これは
+runtime supportや配布対象ではなく、Bliss OSでの実機試験を行うまではhardware-unverifiedとする。
 v0.8では、`empty_intervals`の訂正でstream starvationを見逃さないよう、1秒以下の観測間隔と連続5秒以内の
 packet/byte進行を受入条件に追加した。これはwire semanticsの変更ではなく、v0.7のacceptance erratumを
 機械的に検証可能にする訂正であり、protocol minorは変更しない。
@@ -47,6 +49,7 @@ support matrixと実機検証経路は次のとおりとする。
 | HAOS Alpine add-on | Lenovo ThinkCentre M720q / Supervisor add-on | add-on内のmusl/libusb | Alpine/musl add-onのtuner/card/PCSC経路 |
 | Android | Google TV Streamer / Termux | `termux-usb`からfd渡し | Bionic CLI、repeated `--fd`、portable IPC |
 | Android | Google TV Streamer / ad-hoc APK | Android USB Host APIからfd渡し | armv7a native coreをAPK processから利用する経路 |
+| Android x86_64 | GitHub Actions `ubuntu-24.04` | NDK API 24 cross-build | build-tested / hardware-unverified、CI build-only（Bliss OS未試験） |
 | macOS | Apple Mac mini / M2 | native libusb | tuner、card core、PC/SC adapter |
 | Windows | unsupported | 対象外 | `tsukumijima/px4_drv`を利用する。px4-userlandのCLI/IPCとは非互換 |
 
@@ -128,7 +131,9 @@ portable coreからOS vendor固有header、Linux kernel header、glibc内部API�
   condition_variable、atomicは使用できる。
 - 内部エラーは独自の固定enumを使用し、Linuxの負のerrnoを公開IPCへ直接流さない。
 - libusbの最小バージョンは1.0.23とする。
-- AndroidはAPI 24以上、`armv7a-linux-androideabi`と`aarch64-linux-android`を対象とする。
+- Androidのruntime targetはAPI 24以上、`armv7a-linux-androideabi`と`aarch64-linux-android`とする。
+  `x86_64-linux-android`はCI compile/ELF verificationだけを行うbuild-only pathであり、Bliss OSでの実機試験前に
+  runtime supportを主張しない。
 
 ## 4. Device contract
 
@@ -400,7 +405,8 @@ queue overflow、sync/TEI/drop検出を0にしない。stdoutはTSだけ、全�
 - `px4d`は`--fd FD`を繰り返し受け取り、Q3U4の2 USB deviceをwrapできる。
 - fd modeでは`/dev/bus/usb`の列挙を要求しない。
 - fdの所有権とclose責任を明記し、double-closeしない。
-- aarch64とarmv7aをAndroid NDKでcross-buildする。
+- aarch64とarmv7aをAndroid NDKでcross-buildする。x86_64もAndroid NDK API 24でCI buildとELF verificationを行うが、
+  build-only / hardware-unverifiedとし、Bliss OS試験前のruntime support claimを禁止する。
 - ELF interpreterはBionic linker、libusbはstatic link、host RPATH/RUNPATHは空とする。
 - Termux試験では`termux-usb`が開いた2つのfdを渡し、通常のCLI/IPC経路を使用する。
 - APK試験ではAndroid USB Host APIでQ3U4の両deviceへpermissionを取得し、detachしないfdをnative側へ渡す。
@@ -464,7 +470,8 @@ Linux・Android・macOSを対象にする既存実装は確認できなかった
 2. `cmake --build build`がwarningをerrorとして扱う設定で成功する。
 3. `ctest --test-dir build --output-on-failure`が成功する。
 4. Ubuntu/glibc、Alpine/musl、macOSでbuildとoffline testsが成功する。
-5. Android NDK API 24でaarch64とarmv7aのbuildが成功する。
+5. Android NDK API 24でaarch64とarmv7aのbuildが成功し、x86_64のCI build-only compile/ELF verificationも成功する。
+   x86_64のruntime supportはBliss OS実機試験まで主張しない。
 6. Android ELFにglibc/musl loader、shared libusb、host RPATH/RUNPATHが含まれない。
 7. mock USBによるQ3U4 grouping、firmware framing、I2C、tune sequence、bridge別TS demux、hotplug試験が成功する。
 8. `smart_card_state_test`相当のATR、T=1、timeout、retry、APDU分割、抜去、再挿入試験が成功する。
@@ -556,6 +563,7 @@ v0.4実機試験の割当は次のとおりとする。
 | Latitude 5300 / Alpine Docker | auxiliary build/parser smoke only; SCS、HAOS add-on、Latitude nativeの代替不可 |
 | Google TV Streamer / Termux | armv7a Bionic ELF、2 fd wrap、T/S capture、内蔵card経路、stop/reopen、USB detach/reconnect、30分以上 |
 | Google TV Streamer / ad-hoc APK | armv7a、USB permission、2 fd wrap、T/S capture、内蔵card経路、stop/reopen、USB detach/reconnect、30分以上 |
+| Android x86_64 / GitHub Actions | NDK API 24 build、ELF verification、実機未検証。Bliss OS試験前はbuild-only |
 | M2 Mac mini / macOS | grouping、T/S capture、内蔵card経路、実PC/SC consumer、USB detach/reconnect、30分以上 |
 
 TermuxとAPKは同一ハードウェアでも別runtime経路として個別に合否を記録する。SCS native、HAOS Alpine add-on、
@@ -601,7 +609,8 @@ Android binary release gateは次の全項目を満たすまで未完成とす�
 `.github/workflows/build_userland.yml`の`release-candidate` workflowとして実装済みである。workflowはtagや
 GitHub Releaseを作成せず、7つのbinary archive、対応source archive、外側`SHA256SUMS`をcandidate artifactとして
 まとめる。Stable公開時は、このcandidateで使用した最終配布archiveそのものを各対象環境で試験する。Linux aarch64は
-archive auditとnative CI buildを必須とするが、実機未検証を既知の非ブロッカーとして公開時に明記する。
+archive auditとnative CI buildを必須とするが、実機未検証を既知の非ブロッカーとして公開時に明記する。Android
+x86_64は最終配布archiveに含めず、CI build-only / hardware-unverifiedとして扱う。
 
 ### 10.5 Stable release gate
 

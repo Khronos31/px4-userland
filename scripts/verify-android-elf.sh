@@ -20,6 +20,18 @@ verify_load_alignments()
     done
 }
 
+verify_machine()
+{
+    expected_arch=$1
+    machine=$2
+    case "$expected_arch:$machine" in
+    aarch64:AArch64|aarch64:AARCH64|aarch64:ARM\ aarch64) ;;
+    armv7a:ARM|armv7a:Arm) ;;
+    x86_64:X86-64|x86_64:x86-64|x86_64:Advanced\ Micro\ Devices\ X86-64) ;;
+    *) return 1 ;;
+    esac
+}
+
 if [ "$#" -eq 1 ] && [ "$1" = '--self-test' ]; then
     if verify_load_alignments '0x1000'; then
         printf '%s\n' 'self-test failed: 0x1000 was accepted' >&2
@@ -30,20 +42,34 @@ if [ "$#" -eq 1 ] && [ "$1" = '--self-test' ]; then
         printf '%s\n' 'self-test failed: non-power-of-two alignment was accepted' >&2
         exit 1
     fi
-    printf '%s\n' 'alignment self-test: 0x1000 rejected, 0x4000 accepted, 0x6000 rejected'
+    verify_machine x86_64 'Advanced Micro Devices X86-64'
+    if verify_machine x86_64 AArch64; then
+        printf '%s\n' 'self-test failed: x86_64 accepted AArch64 machine' >&2
+        exit 1
+    fi
+    if verify_machine aarch64 'Advanced Micro Devices X86-64'; then
+        printf '%s\n' 'self-test failed: aarch64 accepted x86_64 machine' >&2
+        exit 1
+    fi
+    printf '%s\n' 'alignment and architecture self-test: invalid alignments rejected, x86_64 distinguished from AArch64'
     exit 0
 fi
 
-[ "$#" -eq 2 ] || {
-    printf '%s\n' "usage: $0 BINARY /system/bin/linker[64]" >&2
+[ "$#" -eq 3 ] || {
+    printf '%s\n' "usage: $0 BINARY /system/bin/linker[64] aarch64|armv7a|x86_64" >&2
     exit 2
 }
 binary=$1
 expected_interpreter=$2
+expected_arch=$3
 [ -f "$binary" ] || { printf '%s\n' "missing ELF: $binary" >&2; exit 1; }
 case "$expected_interpreter" in
 /system/bin/linker|/system/bin/linker64) ;;
 *) printf '%s\n' "invalid expected interpreter: $expected_interpreter" >&2; exit 2 ;;
+esac
+case "$expected_arch" in
+aarch64|armv7a|x86_64) ;;
+*) printf '%s\n' "invalid expected architecture: $expected_arch" >&2; exit 2 ;;
 esac
 
 if command -v readelf >/dev/null 2>&1; then
@@ -59,11 +85,10 @@ program=$($readelf_bin -lW "$binary")
 dynamic=$($readelf_bin -d "$binary")
 
 machine=$(printf '%s\n' "$header" | awk -F: '/Machine:/ {gsub(/^[[:space:]]+/, "", $2); print $2; exit}')
-case "$expected_interpreter:$machine" in
-/system/bin/linker64:AArch64|/system/bin/linker64:AARCH64|/system/bin/linker64:ARM\ aarch64) ;;
-/system/bin/linker:ARM|/system/bin/linker:Arm) ;;
-*) printf '%s\n' "unexpected machine: $machine" >&2; exit 1 ;;
-esac
+verify_machine "$expected_arch" "$machine" || {
+    printf '%s\n' "unexpected machine for $expected_arch: $machine" >&2
+    exit 1
+}
 type=$(printf '%s\n' "$header" | awk -F: '/Type:/ {gsub(/^[[:space:]]+/, "", $2); print $2; exit}')
 case "$type" in
 DYN*|*'shared object'*) ;;
@@ -74,6 +99,12 @@ interpreter=$(printf '%s\n' "$program" | sed -n 's/.*Requesting program interpre
     printf '%s\n' "unexpected interpreter: $interpreter" >&2
     exit 1
 }
+
+if printf '%s\n' "$($readelf_bin -SW "$binary")" |
+    awk '$2 ~ /^\.debug_/ || $2 == ".symtab" || $2 == ".strtab" {found=1} END {exit !found}'; then
+    printf '%s\n' 'unstripped debug or regular symbol table section is forbidden' >&2
+    exit 1
+fi
 
 load_alignments=$(printf '%s\n' "$program" | awk '$1 == "LOAD" {print $NF}')
 verify_load_alignments "$load_alignments"

@@ -39,6 +39,8 @@ jobs:
           cmake -S . -B build-userland -G Ninja -DCMAKE_BUILD_TYPE=Release -DPX4_BUILD_TESTS=ON -DPX4_REQUIRE_PCSC_IFD=ON
           cmake --build build-userland
           ctest --test-dir build-userland --output-on-failure
+      - name: Test libusb compatibility paths
+        run: scripts/test-libusb-compatibility.sh
 
   linux-x86_64:
     name: Linux x86_64 static and libc-qualified IFD
@@ -332,6 +334,32 @@ jobs:
           path: ${{ runner.temp }}/release-candidate/${{ matrix.abi }}/package/*.tar.gz
           if-no-files-found: error
 
+  android-api-24-x86_64:
+    name: Android API 24 x86_64 build-only compile and ELF checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: nttld/setup-ndk@afb4c9964b521afb97c864b7d40b11e6911bd410 # v1.5.0
+        id: setup-ndk
+        with:
+          ndk-version: r27d
+          add-to-path: false
+      - name: Install Android build tools
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y binutils cmake ninja-build
+      - name: Build and verify Android x86_64 executables
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          set -eu
+          output="$RUNNER_TEMP/android-x86_64"
+          mkdir -p "$output"
+          scripts/build-android.sh --abi x86_64 --output "$output"
+          for binary in px4-ts-probe px4d px4ctl px4-ts; do
+            executable="$output/$binary-x86_64"
+            test -x "$executable"
+            scripts/verify-android-elf.sh "$executable" /system/bin/linker64 x86_64
+          done
+
   source-archive:
     name: Corresponding source archive
     runs-on: ubuntu-24.04
@@ -360,7 +388,7 @@ jobs:
 
   release-candidate:
     name: Assemble release-candidate artifact
-    needs: [ubuntu-glibc-tests, linux-x86_64, linux-aarch64, static-start-x86_64, static-start-aarch64, source-relink-x86_64, source-relink-aarch64, macos, android-api-24, source-archive]
+    needs: [ubuntu-glibc-tests, linux-x86_64, linux-aarch64, static-start-x86_64, static-start-aarch64, source-relink-x86_64, source-relink-aarch64, macos, android-api-24, android-api-24-x86_64, source-archive]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2

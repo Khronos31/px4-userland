@@ -5,6 +5,23 @@ set -eu
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 workflow=$root/.github/workflows/build_userland.yml
 test -f "$workflow"
+if "$root/scripts/build-android.sh" --abi unsupported --output "/tmp/px4-userland-invalid-abi-$$"; then
+    printf '%s\n' 'build-android.sh accepted an unsupported ABI' >&2
+    exit 1
+fi
+"$root/scripts/verify-android-elf.sh" --self-test >/dev/null
+android_x86_block=$(awk '
+    $0 == "  android-api-24-x86_64:" { in_job = 1; next }
+    in_job && /^  [^ ]/ { exit }
+    in_job { print }
+' "$workflow")
+printf '%s\n' "$android_x86_block" | grep -F 'scripts/build-android.sh --abi x86_64' >/dev/null
+printf '%s\n' "$android_x86_block" | grep -F 'scripts/verify-android-elf.sh' >/dev/null
+if printf '%s\n' "$android_x86_block" | grep -E 'package-artifact\.sh|actions/upload-artifact@|release-candidate'; then
+    printf '%s\n' 'Android x86_64 build-only job contains packaging or release-candidate content' >&2
+    exit 1
+fi
+grep -F 'android-api-24, android-api-24-x86_64, source-archive' "$workflow" >/dev/null
 # shellcheck disable=SC2016
 test "$(grep -c 'docker run --rm -e GITHUB_SHA="\$GITHUB_SHA"' "$workflow")" -ge 4
 grep -F 'linux-glibc-x86_64' "$workflow" >/dev/null

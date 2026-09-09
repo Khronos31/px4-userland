@@ -12,7 +12,7 @@ libusb_source_input=
 usage()
 {
     printf '%s\n' \
-        "usage: $0 --abi aarch64|arm64-v8a|armv7a|armeabi-v7a --output DIR" \
+        "usage: $0 --abi aarch64|arm64-v8a|armv7a|armeabi-v7a|x86_64 --output DIR" \
         "          [--evidence DIR] [--libusb-source DIR]"
 }
 
@@ -61,12 +61,21 @@ arm64-v8a|aarch64)
     clang_triple=aarch64-linux-android${api}
     autotools_host=aarch64-linux-android
     expected_interpreter=/system/bin/linker64
+    expected_arch=aarch64
     ;;
 armeabi-v7a|armv7a)
     abi=armeabi-v7a
     clang_triple=armv7a-linux-androideabi${api}
     autotools_host=armv7a-linux-androideabi
     expected_interpreter=/system/bin/linker
+    expected_arch=armv7a
+    ;;
+x86_64)
+    abi=x86_64
+    clang_triple=x86_64-linux-android${api}
+    autotools_host=x86_64-linux-android
+    expected_interpreter=/system/bin/linker64
+    expected_arch=x86_64
     ;;
 *)
     printf '%s\n' "unsupported ABI: $abi" >&2
@@ -285,11 +294,6 @@ env -i \
     "$cmake_bin" --build "$cmake_build" \
         --target px4-ts-probe px4d px4ctl px4-ts -j"$jobs"
 
-for binary in px4-ts-probe px4d px4ctl px4-ts; do
-    "$root/scripts/verify-android-elf.sh" \
-        "$cmake_build/$binary" "$expected_interpreter"
-done
-
 verify_static_libusb()
 {
     binary=$1
@@ -312,7 +316,7 @@ for binary in px4-ts-probe px4d px4ctl px4-ts; do
 done
 for binary in px4-ts-probe px4d px4ctl px4-ts; do
     "$root/scripts/verify-android-elf.sh" \
-        "$cmake_build/$binary" "$expected_interpreter"
+        "$cmake_build/$binary" "$expected_interpreter" "$expected_arch"
 done
 
 if [ -n "$evidence" ]; then

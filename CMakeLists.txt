@@ -68,6 +68,15 @@ set(PX4_LIBUSB_LIBRARY "" CACHE FILEPATH "libusb-1.0 library override")
 find_package(Threads REQUIRED)
 
 if(PX4_ENABLE_LIBUSB)
+    if(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
+        # FreeBSD 15.1 supplies libusb 1.0.16 in the base system, while
+        # the APIs required by native Q3U4 operation are available.
+        set(px4_libusb_pkg_config_spec "libusb-1.0")
+        set(px4_libusb_requirement "libusb-1.0")
+    else()
+        set(px4_libusb_pkg_config_spec "libusb-1.0>=1.0.23")
+        set(px4_libusb_requirement "libusb-1.0 >= 1.0.23")
+    endif()
     find_package(PkgConfig QUIET)
     if(PX4_LIBUSB_INCLUDE_DIR AND PX4_LIBUSB_LIBRARY)
         add_library(px4_libusb UNKNOWN IMPORTED)
@@ -77,7 +86,8 @@ if(PX4_ENABLE_LIBUSB)
         )
         set(PX4_LIBUSB_TARGET px4_libusb)
     elseif(PkgConfig_FOUND)
-        pkg_check_modules(PC_LIBUSB QUIET IMPORTED_TARGET libusb-1.0>=1.0.23)
+        pkg_check_modules(PC_LIBUSB QUIET IMPORTED_TARGET
+            "${px4_libusb_pkg_config_spec}")
     endif()
 
     if(NOT PX4_LIBUSB_TARGET AND TARGET PkgConfig::PC_LIBUSB)
@@ -94,7 +104,7 @@ if(PX4_ENABLE_LIBUSB)
         endif()
         if(NOT PX4_LIBUSB_INCLUDE_DIR OR NOT PX4_LIBUSB_LIBRARY)
             message(FATAL_ERROR
-                "libusb-1.0 >= 1.0.23 is required; use pkg-config or set "
+                "${px4_libusb_requirement} is required; use pkg-config or set "
                 "PX4_LIBUSB_INCLUDE_DIR and PX4_LIBUSB_LIBRARY")
         endif()
         add_library(px4_libusb UNKNOWN IMPORTED)

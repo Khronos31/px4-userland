@@ -611,11 +611,12 @@ def audit_archive_elf_debug_sections(archive: Path, members: dict[str, tarfile.T
             audit_elf_debug_sections(path, readelf_path())
 
 
-def audit_android(path: Path, logical_name: str, expected_interpreter: str, root: Path) -> dict:
+def audit_android(path: Path, logical_name: str, expected_interpreter: str,
+                  expected_arch: str, root: Path) -> dict:
     verifier = root / "scripts" / "verify-android-elf.sh"
     if not verifier.is_file():
         fail(f"missing existing Android ELF verifier: {verifier}")
-    run([str(verifier), str(path), expected_interpreter])
+    run([str(verifier), str(path), expected_interpreter, expected_arch])
     readelf = readelf_path()
     dynamic = run([readelf, "-d", str(path)])
     return {"artifact": logical_name, "format": "Android ELF",
@@ -634,7 +635,8 @@ def audit_binaries(args: argparse.Namespace) -> dict:
             fail(f"missing production program: {path}")
         if args.platform.startswith("android"):
             expected = "/system/bin/linker64" if args.platform.endswith("aarch64") else "/system/bin/linker"
-            evidence = audit_android(path, program, expected, args.repo_root.resolve())
+            architecture = "aarch64" if args.platform.endswith("aarch64") else "armv7a"
+            evidence = audit_android(path, program, expected, architecture, args.repo_root.resolve())
         elif args.platform.startswith("linux-"):
             evidence = audit_linux(path, program, platform=args.platform, shared=False,
                                    require_libusb=program == "px4d")
