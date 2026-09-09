@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: GPL-2.0-only
+policy_module(px4d, 1.0.0)
+
+gen_require(`
+    type pcscd_t;
+')
+
+type px4d_t;
+type px4d_exec_t;
+init_daemon_domain(px4d_t, px4d_exec_t)
+init_nnp_daemon_domain(px4d_t)
+
+type px4d_var_run_t;
+files_pid_file(px4d_var_run_t)
+files_pid_filetrans(init_t, px4d_var_run_t, dir, "px4-userland")
+type px4d_data_t;
+files_type(px4d_data_t)
+
+# px4d creates the per-device directory and the control/stream sockets below
+# the systemd-managed /run/px4-userland directory.
+manage_dirs_pattern(px4d_t, px4d_var_run_t, px4d_var_run_t)
+manage_sock_files_pattern(px4d_t, px4d_var_run_t, px4d_var_run_t)
+
+# libusb uses generic USB device nodes and reads USB topology from sysfs.
+dev_rw_generic_usb_dev(px4d_t)
+dev_read_sysfs(px4d_t)
+udev_read_db(px4d_t)
+
+# libusb's hotplug path receives kernel object uevent notifications.
+allow px4d_t self:netlink_kobject_uevent_socket create_socket_perms;
+
+# The unit's firmware path is explicitly labeled as data; only its parent
+# directories use the ordinary Fedora usr_t label.
+files_search_usr(px4d_t)
+read_files_pattern(px4d_t, px4d_data_t, px4d_data_t)
+
+# pcscd may use the standard reference-policy stream connection pattern for
+# the dedicated socket hierarchy. The final target is deliberately px4d_t,
+# so this does not grant connections to arbitrary or unconfined domains.
+stream_connect_pattern(pcscd_t, px4d_var_run_t, px4d_var_run_t, px4d_t)

@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: GPL-2.0-only
+[Unit]
+Description=PLEX PX-Q3U4 userland daemon (%i)
+Documentation=https://github.com/Khronos31/px4-userland
+After=local-fs.target systemd-udev.service
+Before=pcscd.service
+ConditionPathExists=/opt/px4-userland/px4d
+ConditionPathExists=/opt/px4-userland/firmware/it930x-firmware.bin
+
+[Service]
+Type=simple
+User=px4d
+Group=pcscd
+SupplementaryGroups=video
+ExecStart=/opt/px4-userland/px4d --device %i --firmware /opt/px4-userland/firmware/it930x-firmware.bin --runtime-dir /run/px4-userland --group
+# Hardware absence and firmware errors require an explicit operator recovery;
+# do not create an unbounded restart loop for a missing tuner.
+Restart=no
+RuntimeDirectory=px4-userland
+RuntimeDirectoryMode=0750
+UMask=0007
+
+# Keep the service read-only outside its systemd-created runtime hierarchy.
+# Do not use PrivateDevices: libusb must access /dev/bus/usb.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/run/px4-userland
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

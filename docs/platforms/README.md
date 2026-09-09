@@ -5,3 +5,4 @@
 - [Alpine Linux / BusyBox mdev](alpine-mdev.md)
 - [NixOS](nixos.md)
 - [Chimera Linux](chimera-linux.md)
+- [Fedora / SELinux Enforcing](../../packaging/fedora/README.md)

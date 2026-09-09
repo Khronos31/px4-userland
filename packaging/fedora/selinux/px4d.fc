@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
+/opt/px4-userland/px4d -- gen_context(system_u:object_r:px4d_exec_t,s0)
+/opt/px4-userland/firmware/it930x-firmware\.bin -- gen_context(system_u:object_r:px4d_data_t,s0)
+/run/px4-userland(/.*)? gen_context(system_u:object_r:px4d_var_run_t,s0)

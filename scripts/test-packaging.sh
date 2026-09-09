@@ -8,6 +8,7 @@ python3 "$script_dir/package-artifact.py" --self-test
 python3 "$script_dir/android-link-inventory.py" --help >/dev/null
 "$script_dir/test-mdev.sh"
 "$script_dir/test-workflow.sh"
+"$script_dir/test-fedora.sh"
 test_root=$(mktemp -d /tmp/px4-package-self-test.XXXXXX)
 trap 'find "$test_root" -depth -delete' EXIT
 version=$(tr -d '\n' < "$script_dir/../VERSION")
