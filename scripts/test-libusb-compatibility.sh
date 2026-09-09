@@ -55,16 +55,11 @@ PKG_CONFIG_PATH="$pkg_dir" PKG_CONFIG_LIBDIR="$pkg_dir" cmake -S "$root" -B "$ov
     -DPX4_LIBUSB_INCLUDE_DIR="$prefix/include/libusb-1.0" \
     -DPX4_LIBUSB_LIBRARY="$prefix/lib/libusb-1.0.so" >/dev/null
 
-if command -v c++ >/dev/null 2>&1 && pkg-config --cflags libusb-1.0 >/dev/null 2>&1; then
+if [ "$(uname -s)" = FreeBSD ] &&
+    command -v c++ >/dev/null 2>&1 && pkg-config --cflags libusb-1.0 >/dev/null 2>&1; then
     libusb_include=$(pkg-config --variable=includedir libusb-1.0)
-    freebsd_define=
-    compiler_defines=$work/compiler-defines
-    printf '%s\n' '' | c++ -dM -E -x c++ - > "$compiler_defines"
-    if ! grep -Eq '^#define __FreeBSD__([[:space:]]|$)' "$compiler_defines"; then
-        freebsd_define=-D__FreeBSD__
-    fi
     c++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -fno-exceptions -fno-rtti \
-        $freebsd_define -isystem "$libusb_include/libusb-1.0" \
+        -isystem "$libusb_include/libusb-1.0" \
         -I"$root/userland/include" -I"$root/userland/src" \
         -c "$root/userland/src/libusb_transport.cpp" -o "$work/libusb_transport-freebsd.o"
 fi
