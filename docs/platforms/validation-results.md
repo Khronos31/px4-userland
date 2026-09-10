@@ -27,14 +27,19 @@
 | FreeBSD 15.1-RELEASE（amd64） | — | PX-Q3U4を使用。native build、CTest 5/5、地上波と衛星の同時受信、内蔵カードAPDU 10/10を確認。 | 現行Release対象外。 |
 | OpenWrt 25.12.5（x86_64 / musl 1.2.5 / procd） | `29635988c5692eb9167dc082ef0b4c4e7dfb5e04`と同内容 | PX-Q3U4を使用。static/stripped成果物、地上波と衛星の同時受信、APDU 10/10、procd起動停止、物理切断時exit 7・process/socket残留なし、再接続後復帰を確認。 | OpenWrt向けソース修正なし。 |
 
+## Android x86_64追加検証
+
+| 環境 | revision | 確認内容 | 補足 |
+| --- | --- | --- | --- |
+| Bliss OS（Android 13 API 33 / x86_64 / Bionic） | `8133f420cfc2705e96f10a00220a53e9af773cd4` | 検証専用Python SCM_RIGHTS brokerでPX-Q3U4の2 USB bridgeから得た2 fdを1つの`px4d`へ渡した。内蔵カードのATRとAPDU 10/10を確認。地上波64,885,004 bytes / 345,133 packets、衛星85,902,652 bytes / 456,929 packetsを各30秒受信し、alignment/sync/malformed/TEI/continuity error 0。全8 receiverの15秒同時受信は全exit 0、sync/TEI/continuity/queue-drop/USB error 0。受信中切断は`px4-ts`と`px4d`が`DISCONNECTED`・exit 7で有限終了し、process/socket残留なし。OS再起動なしの再接続後もカード・地上波・衛星が成功。 | IP3 GT1、kernel 6.1.112-gloria-xanmod1、Termux 0.118.3。NDK r27 / API 24 build。正式なTermux用2 fd launcherは未実装。カードの物理抜去・再挿入は未試験。Release配布対象外。 |
+
 ## CIのみ
 
 - Linux x86_64/aarch64 × glibc/muslはbuild、artifact audit、最終archive起動をCIで確認。aarch64/muslのUSB実機およびIFD loadは未確認。
-- Android x86_64はbuild/ELF検査のみで、Bliss OS実機試験は未完了。Release配布対象ではない。
+- Android x86_64はbuild/ELF検査に加え、検証専用brokerを用いたBliss OS実機試験を完了。正式なTermux用2 fd launcherは未実装で、Release配布対象ではない。
 
 ## 既知の観測事項
 
 - 2時間の8 receiver soakではreceiver 0〜6はtransport error 0。receiver 7でTEI 10,974、continuity error 453、sync/queue-drop/USB error 0。同じ約11k TEIの署名は同一個体の参照カーネルドライバでも再現。原因および他個体での挙動は未確認。
 - FreeBSDでは接続直後に片bridgeのfirmware version queryが1回TIMEOUTする事象を2回観測。再試行後は正常。
 - Windowsは本プロダクトのサポート外。
-
