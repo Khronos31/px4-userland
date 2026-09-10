@@ -3,6 +3,7 @@
 #include "px4/control_server.h"
 #include "px4/pcsc_ifd_adapter.h"
 #include "px4/tuner_service.h"
+#include "test_temp_directory.h"
 
 extern "C" {
 #include <ifdhandler.h>
@@ -508,9 +509,7 @@ class TempRuntime final {
 public:
     TempRuntime()
     {
-        std::array<char, 64U> pattern{};
-        constexpr const char* value = "/tmp/px4-ifd-XXXXXX";
-        std::memcpy(pattern.data(), value, std::strlen(value) + 1U);
+        std::string pattern = test::temporary_directory_template("px4-ifd-");
         char* made = ::mkdtemp(pattern.data());
         if (made != nullptr) {
             path_ = made;

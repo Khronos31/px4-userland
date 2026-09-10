@@ -2,6 +2,7 @@
 #include "px4/posix_ipc.h"
 
 #include "posix_ipc_test_access.h"
+#include "test_temp_directory.h"
 
 #include <array>
 #include <atomic>
@@ -107,9 +108,7 @@ class TemporaryDirectory final {
 public:
     explicit TemporaryDirectory(mode_t mode)
     {
-        std::array<char, 64U> pattern{};
-        const char* source = "/tmp/px4-posix-ipc-XXXXXX";
-        std::memcpy(pattern.data(), source, std::strlen(source) + 1U);
+        std::string pattern = test::temporary_directory_template("px4-posix-ipc-");
         char* created = ::mkdtemp(pattern.data());
         if (created != nullptr) {
             path_ = created;

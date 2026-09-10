@@ -5,6 +5,7 @@
 #include "px4/tuner_service.h"
 #include "control_server_test_access.h"
 #include "control_workers.h"
+#include "test_temp_directory.h"
 
 #include <array>
 #include <atomic>
@@ -46,9 +47,7 @@ class TempRuntime final {
 public:
     TempRuntime()
     {
-        std::array<char, 64U> pattern{};
-        const char* value = "/tmp/px4-control-XXXXXX";
-        std::memcpy(pattern.data(), value, std::strlen(value) + 1U);
+        std::string pattern = test::temporary_directory_template("px4-control-");
         char* made = ::mkdtemp(pattern.data());
         if (made != nullptr) {
             path_ = made;

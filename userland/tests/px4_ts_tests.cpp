@@ -3,6 +3,7 @@
 #include "px4_ts_posix.h"
 
 #include "px4/posix_ipc.h"
+#include "test_temp_directory.h"
 
 #include <array>
 #include <atomic>
@@ -50,9 +51,7 @@ class TempRuntime final {
 public:
     TempRuntime() noexcept
     {
-        std::array<char, 64U> pattern{};
-        const char* source = "/tmp/px4-ts-test-XXXXXX";
-        std::memcpy(pattern.data(), source, std::strlen(source) + 1U);
+        std::string pattern = test::temporary_directory_template("px4-ts-test-");
         char* path = ::mkdtemp(pattern.data());
         if (path != nullptr) {
             path_ = path;
