@@ -1,10 +1,12 @@
 # px4-userland 仕様
 
-Status: Frozen v0.13 (2026-09-09)
+Status: Frozen v0.15 (2026-09-11)
 
 本書の`MUST`、`MUST NOT`、`SHOULD`は規範要件を示す。実機観測で前提の誤りが判明した場合も暗黙に
 実装だけを変えず、本書のversionと変更理由を更新してから実装する。
 
+v0.15では、Termuxランチャーの終了処理を改訂する。v0.14の猶予（約2秒）では、tune（最大30秒）やカードAPDU（最大3秒）の処理中にSIGKILLが送られる可能性があったため、stage 0によるプロセスグループ回収（drain）を固定40秒の有限猶予へ変更する。猶予超過時はSIGKILLを用い、graceful cleanup、LNB 0V、およびruntime endpoint削除を保証できない旨を警告する。また、source archive監査で `__pycache__/`、`.pyc`、`.pyo`、`.pyd` を拒否する。
+v0.14では、Androidの全ABIで共通して不足していたTermux用の正式な2 FD起動経路を追加する。`px4-termux`をstage 0の監督プロセスとして残し、`util-linux`の`setsid`で最初の`termux-usb`を独立したプロセスグループとして起動する。stage 0はそのグループを監督し、stage 1およびstage 2は`exec`で1回につき1 FDを渡す入れ子の`termux-usb`を経て`px4d`へ引き継ぐ。これによりQ3U4の2つのUSBデバイスを1つの`px4d`へ渡し、x86_64をaarch64およびarmv7aと同じ配布候補に加える。
 v0.13では、Android NDK API 24のx86_64をCIでcompile/ELF verifyするbuild-only経路として追加する。これは
 runtime supportや配布対象ではなく、Bliss OSでの実機試験を行うまではhardware-unverifiedとする。
 v0.8では、`empty_intervals`の訂正でstream starvationを見逃さないよう、1秒以下の観測間隔と連続5秒以内の
@@ -47,9 +49,10 @@ support matrixと実機検証経路は次のとおりとする。
 | Linux aarch64 | GitHub Actions `ubuntu-24.04-arm` | native arm64 Alpine/musl CI | build-tested / hardware-unverified |
 | HAOS SCS native | Lenovo ThinkCentre M720q / Studio Code Server上のDebian 13/glibc、HAOS kernel | native libusb | SCS directのtuner/card/PCSC経路 |
 | HAOS Alpine add-on | Lenovo ThinkCentre M720q / Supervisor add-on | add-on内のmusl/libusb | Alpine/musl add-onのtuner/card/PCSC経路 |
-| Android | Google TV Streamer / Termux | `termux-usb`からfd渡し | Bionic CLI、repeated `--fd`、portable IPC |
+| Android | Pixel 9a / aarch64 / Termux | `termux-usb`および`px4-termux`による2 fd渡し | 正式launcherの実機回帰（Bionic CLI、portable IPC） |
+| Android | Google TV Streamer / armv7a / Termux | `termux-usb`および`px4-termux`による2 fd渡し | 正式launcherの実機回帰（Bionic CLI、portable IPC） |
+| Android | Bliss OS / x86_64 / Termux | `termux-usb`および`px4-termux`による2 fd渡し | 正式launcherの実機回帰（Bionic CLI、portable IPC） |
 | Android | Google TV Streamer / ad-hoc APK | Android USB Host APIからfd渡し | armv7a native coreをAPK processから利用する経路 |
-| Android x86_64 | GitHub Actions `ubuntu-24.04` | NDK API 24 cross-build | build-tested / hardware-unverified、CI build-only（Bliss OS未試験） |
 | macOS | Apple Mac mini / M2 | native libusb | tuner、card core、PC/SC adapter |
 | Windows | unsupported | 対象外 | `tsukumijima/px4_drv`を利用する。px4-userlandのCLI/IPCとは非互換 |
 
@@ -131,9 +134,8 @@ portable coreからOS vendor固有header、Linux kernel header、glibc内部API�
   condition_variable、atomicは使用できる。
 - 内部エラーは独自の固定enumを使用し、Linuxの負のerrnoを公開IPCへ直接流さない。
 - libusbの最小バージョンは1.0.23とする。
-- Androidのruntime targetはAPI 24以上、`armv7a-linux-androideabi`と`aarch64-linux-android`とする。
-  `x86_64-linux-android`はCI compile/ELF verificationだけを行うbuild-only pathであり、Bliss OSでの実機試験前に
-  runtime supportを主張しない。
+- Androidのruntime targetはAPI 24以上、`armv7a-linux-androideabi`、`aarch64-linux-android`、
+  `x86_64-linux-android`とする。3つのABIを同一の配布・監査対象とし、各archiveへ同じ`px4-termux`を収録する。
 
 ## 4. Device contract
 
@@ -242,8 +244,11 @@ Androidではsystem PC/SCを前提とせず、portable IPCを利用する。
   GPIO 11 lowを再試行する。`DISCONNECTED`となったbridgeには以後の電源操作を送らない。
 - 片側USB切断で筐体を停止する場合、切断したbridgeには追加書込みを行わない。接続が残る反対側bridgeは、
   そのtransportを閉じる前にLNB参照を解放してGPIO 11 lowを試みる。失敗は成功扱いにしない。
-- 正常終了とSIGTERMでは、USB transportを閉じる前に両bridgeのLNBを0Vへ戻す。SIGKILL、host crash、
-  USB stack failureではcleanupを保証できないため、明示opt-inと再初期化時のGPIO 11 lowを安全境界とする。
+- 通常の正常終了およびSIGINT、SIGTERM、SIGHUPの受信時は、USB transportを閉じる前に両bridgeのLNBを0Vへ戻す。SIGKILL、host crash、
+  USB stack failureではcleanupを保証できないため、明示的なopt-inと再初期化時のGPIO 11 lowを安全境界とする。
+- `px4-termux`のstage 0は、通常終了時およびSIGINT、SIGTERM、SIGHUPの受信時に、固定40秒の猶予を設けて子プロセスグループの終了を待つ。
+  40秒後もグループが生存している場合のみSIGKILLを使用し、標準エラー出力へ警告を出力する。この強制終了経路では、graceful cleanup、
+  LNB 0V、およびruntime endpoint削除を保証しない。
 
 ### 5.3 ATR and T=1
 
@@ -405,10 +410,21 @@ queue overflow、sync/TEI/drop検出を0にしない。stdoutはTSだけ、全�
 - `px4d`は`--fd FD`を繰り返し受け取り、Q3U4の2 USB deviceをwrapできる。
 - fd modeでは`/dev/bus/usb`の列挙を要求しない。
 - fdの所有権とclose責任を明記し、double-closeしない。
-- aarch64とarmv7aをAndroid NDKでcross-buildする。x86_64もAndroid NDK API 24でCI buildとELF verificationを行うが、
-  build-only / hardware-unverifiedとし、Bliss OS試験前のruntime support claimを禁止する。
+- Android NDK API 24でaarch64、armv7a、x86_64をクロスビルドし、3つのABIを同一の配布・監査対象とする。
 - ELF interpreterはBionic linker、libusbはstatic link、host RPATH/RUNPATHは空とする。
-- Termux試験では`termux-usb`が開いた2つのfdを渡し、通常のCLI/IPC経路を使用する。
+- Termux試験では正式ランチャー `px4-termux` が `termux-usb` から開いた2つのfdを渡し、通常のCLI/IPC経路を使用する。
+- `px4-termux --usb-device PATH --usb-device PATH --firmware PATH [--device BASE_SERIAL] [--runtime-dir PATH] [--group] [--allow-lnb-power]`
+  を提供する。利用者は異なる2つのデバイスパスを明示し、自動選択は行わない。ランチャーの実行時依存はTermux付属のsh、
+  Termux:APIの `termux-usb`、およびtermux-apiパッケージの依存関係として提供される `util-linux` の `setsid` のみとし、
+  Python、補助デーモン、eval、一時状態ファイルを要求しない。
+- stage 0の `px4-termux` は監督プロセスとして残り、`setsid termux-usb -e CALLBACK USB1` を子プロセスとして起動して
+  `wait` する。起動時に `setsid` と `termux-usb` の存在を明示検査する。stage 1は受領した1つ目のFDを保持したまま
+  `exec termux-usb -e CALLBACK USB2` を実行し、stage 2は2つ目のFDを受け取って `exec px4d --fd FD1 --fd FD2 ...` を実行する。
+  渡される2つのFDは互いに異なり、かつオープン中でなければならない。通常の正常終了および第2open失敗の終了ステータス（status）は
+  そのまま伝播する。stage 0は `SIGINT`、`SIGTERM`、`SIGHUP` を受信すると子プロセスグループ全体へシグナルを転送して
+  回収（reap）し、固定40秒の猶予内にグループの消滅を確認してから終了する。40秒の猶予内に終了しない場合のみSIGKILLを使用し、
+  標準エラー出力へ graceful cleanup、LNB 0V、およびruntime endpoint削除を保証できない旨を警告する。第2open失敗、シグナル受信、
+  USB切断のいずれにおいても有限時間で終了する。ランチャーは利用者が指定したruntime rootを自動で再帰削除しない。
 - APK試験ではAndroid USB Host APIでQ3U4の両deviceへpermissionを取得し、detachしないfdをnative側へ渡す。
 - ad-hoc APKはUSB permission、2 fdの対応付け、8 receiver、card APDU、detach/reconnectを検証できればよく、
   製品UI、自動更新、配布署名、ストア公開を要件にしない。APKはrelease artifactへ含めない。
@@ -470,8 +486,7 @@ Linux・Android・macOSを対象にする既存実装は確認できなかった
 2. `cmake --build build`がwarningをerrorとして扱う設定で成功する。
 3. `ctest --test-dir build --output-on-failure`が成功する。
 4. Ubuntu/glibc、Alpine/musl、macOSでbuildとoffline testsが成功する。
-5. Android NDK API 24でaarch64とarmv7aのbuildが成功し、x86_64のCI build-only compile/ELF verificationも成功する。
-   x86_64のruntime supportはBliss OS実機試験まで主張しない。
+5. Android NDK API 24の3 ABI build/ELF/artifact audit、`px4-termux`の構文およびプロセス・FD引き継ぎ試験が成功する。
 6. Android ELFにglibc/musl loader、shared libusb、host RPATH/RUNPATHが含まれない。
 7. mock USBによるQ3U4 grouping、firmware framing、I2C、tune sequence、bridge別TS demux、hotplug試験が成功する。
 8. `smart_card_state_test`相当のATR、T=1、timeout、retry、APDU分割、抜去、再挿入試験が成功する。
@@ -501,7 +516,7 @@ Linux・Android・macOSを対象にする既存実装は確認できなかった
 9. receiverを片側だけ、両側、cardだけ、receiver+cardの順にopen/closeし、5.2節のbridge別power stateを満たす。
 10. `--allow-lnb-power`なしでは15V要求をGPIO書込みなしで拒否する。opt-in時はLNB 0V/15Vとbridgeごとの
     複数ISDB-S receiverの参照数が正しく、最後の利用者のcloseでだけ停止する。GPIO応答喪失、通常終了、
-    SIGTERM、片側USB切断のcleanup規則は5.2節を満たす。
+    SIGINT、SIGTERM、SIGHUP、片側USB切断のcleanup規則は5.2節を満たす。
 11. card未挿入、挿入、ATR、reset、基本APDU、抜去、再挿入が成功する。
 12. 外付け標準readerで同じB-CASを使ったAPDU responseと、Q3U4内蔵readerのresponseが一致する。
 13. 8 receiverの同時capture中にcard APDUを反復し、APDU failureが0である。TS error/dropはreceiver 0--6で0とし、
@@ -561,9 +576,10 @@ v0.4実機試験の割当は次のとおりとする。
 | M720q / SCS native Debian 13/glibc + HAOS kernel | T/S capture、8 receiver、内蔵card経路、USB detach/reconnect、2時間soak |
 | M720q / HAOS Alpine/musl Supervisor add-on | T/S capture、8 receiver、内蔵card経路、USB detach/reconnect、2時間soak |
 | Latitude 5300 / Alpine Docker | auxiliary build/parser smoke only; SCS、HAOS add-on、Latitude nativeの代替不可 |
-| Google TV Streamer / Termux | armv7a Bionic ELF、2 fd wrap、T/S capture、内蔵card経路、stop/reopen、USB detach/reconnect、30分以上 |
+| Pixel 9a / aarch64 / Termux | 最終候補archiveの正式launcherで2 fd、T/S capture、内蔵card経路、stop/reopen、USB detach/reconnect、30分以上、process/FD/endpoint非残留、即時再起動 |
+| Google TV Streamer / armv7a / Termux | 最終候補archiveの正式launcherで2 fd、T/S capture、内蔵card経路、stop/reopen、USB detach/reconnect、30分以上、process/FD/endpoint非残留、即時再起動 |
+| Bliss OS / x86_64 / Termux | 最終候補archiveの正式launcherで2 fd、T/S capture、内蔵card経路、stop/reopen、USB detach/reconnect、30分以上、process/FD/endpoint非残留、即時再起動 |
 | Google TV Streamer / ad-hoc APK | armv7a、USB permission、2 fd wrap、T/S capture、内蔵card経路、stop/reopen、USB detach/reconnect、30分以上 |
-| Android x86_64 / GitHub Actions | NDK API 24 build、ELF verification、実機未検証。Bliss OS試験前はbuild-only |
 | M2 Mac mini / macOS | grouping、T/S capture、内蔵card経路、実PC/SC consumer、USB detach/reconnect、30分以上 |
 
 TermuxとAPKは同一ハードウェアでも別runtime経路として個別に合否を記録する。SCS native、HAOS Alpine add-on、
@@ -571,7 +587,7 @@ Latitude native、Latitude Alpine Dockerは別runtime経路であり、いずれ
 
 ### 10.4 Release artifacts
 
-最終配布物のplatform/architectureは次の7 binary archiveとする。source archiveは全binaryに共通で1つ作成する。
+最終配布物のplatform/architectureは次の8 binary archiveとする。source archiveは全binaryに共通で1つ作成する。
 
 | Artifact | Runtime contract |
 |---|---|
@@ -582,11 +598,16 @@ Latitude native、Latitude Alpine Dockerは別runtime経路であり、いずれ
 | `px4-userland-<version>-darwin-arm64.tar.gz` | Apple Silicon macOS |
 | `px4-userland-<version>-android-aarch64.tar.gz` | Android API 24+、Bionic aarch64、Termux用 |
 | `px4-userland-<version>-android-armv7a.tar.gz` | Android API 24+、Bionic armv7a、Termux/Google TV用 |
+| `px4-userland-<version>-android-x86_64.tar.gz` | Android API 24+、Bionic x86_64、Termux/Bliss OS用 |
 
 各archiveは該当platformの`px4d`、`px4-ts`、`px4ctl`、利用可能なnative card adapter、GPL license、READMEを含む。
+Android archiveは既存の3つのELFに加え、libusbをリンクしないシェルランチャー `px4-termux` を含む。既存3 ELFの
+inventory、LGPL、NDK、corresponding-source、relink監査は弱めない。ランチャーはELF/static-link inventoryの
+対象外であることを監査上明示する。
 Linuxの3実行ファイルはlibusb 1.0.30を静的包含したmusl完全静的ELFとし、IFDだけがarchive名のhost libcに依存する。
 Android版libusbはstatic linkとし、macOSはhost-provided dynamic dependencyを意図する。firmware、APK、HAOS add-on、
 mirakcはどのrelease artifactにも含めない。
+source archiveは `__pycache__/`、`.pyc`、`.pyo`、`.pyd` などのPythonバイトコードを含めない。
 
 Android binary release gateは次の全項目を満たすまで未完成とする。
 
@@ -607,10 +628,10 @@ Android binary release gateは次の全項目を満たすまで未完成とす�
 
 このgateの包装・manifest・checksum・binary/source archive auditは、local packaging scriptsと
 `.github/workflows/build_userland.yml`の`release-candidate` workflowとして実装済みである。workflowはtagや
-GitHub Releaseを作成せず、7つのbinary archive、対応source archive、外側`SHA256SUMS`をcandidate artifactとして
-まとめる。Stable公開時は、このcandidateで使用した最終配布archiveそのものを各対象環境で試験する。Linux aarch64は
-archive auditとnative CI buildを必須とするが、実機未検証を既知の非ブロッカーとして公開時に明記する。Android
-x86_64は最終配布archiveに含めず、CI build-only / hardware-unverifiedとして扱う。
+GitHub Releaseを作成せず、8つのbinary archive、対応source archive、外側`SHA256SUMS`をcandidate artifactとして
+まとめる。Stable公開時は、このcandidateで使用した最終配布archiveそのものを各対象環境で試験する。Android 3 ABIは
+正式ランチャーを各対象実機で検証するまで配布条件未達とする。Linux aarch64はarchive auditとnative CI buildを必須と
+するが、実機未検証を既知の非ブロッカーとして公開時に明記する。
 
 ### 10.5 Stable release gate
 

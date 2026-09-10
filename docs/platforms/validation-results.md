@@ -26,17 +26,26 @@
 | Fedora 44（x86_64 / glibc / SELinux Enforcing） | `29635988c5692eb9167dc082ef0b4c4e7dfb5e04` | PX-Q3U4を使用。native Release build、CTest 7/7、systemd自動起動、専用SELinux domain、一般ユーザーIPC、PC/SC、地上波・衛星、direct APDU 10/10、OS再起動後回帰、AVC拒否0を確認。 | [Fedoraの構成手順](../../packaging/fedora/README.md) |
 | FreeBSD 15.1-RELEASE（amd64） | — | PX-Q3U4を使用。native build、CTest 5/5、地上波と衛星の同時受信、内蔵カードAPDU 10/10を確認。 | 現行Release対象外。 |
 | OpenWrt 25.12.5（x86_64 / musl 1.2.5 / procd） | `29635988c5692eb9167dc082ef0b4c4e7dfb5e04`と同内容 | PX-Q3U4を使用。static/stripped成果物、地上波と衛星の同時受信、APDU 10/10、procd起動停止、物理切断時exit 7・process/socket残留なし、再接続後復帰を確認。 | OpenWrt向けソース修正なし。 |
+| Gentoo Linux 2.18（x86_64 / glibc 2.43、kernel 6.18.48-gentoo-dist-bin、GCC 15.3.0、OpenRC） | `fa45792787905d3a86a8cab0bbc9ab7c860c665e`後の未commit差分 | PX-Q3U4を使用。native build（PCSCなし 92/92 targets・CTest 5/5、PCSCあり 98/98 targets・CTest 7/7 PASS）。一般ユーザーでの直接カードAPDU 10/10、地上波・衛星単系統smoke、標準OpenRC `pcscd`経由のreader列挙・ATR・APDU SW9000を確認。8 receiver同時30秒+APDU 10/10はreceiver 0〜6が全エラー0、receiver 7のみ既知個体burst（TEI 10,935、continuity 652、queue/USB error 0、rc8 `PROTOCOL_ERROR`）。receiver 6・7の各30秒単独比較でもreceiver 6は全エラー0、receiver 7のみTEI 10,920・continuity 594を再現。daemon rc0、終了時のprocess/socket残留なしを確認。 | Gentoo/OpenRC向けソース修正なし。一般ユーザーはusbグループ所属でUSBノード（root:usb 0664）をsudoなしで利用可能。pcsc-lite 2.4.1（pcscd:pcscd実行、reader設定dirをpcscd所有に設定）、pcsc-tools 1.7.4を使用。 |
 
-## Android x86_64追加検証
+## 2026-09-10 Android正式launcher実機検証（レビュー前候補archive）
 
-| 環境 | revision | 確認内容 | 補足 |
-| --- | --- | --- | --- |
-| Bliss OS（Android 13 API 33 / x86_64 / Bionic） | `8133f420cfc2705e96f10a00220a53e9af773cd4` | 検証専用Python SCM_RIGHTS brokerでPX-Q3U4の2 USB bridgeから得た2 fdを1つの`px4d`へ渡した。内蔵カードのATRとAPDU 10/10を確認。地上波64,885,004 bytes / 345,133 packets、衛星85,902,652 bytes / 456,929 packetsを各30秒受信し、alignment/sync/malformed/TEI/continuity error 0。全8 receiverの15秒同時受信は全exit 0、sync/TEI/continuity/queue-drop/USB error 0。受信中切断は`px4-ts`と`px4d`が`DISCONNECTED`・exit 7で有限終了し、process/socket残留なし。OS再起動なしの再接続後もカード・地上波・衛星が成功。 | IP3 GT1、kernel 6.1.112-gloria-xanmod1、Termux 0.118.3。NDK r27 / API 24 build。正式なTermux用2 fd launcherは未実装。カードの物理抜去・再挿入は未試験。Release配布対象外。 |
+対象branch headは`fa45792787905d3a86a8cab0bbc9ab7c860c665e`。以下は、40秒猶予およびbytecode監査の修正前に作成した、
+正式launcher実機検証済みのレビュー前候補archiveによる実機結果であり、現在の最終候補archiveではない。
+
+| 環境 | レビュー前候補archive SHA-256 | 確認内容 |
+| --- | --- | --- |
+| Pixel 9a（Android 17 / aarch64 / Bionic、Termux 0.118.3） | `737f2b42d9b02be9763ad186dee8129a17121fbc00c753d4e8e3bdf9516b6723` | 正式`px4-termux`で内蔵カード、地上波、衛星、TERM/INT/HUP、第2USB取得失敗、30分8 receiver、APDU 30/30、物理切断exit 7を確認。receiver 0〜6は全エラー0、receiver 7は既知burstのみ。全processとIPC endpointの残留なし、再接続後も正常。 |
+| Google TV Streamer（Android 14 / API 34 / armv7a / Bionic、Termux 0.119.0-beta.3） | `d7da07acea5f676f698a86e92c0b80e87c1dbe2aca8b01414cc5db8cd24f302b` | 正式`px4-termux`で内蔵カード、地上波、衛星、TERM/INT/HUP、第2USB取得失敗、30分8 receiver、APDU 30/30、物理切断exit 7を確認。receiver 0〜6は全エラー0、receiver 7は既知burst（TEI 10,949、continuity 627、queue/USB error 0）のみ。全processとIPC endpointの残留なし、再接続後も正常。 |
+| IP3 GT1 / Bliss OS（Android 13 / x86_64 / Bionic、Termux 0.118.3） | `7561b51c0b6e934b044982eac0539b5a3de556c331e59b9c6b6f062d3b8f9222` | 正式`px4-termux`で30分8 receiverを実施し、8/8 exit 0、sync/TEI/continuity/queue/USB errorを全て0で確認。内蔵カードAPDU 30/30、TERM/INT/HUP、第2USB取得失敗、物理切断exit 7、全processとIPC endpointの残留なし、再接続後のカードAPDU 10/10・地上波・衛星を確認。 |
+
+現在の最終候補archiveはcommit/push後のCIで生成し、Stable前に正式launcherの実機回帰を行う。
+
+Bliss OSではバックグラウンド時にTermux UID全体が凍結し、`termux-wake-lock`も同環境で`Bad system call`となった。検証中だけADBで給電中の画面常時点灯とTermux前面表示を使用し、`stay_on_while_plugged_in`は元の`0`へ復元した。最初の凍結したsoakは無効試験として上記合格値に含めていない。
 
 ## CIのみ
 
 - Linux x86_64/aarch64 × glibc/muslはbuild、artifact audit、最終archive起動をCIで確認。aarch64/muslのUSB実機およびIFD loadは未確認。
-- Android x86_64はbuild/ELF検査に加え、検証専用brokerを用いたBliss OS実機試験を完了。正式なTermux用2 fd launcherは未実装で、Release配布対象ではない。
 
 ## 既知の観測事項
 

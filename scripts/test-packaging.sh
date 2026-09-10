@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: GPL-2.0-only
 set -eu
 script_dir=$(cd -- "$(dirname -- "$0")" && pwd)
+root=$(cd -- "$script_dir/.." && pwd)
+shellcheck "$root/packaging/termux/px4-termux" "$root/tests/test-px4-termux.sh"
+"$root/tests/test-px4-termux.sh"
 python3 "$script_dir/audit-artifact.py" --self-test
 python3 "$script_dir/audit-artifact.py" --help | grep -F -- '--ndk-root' >/dev/null
 python3 "$script_dir/package-artifact.py" --self-test
@@ -12,6 +15,35 @@ python3 "$script_dir/android-link-inventory.py" --help >/dev/null
 test_root=$(mktemp -d /tmp/px4-package-self-test.XXXXXX)
 trap 'find "$test_root" -depth -delete' EXIT
 version=$(tr -d '\n' < "$script_dir/../VERSION")
+
+source_forbidden_case=0
+for source_forbidden_member in \
+    repository/scripts/__pycache__/generated.py \
+    repository/scripts/generated.pyc \
+    repository/scripts/generated.pyo \
+    repository/scripts/generated.pyd; do
+    source_forbidden_archive="$test_root/source-forbidden-$source_forbidden_case.tar.gz"
+    python3 - "$source_forbidden_archive" "$source_forbidden_member" <<'PY'
+import io
+import sys
+import tarfile
+
+archive, name = sys.argv[1:]
+with tarfile.open(archive, "w:gz") as stream:
+    payload = b"forbidden\n"
+    info = tarfile.TarInfo(name)
+    info.size = len(payload)
+    stream.addfile(info, io.BytesIO(payload))
+PY
+    if python3 "$script_dir/audit-artifact.py" --source-archive \
+        --archive "$source_forbidden_archive" >/dev/null 2>&1; then
+        printf '%s\n' "source archive accepted forbidden member: $source_forbidden_member" >&2
+        exit 1
+    fi
+    source_forbidden_case=$((source_forbidden_case + 1))
+done
+printf '%s\n' 'source archive bytecode rejection tests: PASS'
+
 mkdir -p "$test_root/build"
 printf '%s\n' px4d px4-ts px4ctl | while IFS= read -r program; do
     printf '%s\n' synthetic >"$test_root/build/$program"
@@ -186,7 +218,7 @@ if [ -n "$real_android_platform$real_android_build_dir$real_android_link_map_dir
         }
     done
     case "$real_android_platform" in
-    android-aarch64|android-armv7a) ;;
+    android-aarch64|android-armv7a|android-x86_64) ;;
     *)
         printf '%s\n' "unsupported PX4_REAL_ANDROID_PLATFORM: $real_android_platform" >&2
         exit 1
@@ -256,6 +288,12 @@ if [ -n "$real_libusb_archive" ]; then
             exit 1
         fi
         printf '%s\n' 'source package correctly refused source ref without VERSION'
+    fi
+    source_archive="$test_root/source/px4-userland-$version-source.tar.gz"
+    if [ -f "$source_archive" ] && tar -tzf "$source_archive" | \
+        grep -E '(^|/)(__pycache__/|.*\.py[co]$|.*\.pyd$)' >/dev/null; then
+        printf '%s\n' 'source archive contains Python bytecode' >&2
+        exit 1
     fi
 fi
 printf '%s\n' 'packaging self-tests: PASS'

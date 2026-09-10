@@ -27,6 +27,7 @@ AuditError = _audit.AuditError
 LIBUSB_SHA256 = _audit.LIBUSB_SHA256
 PLATFORMS = _audit.PLATFORMS
 PROGRAMS = _audit.PROGRAMS
+TERMUX_LAUNCHER = _audit.TERMUX_LAUNCHER
 VERSION_RE = _audit.VERSION_RE
 audit_binaries = _audit.audit_binaries
 audit_binary_archive = _audit.audit_binary_archive
@@ -246,6 +247,9 @@ def self_test_android_notice_and_archive(repo_root: Path) -> None:
         stage.mkdir()
         for name in ("LICENSE", "README.md", "THIRD_PARTY_NOTICES.md"):
             copy_regular(repo_root / name, stage / name)
+        copy_regular(repo_root / "packaging" / "termux" / TERMUX_LAUNCHER,
+                     stage / TERMUX_LAUNCHER)
+        (stage / TERMUX_LAUNCHER).chmod(0o755)
         for program in PROGRAMS:
             write_text(stage / program, "synthetic Android ELF\n")
             (stage / program).chmod(0o755)
@@ -454,6 +458,9 @@ def main() -> int:
         else:
             if not args.libusb_source_archive or not args.ndk_root or not args.link_map_dir:
                 fail("Android requires --libusb-source-archive, --ndk-root, and --link-map-dir")
+            copy_regular(args.repo_root / "packaging" / "termux" / TERMUX_LAUNCHER,
+                         stage / TERMUX_LAUNCHER)
+            (stage / TERMUX_LAUNCHER).chmod(0o755)
             verify_pinned_libusb(args.libusb_source_archive.resolve(), stage)
             ndk = args.ndk_root.resolve()
             properties = ndk / "source.properties"

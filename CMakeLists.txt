@@ -371,6 +371,7 @@ if(PX4_BUILD_TESTS)
         userland/tests/ipc_tests.cpp
         userland/tests/ipc_state_tests.cpp
         userland/tests/px4d_args_tests.cpp
+        userland/tests/px4d_signal_tests.cpp
         userland/tests/q3u4_frontend_tests.cpp
         userland/tests/q3u4_card_backend_tests.cpp
         userland/tests/q3u4_power_tests.cpp
@@ -403,6 +404,7 @@ if(PX4_BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/userland/tools
     )
     target_sources(px4_userland_tests PRIVATE userland/src/q3u4_stream.cpp)
+    target_sources(px4_userland_tests PRIVATE userland/tools/px4d_signals.cpp)
     px4_enable_project_warnings(px4_userland_tests)
 
     if(TARGET px4_userland_posix_ipc)
@@ -520,6 +522,7 @@ if(TARGET px4_userland_posix_ipc)
     if(PX4_ENABLE_LIBUSB)
         add_executable(px4d
             userland/tools/px4d.cpp
+            userland/tools/px4d_signals.cpp
             userland/src/px4d_args.cpp
         )
         target_link_libraries(px4d PRIVATE

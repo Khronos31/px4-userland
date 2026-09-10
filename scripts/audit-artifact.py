@@ -25,6 +25,7 @@ PLATFORMS = {
     "darwin-arm64": "darwin",
     "android-aarch64": "android",
     "android-armv7a": "android",
+    "android-x86_64": "android",
 }
 LINUX_TARGETS = {
     "linux-glibc-x86_64": {
@@ -61,6 +62,7 @@ LINUX_MDEV = {
     "mdev/px4-userland-mdev.conf", "mdev/px4-userland-mdev.sh", "mdev/px4-userland-mdev.start",
 }
 PROGRAMS = ("px4d", "px4-ts", "px4ctl")
+TERMUX_LAUNCHER = "px4-termux"
 DARWIN_IFD_ARTIFACT = "ifd/px4-userland-ifd.bundle/Contents/MacOS/libpx4-userland-ifd.dylib"
 IFD_EXPORTS = (
     "IFDHCreateChannel", "IFDHCreateChannelByName", "IFDHCloseChannel",
@@ -81,6 +83,11 @@ FORBIDDEN = re.compile(
     r"|(?:\.apk$|\.ko$|\.sys$|\.inf$|\.dll$|\.exe$|\.bin$)"
     r"|(?:px4-ts-probe|px4-.*-probe)",
     re.IGNORECASE,
+)
+SOURCE_FORBIDDEN = re.compile(
+    r"(^|/)(?:\.git|__pycache__|build(?:-[^/.]+)?|out|dist|firmware|windows|win32|vendor|drivers?|dkms|kernel|apk|addon|add-on)(?:/|$)"
+    r"|(?:\.o$|\.a$|\.so(?:\.|$)|\.dylib$|\.apk$|\.ko$|\.sys$|\.inf$|\.dll$|\.exe$|\.bin$|\.py[co]$|\.pyd$)"
+    r"|(?:px4-ts-probe|px4-.*-probe)", re.IGNORECASE
 )
 
 
@@ -334,6 +341,7 @@ def verify_binary_evidence(archive: Path, members: dict[str, tarfile.TarInfo],
     expected_interpreter = {
         "android-aarch64": "/system/bin/linker64",
         "android-armv7a": "/system/bin/linker",
+        "android-x86_64": "/system/bin/linker64",
     }.get(platform)
     for record in records:
         artifact = record["artifact"]
@@ -611,6 +619,26 @@ def audit_archive_elf_debug_sections(archive: Path, members: dict[str, tarfile.T
             audit_elf_debug_sections(path, readelf_path())
 
 
+def audit_termux_launcher(payload: bytes, mode: int) -> None:
+    if mode != 0o755:
+        fail(f"Termux launcher must have mode 0755, got {mode:o}")
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError:
+        fail("Termux launcher is not UTF-8 text")
+    if not text.startswith("#!/data/data/com.termux/files/usr/bin/sh\n"):
+        fail("Termux launcher must use the Termux shell shebang")
+    if "# SPDX-License-Identifier: GPL-2.0-only" not in text.splitlines()[:3]:
+        fail("Termux launcher is missing its SPDX license identifier")
+    if re.search(r"(^|[^A-Za-z0-9_])eval([^A-Za-z0-9_]|$)", text):
+        fail("Termux launcher must not use shell eval")
+    for required in ("command -v termux-usb", "command -v setsid",
+                     "setsid termux-usb"):
+        if required not in text:
+            fail(f"Termux launcher is missing required operation: {required}")
+    run(["sh", "-n"], input_text=text)
+
+
 def audit_android(path: Path, logical_name: str, expected_interpreter: str,
                   expected_arch: str, root: Path) -> dict:
     verifier = root / "scripts" / "verify-android-elf.sh"
@@ -634,8 +662,11 @@ def audit_binaries(args: argparse.Namespace) -> dict:
         if not path.is_file() or path.is_symlink():
             fail(f"missing production program: {path}")
         if args.platform.startswith("android"):
-            expected = "/system/bin/linker64" if args.platform.endswith("aarch64") else "/system/bin/linker"
-            architecture = "aarch64" if args.platform.endswith("aarch64") else "armv7a"
+            expected, architecture = {
+                "android-aarch64": ("/system/bin/linker64", "aarch64"),
+                "android-armv7a": ("/system/bin/linker", "armv7a"),
+                "android-x86_64": ("/system/bin/linker64", "x86_64"),
+            }[args.platform]
             evidence = audit_android(path, program, expected, architecture, args.repo_root.resolve())
         elif args.platform.startswith("linux-"):
             evidence = audit_linux(path, program, platform=args.platform, shared=False,
@@ -737,11 +768,15 @@ def audit_binary_archive(args: argparse.Namespace) -> dict:
         }
     else:
         expected |= {"libusb/COPYING", "ndk/NOTICE", "ndk/NOTICE.toolchain", "ndk/source.properties"}
+        expected.add(TERMUX_LAUNCHER)
         for program in PROGRAMS:
             expected.add(f"evidence/inventory/{program}-static-archives.tsv")
     if set(members) != expected:
         fail(f"archive member allowlist mismatch; unexpected={sorted(set(members)-expected)}, missing={sorted(expected-set(members))}")
     verify_linux_mdev_modes({name: member.mode for name, member in members.items()}, args.platform)
+    if args.platform.startswith("android"):
+        audit_termux_launcher(read_archive_file(args.archive.resolve(), TERMUX_LAUNCHER),
+                              members[TERMUX_LAUNCHER].mode)
     audit_archive_elf_debug_sections(args.archive.resolve(), members, args.platform)
     manifest = verify_manifest(args.archive.resolve(), members, args.platform)
     expected_name = f"px4-userland-{manifest['version']}-{args.platform}.tar.gz"
@@ -792,11 +827,9 @@ def audit_binary_archive(args: argparse.Namespace) -> dict:
 
 def audit_source_archive(args: argparse.Namespace) -> dict:
     members = archive_members(args.archive.resolve())
-    source_forbidden = re.compile(
-        r"(^|/)(?:\.git|build(?:-[^/.]+)?|out|dist|firmware|windows|win32|vendor|drivers?|dkms|kernel|apk|addon|add-on)(?:/|$)"
-        r"|(?:\.o$|\.a$|\.so(?:\.|$)|\.dylib$|\.apk$|\.ko$|\.sys$|\.inf$|\.dll$|\.exe$|\.bin$)"
-        r"|(?:px4-ts-probe|px4-.*-probe)", re.IGNORECASE
-    )
+    for name in members:
+        if name.startswith(("repository/", "third_party/libusb-1.0.30/")) and SOURCE_FORBIDDEN.search(name):
+            fail(f"forbidden source archive member: {name}")
     required = {
         "BUILD-RELINK.md",
         "source-manifest.json",
@@ -819,10 +852,6 @@ def audit_source_archive(args: argparse.Namespace) -> dict:
     for name in members:
         if name not in required and not name.startswith("repository/") and not name.startswith("third_party/libusb-1.0.30/"):
             fail(f"unexpected source archive member: {name}")
-        if name.startswith("repository/") and source_forbidden.search(name):
-            fail(f"forbidden source archive member: {name}")
-        if name.startswith("third_party/libusb-1.0.30/") and source_forbidden.search(name):
-            fail(f"forbidden libusb source member: {name}")
     manifest = json.loads(read_archive_file(args.archive.resolve(), "source-manifest.json"))
     if manifest.get("schema") != 1 or manifest.get("libusb_version") != "1.0.30":
         fail("invalid source manifest")

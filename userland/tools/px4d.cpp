@@ -15,28 +15,20 @@
 #include "q3u4_tuner_backend.h"
 #include "q3u4_power.h"
 #include "px4d_args.h"
+#include "px4d_signals.h"
 
 #include <chrono>
-#include <csignal>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <string>
 #include <thread>
 #include <vector>
-#include <signal.h>
 
 namespace {
 
 using namespace px4::userland;
 using namespace px4::userland::ipc::posix;
-
-volatile std::sig_atomic_t stop_requested = 0;
-
-void stop_signal_handler(int) noexcept
-{
-    stop_requested = 1;
-}
 
 void usage() noexcept
 {
@@ -90,16 +82,6 @@ public:
         std::this_thread::sleep_for(std::chrono::milliseconds(milliseconds));
     }
 };
-
-bool install_signal_handlers() noexcept
-{
-    struct sigaction action {};
-    action.sa_handler = stop_signal_handler;
-    if (sigemptyset(&action.sa_mask) != 0) return false;
-    action.sa_flags = 0;
-    return ::sigaction(SIGINT, &action, nullptr) == 0 &&
-           ::sigaction(SIGTERM, &action, nullptr) == 0;
-}
 
 }  // namespace
 
@@ -202,7 +184,7 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "control endpoint: %s\n", error_string(server.error()));
         return exit_status(server.error());
     }
-    if (!install_signal_handlers()) {
+    if (!px4::userland::px4d::install_signal_handlers()) {
         std::fprintf(stderr, "signal setup failed\n");
         return 70;
     }
@@ -210,7 +192,7 @@ int main(int argc, char** argv)
     std::fprintf(stderr, "px4d ready: device=%s endpoint=%s\n",
                  base_serial.c_str(), server.value()->endpoint_path());
     Error loop_error = Error::OK;
-    while (stop_requested == 0) {
+    while (!px4::userland::px4d::stop_requested()) {
         const auto polled = server.value()->poll_once(Timeout{100U});
         if (!polled) {
             loop_error = polled.error();

@@ -9,6 +9,7 @@ on:
       - README.md
       - THIRD_PARTY_NOTICES.md
       - packaging/**
+      - tests/**
       - userland/**
       - scripts/**
       - VERSION
@@ -20,6 +21,7 @@ on:
       - README.md
       - THIRD_PARTY_NOTICES.md
       - packaging/**
+      - tests/**
       - userland/**
       - scripts/**
       - VERSION
@@ -290,7 +292,7 @@ jobs:
           if-no-files-found: error
 
   android-api-24:
-    name: Android API 24 compile checks
+    name: Android API 24 build, package, and audit
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -302,6 +304,9 @@ jobs:
           - name: armv7a
             abi: armeabi-v7a
             platform: android-armv7a
+          - name: x86_64
+            abi: x86_64
+            platform: android-x86_64
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: nttld/setup-ndk@afb4c9964b521afb97c864b7d40b11e6911bd410 # v1.5.0
@@ -310,7 +315,11 @@ jobs:
           ndk-version: r27d
           add-to-path: false
       - name: Install Android build tools
-        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y binutils cmake ninja-build
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y binutils cmake ninja-build shellcheck
+      - name: Check Termux launcher
+        run: |
+          shellcheck packaging/termux/px4-termux tests/test-px4-termux.sh
+          tests/test-px4-termux.sh
       - name: Build Android command-line artifacts
         env:
           ABI: ${{ matrix.abi }}
@@ -333,32 +342,6 @@ jobs:
           name: rc-${{ matrix.name }}
           path: ${{ runner.temp }}/release-candidate/${{ matrix.abi }}/package/*.tar.gz
           if-no-files-found: error
-
-  android-api-24-x86_64:
-    name: Android API 24 x86_64 build-only compile and ELF checks
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: nttld/setup-ndk@afb4c9964b521afb97c864b7d40b11e6911bd410 # v1.5.0
-        id: setup-ndk
-        with:
-          ndk-version: r27d
-          add-to-path: false
-      - name: Install Android build tools
-        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y binutils cmake ninja-build
-      - name: Build and verify Android x86_64 executables
-        env:
-          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-        run: |
-          set -eu
-          output="$RUNNER_TEMP/android-x86_64"
-          mkdir -p "$output"
-          scripts/build-android.sh --abi x86_64 --output "$output"
-          for binary in px4-ts-probe px4d px4ctl px4-ts; do
-            executable="$output/$binary-x86_64"
-            test -x "$executable"
-            scripts/verify-android-elf.sh "$executable" /system/bin/linker64 x86_64
-          done
 
   source-archive:
     name: Corresponding source archive
@@ -388,7 +371,7 @@ jobs:
 
   release-candidate:
     name: Assemble release-candidate artifact
-    needs: [ubuntu-glibc-tests, linux-x86_64, linux-aarch64, static-start-x86_64, static-start-aarch64, source-relink-x86_64, source-relink-aarch64, macos, android-api-24, android-api-24-x86_64, source-archive]
+    needs: [ubuntu-glibc-tests, linux-x86_64, linux-aarch64, static-start-x86_64, static-start-aarch64, source-relink-x86_64, source-relink-aarch64, macos, android-api-24, source-archive]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -431,13 +414,14 @@ jobs:
               f'px4-userland-{version}-darwin-arm64.tar.gz',
               f'px4-userland-{version}-android-aarch64.tar.gz',
               f'px4-userland-{version}-android-armv7a.tar.gz',
+              f'px4-userland-{version}-android-x86_64.tar.gz',
               f'px4-userland-{version}-source.tar.gz',
           }
           actual = {
               path.name for path in Path('release-candidate').iterdir()
               if path.is_file() and path.name.endswith('.tar.gz')
           }
-          if len(actual) != 8 or actual != expected:
+          if len(actual) != 9 or actual != expected:
               raise SystemExit(f'exact archive set required: expected={sorted(expected)}, actual={sorted(actual)}')
           PY
           cd release-candidate
@@ -448,6 +432,7 @@ jobs:
           macos_archive="px4-userland-$version-darwin-arm64.tar.gz"
           android_aarch64_archive="px4-userland-$version-android-aarch64.tar.gz"
           android_armv7a_archive="px4-userland-$version-android-armv7a.tar.gz"
+          android_x86_64_archive="px4-userland-$version-android-x86_64.tar.gz"
           source_archive="px4-userland-$version-source.tar.gz"
           ../scripts/audit-artifact.sh --platform linux-glibc-x86_64 --archive "$linux_glibc_archive"
           ../scripts/audit-artifact.sh --platform linux-musl-x86_64 --archive "$linux_musl_archive"
@@ -456,10 +441,11 @@ jobs:
           ../scripts/audit-artifact.sh --platform darwin-arm64 --archive "$macos_archive"
           ../scripts/audit-artifact.sh --platform android-aarch64 --archive "$android_aarch64_archive"
           ../scripts/audit-artifact.sh --platform android-armv7a --archive "$android_armv7a_archive"
+          ../scripts/audit-artifact.sh --platform android-x86_64 --archive "$android_x86_64_archive"
           ../scripts/audit-artifact.sh --source-archive --archive "$source_archive"
           sha256sum "$linux_glibc_archive" "$linux_musl_archive" "$linux_glibc_aarch64_archive" \
             "$linux_musl_aarch64_archive" "$macos_archive" "$android_aarch64_archive" \
-            "$android_armv7a_archive" "$source_archive" > SHA256SUMS
+            "$android_armv7a_archive" "$android_x86_64_archive" "$source_archive" > SHA256SUMS
           sha256sum -c SHA256SUMS
       - name: Upload single release-candidate artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

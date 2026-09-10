@@ -10,18 +10,22 @@ if "$root/scripts/build-android.sh" --abi unsupported --output "/tmp/px4-userlan
     exit 1
 fi
 "$root/scripts/verify-android-elf.sh" --self-test >/dev/null
-android_x86_block=$(awk '
-    $0 == "  android-api-24-x86_64:" { in_job = 1; next }
+android_block=$(awk '
+    $0 == "  android-api-24:" { in_job = 1; next }
     in_job && /^  [^ ]/ { exit }
     in_job { print }
 ' "$workflow")
-printf '%s\n' "$android_x86_block" | grep -F 'scripts/build-android.sh --abi x86_64' >/dev/null
-printf '%s\n' "$android_x86_block" | grep -F 'scripts/verify-android-elf.sh' >/dev/null
-if printf '%s\n' "$android_x86_block" | grep -E 'package-artifact\.sh|actions/upload-artifact@|release-candidate'; then
-    printf '%s\n' 'Android x86_64 build-only job contains packaging or release-candidate content' >&2
-    exit 1
-fi
-grep -F 'android-api-24, android-api-24-x86_64, source-archive' "$workflow" >/dev/null
+printf '%s\n' "$android_block" | grep -F 'abi: x86_64' >/dev/null
+printf '%s\n' "$android_block" | grep -F 'platform: android-x86_64' >/dev/null
+printf '%s\n' "$android_block" | grep -F 'scripts/package-artifact.sh --platform' >/dev/null
+printf '%s\n' "$android_block" | grep -F 'actions/upload-artifact@' >/dev/null
+printf '%s\n' "$android_block" | grep -F 'shellcheck packaging/termux/px4-termux' >/dev/null
+grep -F 'android-api-24, source-archive' "$workflow" >/dev/null
+grep -F 'android-x86_64' "$workflow" >/dev/null
+grep -F 'len(actual) != 9' "$workflow" >/dev/null
+grep -F 'android_x86_64_archive' "$workflow" >/dev/null
+grep -F 'TERMUX_LAUNCHER' "$root/scripts/audit-artifact.py" >/dev/null
+grep -F '"packaging" / "termux"' "$root/scripts/package-artifact.py" >/dev/null
 # shellcheck disable=SC2016
 test "$(grep -c 'docker run --rm -e GITHUB_SHA="\$GITHUB_SHA"' "$workflow")" -ge 4
 grep -F 'linux-glibc-x86_64' "$workflow" >/dev/null
@@ -87,7 +91,7 @@ grep -F 'apt-get install --no-install-recommends -y binutils cmake ninja-build' 
 grep -F 'Install native ELF audit tools' "$workflow" >/dev/null
 # shellcheck disable=SC2016
 grep -F 'Authorization: Bearer $GITHUB_TOKEN' "$root/.github/workflows/check-libusb.yml" >/dev/null
-grep -F '7つのbinary archive' "$root/SPEC.md" >/dev/null
+grep -F '8つのbinary archive' "$root/SPEC.md" >/dev/null
 grep -F 'access=@PX4_ACCESS@' "$root/packaging/pcsc/reader.conf.d/px4-userland.conf.in" >/dev/null
 grep -F 'sudo install -d -o root -g pcscd -m 0750 /run/px4-userland' "$root/README.md" >/dev/null
 grep -F 'mktemp -d' "$root/README.md" >/dev/null
@@ -126,7 +130,7 @@ for job in \
     download_line=$(printf '%s\n' "$block" | grep -n 'actions/download-artifact@' | head -n 1 | cut -d: -f1)
     test -n "$checkout_line" && test -n "$download_line" && test "$checkout_line" -lt "$download_line"
 done
-if grep -F '8 binary archive' "$root/SPEC.md" >/dev/null || grep -F '5つのbinary archive' "$root/SPEC.md" >/dev/null; then
+if grep -F '7つのbinary archive' "$root/SPEC.md" >/dev/null || grep -F '5つのbinary archive' "$root/SPEC.md" >/dev/null; then
     printf '%s\n' 'SPEC archive count is stale' >&2
     exit 1
 fi

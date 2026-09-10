@@ -53,7 +53,16 @@ scripts/build-android.sh \
   --abi armeabi-v7a \
   --libusb-source ../third_party/libusb-1.0.30 \
   --output ../rebuilt-android-armv7a
+scripts/build-android.sh \
+  --abi x86_64 \
+  --libusb-source ../third_party/libusb-1.0.30 \
+  --output ../rebuilt-android-x86_64
 ```
+
+The Android archive also contains the architecture-independent `px4-termux`
+launcher. It uses the Termux-provided shell and nested `termux-usb` calls to
+pass two explicitly selected USB device FDs to `px4d`; it is not linked with
+libusb and is not part of the ELF static-link inventory.
 
 To relink with a modified LGPL libusb, modify a copy of
 `third_party/libusb-1.0.30/` and pass that directory to `--libusb-source`.

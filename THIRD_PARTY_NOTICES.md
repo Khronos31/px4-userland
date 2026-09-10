@@ -2,7 +2,7 @@
 
 This document describes the dependencies and materials for the currently implemented `release-candidate` packaging
 contract. It is not, by itself, a declaration that the project is stable or ready for a general release. The release
-candidate workflow generates and audits seven platform archives plus one corresponding-source archive, then uploads them
+candidate workflow generates and audits eight platform archives plus one corresponding-source archive, then uploads them
 together with an outer `SHA256SUMS` file.
 
 ## No vendored dependency in the repository source
@@ -17,8 +17,11 @@ firmware, APK/add-on material, and vendor drivers.
 
 ## Android binary archives
 
-The Android archives are API 24+ Bionic builds for `aarch64` and `armv7a`. libusb 1.0.30 is statically linked as
+The Android archives are API 24+ Bionic builds for `aarch64`, `armv7a`, and `x86_64`. libusb 1.0.30 is statically linked as
 `libusb-1.0.a` and remains licensed under LGPL-2.1-or-later. Each Android archive includes:
+
+- the architecture-independent `px4-termux` shell launcher; it is audited as a shell artifact and is not an ELF or
+  static-link inventory member;
 
 - `libusb/COPYING`;
 - the exact NDK `source.properties` revision used by the build;
@@ -74,7 +77,8 @@ They require explicit already-built platform inputs, strict `N.N.N` version matc
 where Android or source packaging needs it. They audit archive allowlists, required files, manifests, checksums, path
 traversal, symlinks/hardlinks, firmware, Windows, probe, kernel/DKMS, and vendor content.
 
-The final CI artifact is named `release-candidate` and contains exactly these eight archives and the outer `SHA256SUMS`:
+The final CI artifact is named `release-candidate` and contains exactly these nine archives (eight binary plus one source)
+and the outer `SHA256SUMS`:
 
 - `px4-userland-<version>-linux-glibc-x86_64.tar.gz`;
 - `px4-userland-<version>-linux-musl-x86_64.tar.gz`;
@@ -83,6 +87,7 @@ The final CI artifact is named `release-candidate` and contains exactly these ei
 - `px4-userland-<version>-darwin-arm64.tar.gz`;
 - `px4-userland-<version>-android-aarch64.tar.gz`;
 - `px4-userland-<version>-android-armv7a.tar.gz`;
+- `px4-userland-<version>-android-x86_64.tar.gz`;
 - `px4-userland-<version>-source.tar.gz`.
 
 This artifact is a candidate handoff, not a Git tag or GitHub Release. Stable acceptance is described in [`SPEC.md`](SPEC.md):

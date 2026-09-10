@@ -15,7 +15,7 @@
 |---|---|---|
 | Linux | 対応 | x86_64 / aarch64（完全静的CLI + glibc/musl別IFD） |
 | macOS | 対応 | Apple Silicon（arm64） |
-| Android | 対応 | Termux（aarch64 / armv7a 実行ファイル）およびアプリ組み込み |
+| Android | 対応 | Termux（aarch64 / armv7a / x86_64 実行ファイルおよび `px4-termux`）およびアプリ組み込み |
 | Windows | 非対応 | 対象外 |
 
 ※ Android 向けには実行ファイルのみを提供しており、配布用 APK は提供していません。
@@ -32,7 +32,7 @@ IT930x ファームウェアは本ソフトウェアに同梱されていませ�
 
 - **Linux**: `px4d`、`px4-ts`、`px4ctl` はPT_INTERPとDT_NEEDEDを持たないmusl完全静的ELFです。PC/SCリーダーとして利用する場合は、hostの`pcscd`が読み込むlibc別（glibcまたはmusl）のIFD Handlerが必要です。
 - **macOS**: ホスト環境の libusb、PC/SC デーモン。
-- **Android**: ホストまたはアプリケーション側で USB パーミッションを取得し、ファイルディスクリプタを渡す必要があります（libusb は静的リンク済み）。
+- **Android**: libusb は実行ファイルへ静的リンク済みです。Termux 環境で `px4-termux` を利用する場合は、Termux:API アプリ、`termux-api` パッケージ（`termux-usb` を提供）、および依存関係である `util-linux`（`setsid` を提供）が必要です。Python や補助デーモンは不要です。
 
 ### Linux の USB アクセス権限
 
@@ -160,6 +160,77 @@ PX-Q3U4 に搭載されている 8 つの受信機は以下の番号に割り当
 | 6, 7 | ISDB-T | デバイス 2（地上波） |
 
 1 つの受信機を同時に占有できるクライアントは 1 つです。異なる受信機同士および内蔵カードリーダーは並行して利用できます。
+
+### Android / Termux
+
+Termux 環境では、配布アーカイブに含まれるシェルランチャー `px4-termux` を使用して `px4d` を起動します。PX-Q3U4 が公開する 2 つの USB デバイスに対するアクセス権限を Termux:API 経由で取得し、`px4d` に引き渡して動作させます。Python や補助デーモンは不要です。
+
+#### 必要環境の導入
+
+Android 端末側に **Termux:API** アプリをインストールした上で、Termux 内で `termux-api` パッケージをインストールします。`termux-api` パッケージから `termux-usb` が提供され、依存関係として `util-linux`（`setsid`）も導入されます。
+
+Android 実機の検証条件と結果は、[OS・環境別の検証結果](docs/platforms/validation-results.md) を参照してください。
+
+```sh
+pkg install termux-api
+```
+
+#### USB デバイスの確認とアクセス許可
+
+PX-Q3U4 は 1 台につき 2 つの USB デバイス（USB ID `0511:084a`）を公開します。`termux-usb -l` を実行して接続されている USB デバイスの一覧を表示し、同一の PX-Q3U4 に対応する 2 つのデバイスパスを確認します。
+
+```sh
+termux-usb -l
+```
+
+確認した 2 つのパスそれぞれに対して `termux-usb -r` を実行します。Android 画面にアクセス許可ダイアログが表示されるので、両方のデバイスに対してアクセスを許可してください。
+
+```sh
+termux-usb -r <usb-path-1>
+termux-usb -r <usb-path-2>
+```
+
+#### デーモンの起動（`px4-termux`）
+
+配布アーカイブは、パス名に空白やシェル特殊文字を含まないディレクトリへ展開してください。
+
+また、Android 環境では UNIX ドメインソケットのパス長上限が短いため、`$HOME` 配下などの深い階層を指定するとソケット作成時にエラー（`INVALID_ARGUMENT`）が発生します。ランタイムディレクトリには `$PREFIX/tmp` 直下の短い固定パスを使用します。
+
+起動前にディレクトリを作成してパーミッションを設定し、確認した 2 つの USB パス、ファームウェア、14 桁の base serial、およびランタイムディレクトリを指定して `px4-termux` を起動します。2 つの `--usb-device` は自動選択されないため、利用者が明示的に指定する必要があります。
+
+```sh
+runtime_dir="$PREFIX/tmp/p4"
+mkdir -p "$runtime_dir"
+chmod 700 "$runtime_dir"
+
+/path/to/px4-termux \
+  --usb-device <usb-path-1> \
+  --usb-device <usb-path-2> \
+  --device <base-serial> \
+  --firmware /path/to/firmware.bin \
+  --runtime-dir "$runtime_dir"
+```
+
+- `px4-termux` はフォアグラウンドで動作します。
+- 停止する場合は `Ctrl+C` を入力するか、親プロセスへ `SIGINT`、`SIGTERM`、または `SIGHUP` を送信してください。通常の正常終了（graceful cleanup）では、シグナルが子プロセスグループへ伝達され、子プロセスの終了とソケットの削除が行われます。
+- `px4-termux` は子プロセスグループの終了を固定40秒間待ちます。猶予時間を超過して `SIGKILL` による強制終了へ移行した場合は標準エラー出力へ警告を出力し、graceful cleanup、LNB 0V、およびランタイムエンドポイントの削除を保証できません。
+- 停止後は、`px4d` や `px4-termux` 関連のプロセスが存在しないことを確認してから、利用者が作成した専用ランタイムディレクトリを削除してください（`rmdir "$runtime_dir"`）。ランチャーは指定されたランタイムルートを自動で再帰削除しません。
+
+#### クライアントツール（`px4ctl` / `px4-ts`）の実行
+
+デーモンの起動中は、Termux の別セッションから `px4ctl` や `px4-ts` を実行できます。別セッションにはシェル変数が引き継がれないため、起動側と同じランタイムパスを代入した上で実行してください。`--device` と `--runtime-dir` には **`px4-termux` に指定したものとまったく同一の base serial およびランタイムディレクトリ** を指定します。
+
+```sh
+runtime_dir="$PREFIX/tmp/p4"
+
+# 状態確認（別セッション）
+/path/to/px4ctl --device <base-serial> --runtime-dir "$runtime_dir" status
+
+# 地上波の受信（別セッション）
+/path/to/px4-ts --device <base-serial> --receiver 2 --system isdb-t \
+  --frequency-khz 557142 --runtime-dir "$runtime_dir" \
+  --output - --duration-seconds 30 > stream.ts
+```
 
 ### `px4d`（デバイス所有デーモン）
 

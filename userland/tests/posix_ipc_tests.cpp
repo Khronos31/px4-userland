@@ -385,6 +385,17 @@ bool test_xdg_runtime_default()
     return true;
 }
 
+bool test_rejects_overlong_unix_endpoint()
+{
+    std::string runtime(sizeof(sockaddr_un{}.sun_path), 'r');
+    runtime[0] = '/';
+    const EndpointConfig config{runtime.c_str(), "overlong", kControlEndpointName,
+                                EndpointAccess::private_user};
+    const auto listener = SocketListener::listen(config);
+    CHECK(!listener && listener.error() == Error::INVALID_ARGUMENT);
+    return true;
+}
+
 std::vector<std::uint8_t> make_large_ts_frame()
 {
     constexpr std::size_t ts_size = 188U * 4000U;
@@ -742,6 +753,7 @@ bool run_posix_ipc_tests()
     return test_ownership_group_authorization() &&
            test_private_endpoint_and_framing() &&
            test_xdg_runtime_default() &&
+           test_rejects_overlong_unix_endpoint() &&
            test_partial_write_and_write_timeout() &&
            test_permissions_and_unsafe_paths() &&
            test_stale_active_and_cleanup_identity() &&
