@@ -11,14 +11,19 @@
 
 ### 動作環境
 
-| OS / 環境 | 状態 | 備考 |
-|---|---|---|
-| Linux | 対応 | x86_64 / aarch64（完全静的CLI + glibc/musl別IFD） |
-| macOS | 対応 | Apple Silicon（arm64） |
-| Android | 対応 | Termux（aarch64 / armv7a / x86_64 実行ファイルおよび `px4-termux`）およびアプリ組み込み |
-| Windows | 非対応 | 対象外 |
+機能軸別の対応状況は下表のとおりです（SPEC 10.3 準拠）。
 
-※ Android 向けには実行ファイルのみを提供しており、配布用 APK は提供していません。
+| OS / 環境 | build-tested | tuner-hardware-verified | card-core-hardware-verified | native-card-adapter-verified | 備考 |
+|---|:---:|:---:|:---:|:---:|---|
+| Linux x86_64 | 完了 | 検証済み | 検証済み | 検証済み | 完全静的CLI + glibc/musl別IFD Handler |
+| Linux aarch64 | 完了 | 未検証 | 未検証 | 未検証 | build-tested / hardware-unverified（実機物理試験未実施） |
+| macOS arm64 | 完了 | 検証済み | 検証済み | 検証済み | Apple Silicon（PC/SC IFD bundle含む） |
+| Android Termux（aarch64 / armv7a / x86_64） | 完了 | 検証済み | 検証済み | 該当なし（N/A） | 静的CLI + `px4-termux`（native adapter非対象） |
+| Android ad-hoc APK | 完了 | 検証済み | 検証済み | 該当なし（N/A） | 内部試験器具（配布物に含まれません） |
+| Windows | — | — | — | — | 非対応 / 対象外（out of scope） |
+
+※ Linux aarch64 配布物は CI の build / artifact 監査のみ完了しており、チューナー・カード・IFD の実機検証は未実施（`build-tested / hardware-unverified`）です。glibc / musl ともに実機物理試験は実施していません（過去環境での検証履歴については [OS・環境別の検証結果](docs/platforms/validation-results.md) を参照）。
+※ Android 向けには Termux 用アーカイブ（実行ファイルおよび `px4-termux`）のみを提供しており、配布用 APK は提供していません。
 
 ## 必要条件
 
@@ -62,11 +67,19 @@ Alpine Linux（BusyBox mdev、コールドプラグスキャンヘルパー、Op
 
 ## 導入方法
 
-配布アーカイブを任意のディレクトリへ展開します。
+配布アーカイブを任意のディレクトリへ展開します。Linux 向けには generic な `linux-<arch>` アーカイブは存在せず、libc およびアーキテクチャ別に以下の 4 系統が提供されます。
+
+- `px4-userland-<version>-linux-glibc-x86_64.tar.gz`
+- `px4-userland-<version>-linux-musl-x86_64.tar.gz`
+- `px4-userland-<version>-linux-glibc-aarch64.tar.gz`
+- `px4-userland-<version>-linux-musl-aarch64.tar.gz`
 
 ```sh
 sudo install -d /opt/px4-userland
-sudo tar -xzf px4-userland-<version>-linux-<arch>.tar.gz -C /opt/px4-userland
+# 例: Linux x86_64 (glibc) の場合
+sudo tar -xzf px4-userland-<version>-linux-glibc-x86_64.tar.gz -C /opt/px4-userland
+# 例: Linux x86_64 (musl / Alpine) の場合
+# sudo tar -xzf px4-userland-<version>-linux-musl-x86_64.tar.gz -C /opt/px4-userland
 ```
 
 ### PC/SC リーダー設定（Linux / macOS）
@@ -262,7 +275,7 @@ px4-ts --device BASE_SERIAL --receiver 0..7 --system isdb-t|isdb-s --frequency-k
   - 帯域幅は 6MHz（6000000Hz）固定です。
 - ISDB-S 固有設定:
   - `--stream-id N`（TSID）または `--slot 0..11` のいずれか一方が必須です。
-- 停止条件（いずれか一方を指定）:
+- 停止条件（任意指定・相互排他。両方省略した場合は明示的停止またはエラーまで連続出力）:
   - `--duration-seconds N`: 指定秒数の受信後に終了します。
   - `--packet-count N`: 指定 TS パケット数の受信後に終了します。
 - その他のオプション:
@@ -302,7 +315,7 @@ px4ctl --device BASE_SERIAL [--runtime-dir PATH] [--group] <サブコマンド>
 - `card-status`: 内蔵カードリーダーのカード挿入状態、初期化状態、ATR を表示します。
 - `card-atr`: カードの ATR（Answer to Reset）を取得して表示します。
 - `card-reset`: カードをリセットし、ATR を表示します。
-- `card-apdu HEX [--repeat N]`: 16 進文字列で指定した APDU をカードへ送信し、応答を表示します（`--repeat` で送信回数を指定可能）。
+- `card-apdu HEX [--repeat N]`: コロン区切りの 16 進文字列（1〜4096 バイト、例: `00:a4:00:00`）で指定した APDU をカードへ送信し、応答を表示します。`--repeat N` で送信回数を指定可能です（指定範囲: 1〜100000）。
 
 ## 内蔵 IC カードリーダー
 
@@ -314,7 +327,7 @@ PX-Q3U4 内蔵の IC カードリーダーは `px4d` が管理します。本ソ
 ## 注意事項・既知の制限
 
 > [!WARNING]
-> **受信機 7（地上波）に関する制限（Beta）**
+> **受信機 7（地上波）に関する制限**
 > 試験個体において、地上波受信機 7（`receiver 7`）で TEI（Transport Error Indicator）や連続性エラー（continuity error）のバーストが発生することが確認されています。同一ハードウェア個体では参照カーネルドライバでも同様に再現しており、本実装固有の問題ではないと見られますが、根本原因や他ロット・他個体での発生状況は未確認です。
 > このエラーが発生した場合、`px4-ts` は `PROTOCOL_ERROR` を検知して終了コード `8` で終了します。
 
@@ -326,7 +339,7 @@ PX-Q3U4 内蔵の IC カードリーダーは `px4d` が管理します。本ソ
 
 ### 必要環境
 
-- CMake 3.16 以上
+- CMake 3.20 以上
 - C++17 対応コンパイラ
 - スレッドライブラリ（Threads）
 - libusb 1.0.23 以上

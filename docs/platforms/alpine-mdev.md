@@ -41,7 +41,7 @@ mdev -s
 
 ## PC/SC
 
-Alpine では `linux-musl-<arch>` 配布物に含まれる musl 版 IFD ハンドラ（`ifd/px4-userland-ifd.so`）を使用します。動作確認済みのパッケージは `pcsc-lite` と `pcsc-lite-openrc` です（`opensc-tool` で確認する場合は `opensc` も追加します）。
+Alpine では musl 版配布アーカイブ（`px4-userland-<version>-linux-musl-x86_64.tar.gz` または `px4-userland-<version>-linux-musl-aarch64.tar.gz`）に含まれる musl 版 IFD ハンドラ（`ifd/px4-userland-ifd.so`）を使用します。動作確認済みのパッケージは `pcsc-lite` と `pcsc-lite-openrc` です（`opensc-tool` で確認する場合は `opensc` も追加します）。
 
 ```sh
 apk add pcsc-lite pcsc-lite-openrc

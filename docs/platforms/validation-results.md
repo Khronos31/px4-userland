@@ -39,16 +39,30 @@
 | Google TV Streamer（Android 14 / API 34 / armv7a / Bionic、Termux 0.119.0-beta.3） | `d7da07acea5f676f698a86e92c0b80e87c1dbe2aca8b01414cc5db8cd24f302b` | 正式`px4-termux`で内蔵カード、地上波、衛星、TERM/INT/HUP、第2USB取得失敗、30分8 receiver、APDU 30/30、物理切断exit 7を確認。receiver 0〜6は全エラー0、receiver 7は既知burst（TEI 10,949、continuity 627、queue/USB error 0）のみ。全processとIPC endpointの残留なし、再接続後も正常。 |
 | IP3 GT1 / Bliss OS（Android 13 / x86_64 / Bionic、Termux 0.118.3） | `7561b51c0b6e934b044982eac0539b5a3de556c331e59b9c6b6f062d3b8f9222` | 正式`px4-termux`で30分8 receiverを実施し、8/8 exit 0、sync/TEI/continuity/queue/USB errorを全て0で確認。内蔵カードAPDU 30/30、TERM/INT/HUP、第2USB取得失敗、物理切断exit 7、全processとIPC endpointの残留なし、再接続後のカードAPDU 10/10・地上波・衛星を確認。 |
 
-現在の最終候補archiveはcommit/push後のCIで生成し、Stable前に正式launcherの実機回帰を行う。
-
 Bliss OSではバックグラウンド時にTermux UID全体が凍結し、`termux-wake-lock`も同環境で`Bad system call`となった。検証中だけADBで給電中の画面常時点灯とTermux前面表示を使用し、`stay_on_while_plugged_in`は元の`0`へ復元した。最初の凍結したsoakは無効試験として上記合格値に含めていない。
+
+## 2026-09-11 Stable基準候補実機検証（commit eabb60b / CI run 34495151505）
+
+対象branchは`fix/macos-system-pcsc`、commit `eabb60bf7702654de20e4f347cfb6c0280ededef`、VERSION `0.1.2`、GitHub Actions run `34495151505`（17/17 jobs成功）。8 binary archive + source archive（計9 archive）および `SHA256SUMS` を生成し、チェックサム検証・展開監査済み。本候補のexact archiveを用いた各対象環境の実機検証ゲートを完了（main統合、version bump、tag、Stable Releaseはこの検証実施時点では未実施）。
+
+| 環境 | 使用アーカイブ SHA-256 | 確認内容 |
+| --- | --- | --- |
+| SCS native Debian 13（x86_64 / glibc） | `fed63ce6f1e9e16ed2b56eed337c33b43bfa8906169f4fd54ed71d9b787588b5` | 2時間ソーク（300秒×24サイクル、24/24 pass）。8 receiver再取得・再チューニング・停止、内蔵カードAPDU監視120/120成功、daemon FD 29・RSS安定、終了時process/IPC残留なしを確認。receiver 192件中191件clean、receiver 7既知burst 1件（sync/queue-drop/USB error 0）。 |
+| HAOS Supervisor管理Alpine add-on（x86_64 / musl） | `e77305ead8160ba48dac500813abf04c070a0b60e28dda65184f825e7ef7725e` | 2時間ソーク（24/24サイクルpass）。初回試験での地デジ過渡異常（fail扱い）を経て新規24周連続取得で完走。receiver 192件全clean（全TSエラー0）、status監視144/144、カードAPDU 144/144成功、daemon FD 31・RSS安定、終了時process/IPC残留なしを確認。 |
+| Latitude 5300 / AnduinOS（x86_64 / glibc） | `fed63ce6f1e9e16ed2b56eed337c33b43bfa8906169f4fd54ed71d9b787588b5` | 30分8 receiver同時ソーク（receiver 0〜6全エラー0、receiver 7既知burstのみ）、status 30/30、カードAPDU 30/30成功。stop/reopen 15秒回帰pass。受信中USB物理切断時のexit 7有限終了、OS再起動なし再接続後の15秒復帰回帰（8/8 clean、APDU成功）、終了時process/IPC残留なしを確認。 |
+| M2 Mac mini / macOS 26.6.2（arm64） | `dfde6006311c49070d340d13fba76de76343e1c0d7e7ddb981004ffb36df7655` | 30分8 receiver同時ソーク。初回終了時continuity異常（fail扱い、再現せず不採用）を経て2回目30分ソークpass（receiver 0〜6全エラー0、receiver 7既知burstのみ、APDU 30/30成功）。stop/reopen pass。受信中USB物理切断時の有限終了（exit 7）、再接続後15秒復帰回帰（全TSエラー0、APDU成功）、終了時process/IPC残留なしを確認。 |
+| Pixel 9a（Android 17 / aarch64 / Bionic、Termux 0.118.3） | `378f521df009948f305c0ff90dbe34687f03e68739be554687def79096a7974a` | 正式`px4-termux`で30分8 receiver同時ソーク（receiver 0〜6全エラー0、receiver 7既知burstのみ）。status 56/56、カードAPDU 56/56成功。SIGINT/SIGHUP/SIGTERM/不正第2USB pathでの残留なし。受信中USB物理切断時のexit 7有限終了、再接続後15秒復帰回帰（8/8 clean、カード成功）、終了時process/IPC残留なしを確認。 |
+| Google TV Streamer（Android 14 / API 34 / armv7a / Bionic、Termux 0.119.0-beta.3） | `01d5fd39c36928676956c7df810937c76048d487b600f65c0798d0f82c08c183` | 正式`px4-termux`で30分8 receiver同時ソーク（receiver 0〜6全エラー0、receiver 7既知burstのみ）。status 57/57、カードAPDU 57/57成功。SIGINT/SIGHUP/SIGTERM/不正第2USB pathでの残留なし。受信中USB物理切断時のexit 7有限終了、再接続後15秒復帰回帰（8/8 clean、カード成功）、終了時process/IPC残留なしを確認。 |
+| IP3 GT1 / Bliss OS（Android 13 / x86_64 / Bionic、Termux 0.118.3） | `659c50d4f6461dea7109154007822b3df5d843653164d5b47da33b5381fa5564` | 正式`px4-termux`で30分8 receiver同時ソーク（receiver 0〜6全エラー0、receiver 7既知burstのみ）。status 58/58、カードAPDU 58/58成功。SIGINT/SIGHUP/SIGTERM/不正第2USB pathでの残留なし。受信中USB物理切断時のexit 7有限終了、再接続後15秒復帰回帰（8/8 clean、カード成功）、終了時process/IPC残留なしを確認。 |
+| Google TV Streamer / ad-hoc APK（armv7a / Bionic） | （内部試験器具・非配布） | armv7a archiveと同SHA-256のELF payloadおよびForeground Service修正版APKを使用。Activity background状態で30分8 receiver同時ソーク（8/8 exit 0、全TSエラー0、status 31/31、APDU 31/31成功）。受信中USB物理切断時のexit 7有限終了、再接続後15秒復帰回帰（8/8 clean、APDU成功）、終了時process/IPC残留なしを確認。 |
 
 ## CIのみ
 
-- Linux x86_64/aarch64 × glibc/muslはbuild、artifact audit、最終archive起動をCIで確認。aarch64/muslのUSB実機およびIFD loadは未確認。
+- Linux x86_64/aarch64 × glibc/muslはbuild、artifact audit、最終archive起動をCIで確認。
+- この候補（commit `eabb60bf7702654de20e4f347cfb6c0280ededef`）において、Linux aarch64のバイナリは旧候補（commit `df6a1e634e5bec11961a1f0f15eedd1da22f7fee`）とbyte-identicalではなく、glibc / musl ともにこの候補での実機物理試験（チューナー・カード・IFD）は未実施です。SPEC 10.3に従い `build-tested / hardware-unverified` として扱います。
 
 ## 既知の観測事項
 
-- 2時間の8 receiver soakではreceiver 0〜6はtransport error 0。receiver 7でTEI 10,974、continuity error 453、sync/queue-drop/USB error 0。同じ約11k TEIの署名は同一個体の参照カーネルドライバでも再現。原因および他個体での挙動は未確認。
+- 2時間の8 receiver soakではreceiver 0〜6はtransport error 0。receiver 7でTEI 10,974、continuity error 453、sync/queue-drop/USB error 0。同じ約11k TEIの署名は同一個体の参照カーネルドライバ（`tsukumijima/px4_drv`）でも同一周波数（T22）で再現しており、本ドライバ固有の回帰ではなく個体固有の既知事象として記録しています（原因および他個体での挙動は未確認）。
 - FreeBSDでは接続直後に片bridgeのfirmware version queryが1回TIMEOUTする事象を2回観測。再試行後は正常。
 - Windowsは本プロダクトのサポート外。
