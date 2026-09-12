@@ -127,7 +127,7 @@ portable coreからOS vendor固有header、Linux kernel header、glibc内部API�
 
 ### 3.3 Build system and language
 
-- CMake 3.20以上を正規ビルドシステムとする。
+- CMake 3.16以上を正規ビルドシステムとする。
 - portable coreはC++17とする。
 - チップ制御コードをCから再利用する場合はC11とし、Linux kernel型・macro・allocatorを含めない。
 - portable coreは例外とRTTIを使用せず、失敗を固定enumまたはresult型で返す。標準thread、mutex、
