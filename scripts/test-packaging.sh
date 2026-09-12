@@ -82,7 +82,7 @@ if tar -xOzf "$test_root/out/px4-userland-$version-linux-musl-x86_64.tar.gz" evi
 fi
 tar -xOzf "$test_root/out/px4-userland-$version-linux-musl-x86_64.tar.gz" \
     reader.conf.d/px4-userland.conf | grep -F 'access=@PX4_ACCESS@' >/dev/null
-for section_mode in debug zdebug symtab; do
+for section_mode in debug zdebug symtab build-id-px4d; do
     if PX4_TEST_SECTIONS="$section_mode" PATH="$script_dir/testdata:$PATH" \
         python3 "$script_dir/audit-artifact.py" --platform linux-musl-x86_64 \
         --build-dir "$test_root/build" --ifd-library "$test_root/build/ifd.so"; then
@@ -96,6 +96,13 @@ for section_mode in debug zdebug symtab; do
         exit 1
     fi
 done
+PX4_TEST_SECTIONS=build-id-non-px4d PATH="$script_dir/testdata:$PATH" \
+    python3 "$script_dir/audit-artifact.py" --platform linux-musl-x86_64 \
+    --build-dir "$test_root/build" --ifd-library "$test_root/build/ifd.so"
+PX4_TEST_SECTIONS=build-id-non-px4d PATH="$script_dir/testdata:$PATH" \
+    python3 "$script_dir/audit-artifact.py" --platform linux-musl-x86_64 \
+    --archive "$test_root/out/px4-userland-$version-linux-musl-x86_64.tar.gz"
+printf '%s\n' 'Linux IFD Build ID allowance tests: PASS'
 PX4_TEST_SECTIONS=dynsym-unwind PATH="$script_dir/testdata:$PATH" \
     python3 "$script_dir/audit-artifact.py" --platform linux-musl-x86_64 \
     --archive "$test_root/out/px4-userland-$version-linux-musl-x86_64.tar.gz"

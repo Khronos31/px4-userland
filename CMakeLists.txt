@@ -20,6 +20,8 @@ option(PX4_BUILD_TESTS "Build offline portable-core tests" OFF)
 option(PX4_ENABLE_LIBUSB "Build the native libusb transport" ON)
 option(PX4_BUILD_TOOLS "Build developer-only USB probe tools" OFF)
 option(PX4_BUILD_ANDROID_LINKCHECK "Build the Android-only final link check" OFF)
+option(PX4_RELEASE_PX4D_NO_BUILD_ID
+    "Omit the GNU Build ID note from the release px4d executable only" OFF)
 option(PX4_BUILD_PCSC_IFD "Build the POSIX PC/SC IFD Handler when headers are available" ON)
 option(PX4_REQUIRE_PCSC_IFD "Fail configuration when the PC/SC IFD Handler cannot be built" OFF)
 set(PX4_ANDROID_NDK_ROOT_MAP "" CACHE PATH
@@ -636,4 +638,8 @@ if(ANDROID AND PX4_ANDROID_LINK_MAP_DIR)
                 "LINKER:-Map,${PX4_ANDROID_LINK_MAP_DIR}/${target}.map")
         endif()
     endforeach()
+endif()
+
+if(PX4_RELEASE_PX4D_NO_BUILD_ID AND TARGET px4d)
+    target_link_options(px4d PRIVATE "LINKER:--build-id=none")
 endif()

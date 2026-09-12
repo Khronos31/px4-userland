@@ -69,6 +69,7 @@ mkdir -p "$work/libusb" "$work/prefix"
 build=$work/build
 cmake -S "$root" -B "$build" -G Ninja -DCMAKE_MAKE_PROGRAM="$make_program" -DCMAKE_BUILD_TYPE=Release \
     -DPX4_BUILD_TESTS=OFF -DPX4_BUILD_PCSC_IFD=OFF -DPX4_ENABLE_LIBUSB=ON \
+    -DPX4_RELEASE_PX4D_NO_BUILD_ID=ON \
     -DPX4_LIBUSB_INCLUDE_DIR="$work/prefix/include/libusb-1.0" \
     -DPX4_LIBUSB_LIBRARY="$work/prefix/lib/libusb-1.0.a" \
     -DCMAKE_CXX_FLAGS='-static -static-libstdc++ -static-libgcc' \

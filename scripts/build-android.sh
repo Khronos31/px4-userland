@@ -279,6 +279,7 @@ env -i \
         -DANDROID_PLATFORM=android-$api \
         -DCMAKE_ANDROID_STL_TYPE=c++_static \
         -DCMAKE_BUILD_TYPE=Release \
+        -DPX4_RELEASE_PX4D_NO_BUILD_ID=ON \
         -DPX4_ANDROID_NDK_ROOT_MAP="$ndk" \
         -DPX4_ENABLE_LIBUSB=ON \
         -DPX4_BUILD_TESTS=OFF \

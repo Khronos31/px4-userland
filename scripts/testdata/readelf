@@ -27,6 +27,17 @@ case "$*" in
         ;;
     symtab) printf '%s\n' '  [ 1] .symtab            SYMTAB'
         ;;
+    build-id-px4d)
+        case "$*" in
+        *px4d*) printf '%s\n' '  [ 1] .note.gnu.build-id NOTE' ;;
+        esac
+        ;;
+    build-id-non-px4d)
+        case "$*" in
+        *px4d*) ;;
+        *) printf '%s\n' '  [ 1] .note.gnu.build-id NOTE' ;;
+        esac
+        ;;
     dynsym-unwind) printf '%s\n' '  [ 1] .dynsym            DYNSYM' '  [ 2] .eh_frame           PROGBITS'
         ;;
     *) printf '%s\n' "unsupported PX4_TEST_SECTIONS: ${PX4_TEST_SECTIONS}" >&2; exit 1 ;;

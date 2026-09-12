@@ -76,7 +76,17 @@ grep -F '[ "$modified_marker_count" -ge 1 ]' "$root/scripts/test-static-relink.s
 grep -F '"$strip_tool" --strip-all' "$root/scripts/build-linux-static.sh" >/dev/null
 # shellcheck disable=SC2016
 grep -F '"$strip_tool" --strip-unneeded' "$root/scripts/build-linux-ifd.sh" >/dev/null
-grep -F 'readelf, "-SW"' "$root/scripts/audit-artifact.py" >/dev/null
+grep -F 'def audit_elf_sections' "$root/scripts/audit-artifact.py" >/dev/null
+grep -F 'reject_build_id: bool' "$root/scripts/audit-artifact.py" >/dev/null
+grep -F 'GNU Build ID section is forbidden in release ELF' "$root/scripts/audit-artifact.py" >/dev/null
+grep -F 'PX4_RELEASE_PX4D_NO_BUILD_ID' "$root/CMakeLists.txt" >/dev/null
+grep -F 'if(PX4_RELEASE_PX4D_NO_BUILD_ID AND TARGET px4d)' "$root/CMakeLists.txt" >/dev/null
+grep -F 'target_link_options(px4d PRIVATE "LINKER:--build-id=none")' "$root/CMakeLists.txt" >/dev/null
+# shellcheck disable=SC2016
+grep -F -- '-DPX4_RELEASE_PX4D_NO_BUILD_ID=ON' "$root/scripts/build-linux-static.sh" >/dev/null
+# shellcheck disable=SC2016
+grep -F -- '-DPX4_RELEASE_PX4D_NO_BUILD_ID=ON' "$root/scripts/build-android.sh" >/dev/null
+grep -F -- 'LINKER:--build-id=none' "$root/CMakeLists.txt" >/dev/null
 grep -F 'segname\s+__DWARF' "$root/scripts/audit-artifact.py" >/dev/null
 grep -F 'nlocalsym' "$root/scripts/audit-artifact.py" >/dev/null
 if grep -F '"-N"' "$root/scripts/package-artifact.py" >/dev/null; then

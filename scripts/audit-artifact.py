@@ -441,9 +441,11 @@ def readelf_path() -> str:
     fail("readelf or llvm-readelf is required")
 
 
-def audit_elf_debug_sections(path: Path, readelf: str) -> None:
+def audit_elf_sections(path: Path, readelf: str, *, reject_build_id: bool) -> None:
     sections = run([readelf, "-SW", str(path)])
     names = re.findall(r"^\s*\[\s*\d+\]\s+(\S+)", sections, re.MULTILINE)
+    if reject_build_id and ".note.gnu.build-id" in names:
+        fail(f"GNU Build ID section is forbidden in release ELF: {path}")
     forbidden = [name for name in names if name.startswith((".debug", ".zdebug")) or
                  name in (".symtab", ".symtab_shndx")]
     if forbidden:
@@ -451,10 +453,10 @@ def audit_elf_debug_sections(path: Path, readelf: str) -> None:
 
 
 def audit_linux(path: Path, logical_name: str, *, platform: str, shared: bool, require_libusb: bool,
-                reject_pcsc: bool = False) -> dict:
+                reject_build_id: bool, reject_pcsc: bool = False) -> dict:
     target = LINUX_TARGETS[platform]
     readelf = readelf_path()
-    audit_elf_debug_sections(path, readelf)
+    audit_elf_sections(path, readelf, reject_build_id=reject_build_id)
     header = run([readelf, "-h", str(path)])
     program = run([readelf, "-lW", str(path)])
     dynamic = run([readelf, "-d", str(path)])
@@ -597,26 +599,29 @@ def audit_darwin(path: Path, logical_name: str, *, require_libusb: bool,
             "nlocalsym": nlocalsym, "local_metadata": local_metadata}
 
 
-def audit_archive_elf_debug_sections(archive: Path, members: dict[str, tarfile.TarInfo],
-                                     platform: str) -> None:
+def audit_archive_elf_sections(archive: Path, members: dict[str, tarfile.TarInfo],
+                               platform: str) -> None:
     # Darwin DWARF inspection is performed by audit_binaries on macOS. The
     # resulting dwarf_sections/local-symbol fields are checked against each
     # archived binary's SHA-256 below, so this cross-platform archive audit
     # must not attempt to run the Darwin-only otool.
     if not platform.startswith(("linux-", "android-")):
         return
-    binary_names = list(PROGRAMS)
+    # Only px4d has the Build ID reproducibility contract. The other two
+    # production programs and the Linux IFD intentionally keep their baseline
+    # metadata, including any GNU Build ID.
+    binary_names = [(program, program == "px4d") for program in PROGRAMS]
     if platform.startswith("linux-"):
-        binary_names.append("ifd/px4-userland-ifd.so")
+        binary_names.append(("ifd/px4-userland-ifd.so", False))
     with tempfile.TemporaryDirectory(prefix="px4-archive-binary-audit-") as temporary:
         root = Path(temporary)
-        for name in binary_names:
+        for name, reject_build_id in binary_names:
             if name not in members:
                 fail(f"binary audit member is missing: {name}")
             path = root / PurePosixPath(name)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(read_archive_file(archive, name))
-            audit_elf_debug_sections(path, readelf_path())
+            audit_elf_sections(path, readelf_path(), reject_build_id=reject_build_id)
 
 
 def audit_termux_launcher(payload: bytes, mode: int) -> None:
@@ -640,12 +645,13 @@ def audit_termux_launcher(payload: bytes, mode: int) -> None:
 
 
 def audit_android(path: Path, logical_name: str, expected_interpreter: str,
-                  expected_arch: str, root: Path) -> dict:
+                  expected_arch: str, root: Path, *, reject_build_id: bool) -> dict:
     verifier = root / "scripts" / "verify-android-elf.sh"
     if not verifier.is_file():
         fail(f"missing existing Android ELF verifier: {verifier}")
     run([str(verifier), str(path), expected_interpreter, expected_arch])
     readelf = readelf_path()
+    audit_elf_sections(path, readelf, reject_build_id=reject_build_id)
     dynamic = run([readelf, "-d", str(path)])
     return {"artifact": logical_name, "format": "Android ELF",
             "interpreter": expected_interpreter, "needed": sorted(parse_needed(dynamic))}
@@ -667,10 +673,11 @@ def audit_binaries(args: argparse.Namespace) -> dict:
                 "android-armv7a": ("/system/bin/linker", "armv7a"),
                 "android-x86_64": ("/system/bin/linker64", "x86_64"),
             }[args.platform]
-            evidence = audit_android(path, program, expected, architecture, args.repo_root.resolve())
+            evidence = audit_android(path, program, expected, architecture, args.repo_root.resolve(),
+                                     reject_build_id=program == "px4d")
         elif args.platform.startswith("linux-"):
             evidence = audit_linux(path, program, platform=args.platform, shared=False,
-                                   require_libusb=program == "px4d")
+                                   require_libusb=program == "px4d", reject_build_id=program == "px4d")
         else:
             evidence = audit_darwin(path, program, require_libusb=program == "px4d")
         evidence["sha256"] = sha256(path)
@@ -683,7 +690,7 @@ def audit_binaries(args: argparse.Namespace) -> dict:
         if not path.is_file() or path.is_symlink():
             fail(f"missing Linux IFD library: {path}")
         evidence = audit_linux(path, "ifd/px4-userland-ifd.so", platform=args.platform, shared=True,
-                               require_libusb=False, reject_pcsc=True)
+                               require_libusb=False, reject_build_id=False, reject_pcsc=True)
         evidence["sha256"] = sha256(path)
         result["extra"].append(evidence)
     elif args.platform == "darwin-arm64":
@@ -777,7 +784,7 @@ def audit_binary_archive(args: argparse.Namespace) -> dict:
     if args.platform.startswith("android"):
         audit_termux_launcher(read_archive_file(args.archive.resolve(), TERMUX_LAUNCHER),
                               members[TERMUX_LAUNCHER].mode)
-    audit_archive_elf_debug_sections(args.archive.resolve(), members, args.platform)
+    audit_archive_elf_sections(args.archive.resolve(), members, args.platform)
     manifest = verify_manifest(args.archive.resolve(), members, args.platform)
     expected_name = f"px4-userland-{manifest['version']}-{args.platform}.tar.gz"
     if args.archive.name != expected_name:
@@ -1042,6 +1049,7 @@ def self_test() -> int:
         write_test_archive(valid, valid_evidence)
         audit_test_archive(valid)
         audit_test_archive(valid, "dynsym-unwind")
+        audit_test_archive(valid, "build-id-non-px4d")
 
         expected_mdev_modes = {
             "mdev/px4-userland-mdev.conf": 0o644,
@@ -1059,7 +1067,7 @@ def self_test() -> int:
             else:
                 fail(f"invalid mdev mode archive self-test did not fail: {name}")
 
-        for section_mode in ("debug", "zdebug", "symtab"):
+        for section_mode in ("debug", "zdebug", "symtab", "build-id-px4d"):
             try:
                 audit_test_archive(valid, section_mode)
             except AuditError:

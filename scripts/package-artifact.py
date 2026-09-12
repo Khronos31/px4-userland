@@ -313,7 +313,7 @@ def self_test_android_notice_and_archive(repo_root: Path) -> None:
             audit_binary_archive(argparse.Namespace(archive=archive, platform=platform))
             os.environ["PX4_TEST_SECTIONS"] = "dynsym-unwind"
             audit_binary_archive(argparse.Namespace(archive=archive, platform=platform))
-            for mode in ("debug", "zdebug", "symtab"):
+            for mode in ("debug", "zdebug", "symtab", "build-id-px4d"):
                 os.environ["PX4_TEST_SECTIONS"] = mode
                 try:
                     audit_binary_archive(argparse.Namespace(archive=archive, platform=platform))
@@ -321,6 +321,8 @@ def self_test_android_notice_and_archive(repo_root: Path) -> None:
                     pass
                 else:
                     fail(f"Android archive self-test accepted {mode} sections")
+            os.environ["PX4_TEST_SECTIONS"] = "build-id-non-px4d"
+            audit_binary_archive(argparse.Namespace(archive=archive, platform=platform))
         finally:
             if previous_path is None:
                 os.environ.pop("PATH", None)
