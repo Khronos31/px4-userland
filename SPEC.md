@@ -1,10 +1,18 @@
 # px4-userland 仕様
 
-Status: Frozen v0.15 (2026-09-11)
+Status: Frozen v0.16 (2026-09-24)
 
 本書の`MUST`、`MUST NOT`、`SHOULD`は規範要件を示す。実機観測で前提の誤りが判明した場合も暗黙に
 実装だけを変えず、本書のversionと変更理由を更新してから実装する。
 
+v0.16では、対象機種にPLEX PX-MLT5PE（`0511:024e`）とe-Better DTV02A-5TS-P（`0511:924e`）を追加する。
+`tsukumijima/px4_drv`はDTV02A-5TS-PをPX-MLT5PEのリブランド品として扱い、両者の差分はUSB product IDだけで
+ある（driver commit `72a807de2009c2ce376953c75687b4d45708f00e`、winusb commit
+`55a02d8246f1011e522fe574599d28b63ceccf0b`）。両機種は1つのIT930xに5つのCXD2856ER/CXD2858ERを持ち、
+各receiverがISDB-TとISDB-Sのどちらにもtuneできる単一USBデバイス構成である。この差を扱うため、
+4.1節の識別、4.2節のreceiver番号、4.4節のTS tag、5.2節の電源、6.4節のLIST/STATUS値域、7.2節の
+1 fd起動経路を機種別に定める。IPCはQ3U4のbyte列を一切変えずに値域だけを拡張し、protocol minorは
+変更しない（6.4節）。実機回帰はDTV02A-5TS-PでLinux x86_64 nativeで行う。
 v0.15では、Termuxランチャーの終了処理を改訂する。v0.14の猶予（約2秒）では、tune（最大30秒）やカードAPDU（最大3秒）の処理中にSIGKILLが送られる可能性があったため、stage 0によるプロセスグループ回収（drain）を固定40秒の有限猶予へ変更する。猶予超過時はSIGKILLを用い、graceful cleanup、LNB 0V、およびruntime endpoint削除を保証できない旨を警告する。また、source archive監査で `__pycache__/`、`.pyc`、`.pyo`、`.pyd` を拒否する。
 v0.14では、Androidの全ABIで共通して不足していたTermux用の正式な2 FD起動経路を追加する。`px4-termux`をstage 0の監督プロセスとして残し、`util-linux`の`setsid`で最初の`termux-usb`を独立したプロセスグループとして起動する。stage 0はそのグループを監督し、stage 1およびstage 2は`exec`で1回につき1 FDを渡す入れ子の`termux-usb`を経て`px4d`へ引き継ぐ。これによりQ3U4の2つのUSBデバイスを1つの`px4d`へ渡し、x86_64をaarch64およびarmv7aと同じ配布候補に加える。
 v0.13では、Android NDK API 24のx86_64をCIでcompile/ELF verifyするbuild-only経路として追加する。これは
@@ -36,6 +44,8 @@ runtime、adapter、実機受入、配布物、Windows build-only gateは対象�
 
 `px4-userland`は、PLEX PX-Q3U4をカーネルモジュールなしで制御するユーザー空間ドライバである。
 USB通信にはlibusb-1.0だけを使用し、Q3U4の8チューナーと内蔵ICカードリーダーを同じデバイス所有者の下で扱う。
+v0.16以降は、同じ所有モデルでPX-MLT5PEおよびDTV02A-5TS-P（以下「MLT5系」）の5チューナーと
+内蔵ICカードリーダーも扱う。
 
 対象環境はLinux/glibc、Linux/musl、Android/Bionic、macOSとする。ビルド成功と自動試験成功を移植性の
 条件とし、実機試験を行っていないOSは、
@@ -61,6 +71,8 @@ support matrixと実機検証経路は次のとおりとする。
 ### 2.1 Goals
 
 - PX-Q3U4 (`VID 0x0511`, `PID 0x084a`) の全8チューナーをユーザー空間から制御する。
+- PX-MLT5PE (`VID 0x0511`, `PID 0x024e`) とDTV02A-5TS-P (`VID 0x0511`, `PID 0x924e`) の全5チューナーと
+  内蔵ICカードリーダーをユーザー空間から制御する。
 - PX-Q3U4内蔵ICカードリーダーでカード検出、ATR取得、リセット、T=1 APDU送受信を行う。
 - Q3U4を構成する2つのIT9305Eを同一筐体として対応付け、2基間で連動するbackend powerを一貫して管理する。
 - USB列挙、制御転送、非同期TS転送、カードUARTをlibusb-1.0で実装する。
@@ -80,14 +92,15 @@ support matrixと実機検証経路は次のとおりとする。
 - ファームウェアのダウンロード、vendor driverからの抽出、変換機能。
 - mirakcの同梱またはmirakc側の変更。
 - Home Assistantアドオンの作成または変更。
-- PX-W3U4、PX-Q3PE4、PX-Q3PE5、PX-W3PE5、PX-MLT系、e-Better系など、Q3U4以外の動作保証。
+- PX-W3U4、PX-Q3PE4、PX-Q3PE5、PX-W3PE5、PX-MLT5U、PX-MLT8PE3、PX-MLT8PE5、ISDB6014、ISDB2056、
+  DTV02A-1T1S-Uなど、Q3U4およびMLT5系（PX-MLT5PE、DTV02A-5TS-P）以外の動作保証。
 - 配布用Android APKまたはdtv-androidへの統合。Google TV Streamer実機検証用のad-hoc APKは試験器具として許容する。
 - B-CAS/ACASの暗号処理、ECM処理、TSのスクランブル解除。
 - ネットワーク越しの利用。IPCは同一ホスト内に限定する。
 - Windows用runtime、adapter、CLI/IPC互換層、配布物、build-only gate。Windows利用者向けの
   `tsukumijima/px4_drv`は別製品・別interfaceであり、px4-userlandのdrop-in代替ではない。
 
-Q3U4と共通するチップを持つ他機種で偶然動作しても、対応機種一覧へ追加しない。
+Q3U4またはMLT5系と共通するチップを持つ他機種で偶然動作しても、対応機種一覧へ追加しない。
 実機確認、回帰試験、明示的な仕様変更を行うまでは「unsupported / unverified」とする。
 
 ## 3. Product architecture
@@ -98,6 +111,7 @@ Q3U4のUSBデバイスを直接所有するプロセスは、長寿命の`px4d`�
 
 Q3U4は同一筐体内に2つのIT9305Eを持ち、各USBデバイス上で複数チューナーと制御経路を共有する。
 チューナーごとに独立したプロセスがlibusb interfaceをclaimする構成は採用しない。
+MLT5系は1つのIT930xだけを持つ単一USBデバイスであり、`px4d`はその1デバイスを同じ規則で所有する。
 
 提供する実行ファイルは次の3つとする。
 
@@ -148,6 +162,22 @@ portable coreからOS vendor固有header、Linux kernel header、glibc内部API�
 - 複数筐体を列挙できる設計にするが、1つの`px4d`インスタンスが所有するのは`--device`で選択した1筐体とする。
 - 同一USB interfaceにカーネルドライバまたは別プロセスが接続中なら、暗黙に奪わず`busy`で失敗する。
 
+v0.16の対応USB IDと筐体識別子は次のとおりとする。未掲載のproduct IDは`unsupported`とする。
+
+| Model | USB ID | USB devices | Instance identifier | Receivers |
+|---|---|---:|---|---:|
+| PX-Q3U4 | `0511:084a` | 2 | 15桁serialの末尾`1`/`2`を除いた14桁base serial | 8 |
+| PX-MLT5PE | `0511:024e` | 1 | 15桁10進数字のUSB serial全体 | 5 |
+| DTV02A-5TS-P | `0511:924e` | 1 | 15桁10進数字のUSB serial全体 | 5 |
+
+- MLT5系のUSB serialはASCII数字15桁でなければならない（DTV02A-5TS-P実機観測値の形式）。それ以外は
+  `invalid_serial`とする。MLT5系ではserial末尾を`dev_id`として解釈しない。
+- MLT5系のtopologyとspeedはQ3U4と同じ条件（interface 0 alt 0、bulk endpoint `0x81`/`0x02`/`0x84`/`0x85`、
+  各512 byte、high speed以上）を要求する。
+- `--device`、PC/SCの`device=`、runtime instance名は、14桁（Q3U4）または15桁（MLT5系）のASCII数字だけを受理する。
+  桁数で機種群を判別できるため、Q3U4 base serialとMLT5系serialは衝突しない。
+- MLT5系の1デバイスは`dev_id 1`として扱い、物理カードスロットを1つ公開する。
+
 ### 4.2 Receiver numbering
 
 受信機番号は再接続後も次の順序を維持する。
@@ -162,6 +192,17 @@ portable coreからOS vendor固有header、Linux kernel header、glibc内部API�
 | 5 | `dev_id 2`, receiver 1 | ISDB-S |
 | 6 | `dev_id 2`, receiver 2 | ISDB-T |
 | 7 | `dev_id 2`, receiver 3 | ISDB-T |
+
+MLT5系のreceiver番号は次のとおりとする。各receiverはtuneごとにISDB-TまたはISDB-Sを選択でき、
+同じleaseのままretuneでsystemを切り替えられる。streamおよびstop時のsystemは直前に成功したtuneのsystemとする。
+
+| ID | Device | Local | System | px4_drv入力（I2C bus, demod address, TS port） |
+|---:|---|---:|---|---|
+| 0 | `dev_id 1` | 0 | ISDB-T/ISDB-S | bus 3, `0x65`, port 0 |
+| 1 | `dev_id 1` | 1 | ISDB-T/ISDB-S | bus 1, `0x6c`, port 1 |
+| 2 | `dev_id 1` | 2 | ISDB-T/ISDB-S | bus 1, `0x64`, port 2 |
+| 3 | `dev_id 1` | 3 | ISDB-T/ISDB-S | bus 3, `0x6c`, port 3 |
+| 4 | `dev_id 1` | 4 | ISDB-T/ISDB-S | bus 3, `0x64`, port 4 |
 
 1受信機は同時に1クライアントだけが占有できる。他受信機とカードは並行利用できる。
 
@@ -185,6 +226,8 @@ slotとTSIDはIPC上で別fieldとし、値の大きさから暗黙判定しな�
   受理する。bit 7が立つ値はtransport error indicatorとして拒否する。
 - global receiver IDは`((dev_id - 1) * 4) + (local_receiver_tag - 1)`で求める。したがって同じ`0x17`でも、
   `dev_id 1`ではreceiver 0、`dev_id 2`ではreceiver 4へ分配する。
+- MLT5系のaggregation tagは単一IT930x内の`1..5`であり、`0x17`、`0x27`、`0x37`、`0x47`、`0x57`だけを受理する。
+  global receiver IDは`local_receiver_tag - 1`とする。Q3U4の受理集合は変更しない。
 - 受信機へ分配するとき、出力TSのsync byteを`0x47`へ戻す。
 - tune、stop、再openの境界で前回TSの端数とqueueを破棄する。
 - queue overflow、bulk transfer failure、同期喪失をsilent dropにせず、統計と終了理由へ反映する。
@@ -198,6 +241,8 @@ slotとTSIDはIPC上で別fieldとし、値の大きさから暗黙判定しな�
   `5213a5a38872661277a2cc1b2dfdfe88faf06f41205f460f3b51857f0568b484`の1種類だけとする。
 - SHA-256はファイル全体に対して計算する。長さまたはhashが一致しないファイルは`FIRMWARE_REJECTED`で拒否し、
   未知imageを強制使用するoptionは設けない。
+- MLT5系にも同じ1種類のimageだけを受理する。`tsukumijima/px4_drv`はMLT5系とQ3U4に同一の
+  `it930x-firmware.bin`を使用し、v0.16のDTV02A-5TS-P実機試験も同じimageで行う。
 - 別imageを追加する場合は、実機で8 receiverとcard readerの受入試験を通し、本節へ長さ、SHA-256、由来を
   追記する仕様変更を先に行う。
 - firmwareの探索、ダウンロード、archive展開、vendor driverからの抽出は行わない。
@@ -244,6 +289,15 @@ Androidではsystem PC/SCを前提とせず、portable IPCを利用する。
   GPIO 11 lowを再試行する。`DISCONNECTED`となったbridgeには以後の電源操作を送らない。
 - 片側USB切断で筐体を停止する場合、切断したbridgeには追加書込みを行わない。接続が残る反対側bridgeは、
   そのtransportを閉じる前にLNB参照を解放してGPIO 11 lowを試みる。失敗は成功扱いにしない。
+- MLT5系は単一bridgeのGPIO 7/2でbackend powerを、GPIO 11でLNBを制御する（Q3U4と同じGPIO割当と
+  80ms/20ms順序）。いずれかのreceiverがopen、またはcard openならbackend powerを維持し、両方がなくなったときだけ
+  停止する。LNBは「直前に成功したtuneが15VのISDB-S receiver」の参照数で管理し、ISDB-Tへのretuneとcloseで
+  そのreceiverの参照を外す。`--allow-lnb-power`、GPIO応答喪失時の`unknown`とcleanup debt、`DISCONNECTED`後の
+  書込み禁止はQ3U4と同じ規則とする。
+- MLT5系の同一I2C bus上のtunerはdemodのI2C gate経由で同じaddress `0x60`を共有するため、gate open、tuner access、
+  gate closeの一連をbus単位で直列化する。
+- MLT5系ではreceiverごとにdemod/tunerをopen時に初期化し、close時に停止する。最初のstream開始前に
+  IT930x PSBをpurgeする。
 - 通常の正常終了およびSIGINT、SIGTERM、SIGHUPの受信時は、USB transportを閉じる前に両bridgeのLNBを0Vへ戻す。SIGKILL、host crash、
   USB stack failureではcleanupを保証できないため、明示的なopt-inと再初期化時のGPIO 11 lowを安全境界とする。
 - `px4-termux`のstage 0は、通常終了時およびSIGINT、SIGTERM、SIGHUPの受信時に、固定40秒の猶予を設けて子プロセスグループの終了を待つ。
@@ -379,6 +433,19 @@ HELLO responseのcapabilitiesはrequestとserver対応bitの積集合とする�
 `LIST`/`STATUS`のreserved countやmask、ATR上限、receiver ID、enum範囲を受信側で検証する。上記layoutから
 golden byte vectorを作り、異なる言語でencode/decodeしたvectorの一致をprotocol v1の受入条件とする。
 
+v0.16では、layoutとfield数を変えずに次の値域だけを追加する。Q3U4 daemonが送るbyte列は従来と完全に同一である。
+
+- `LIST`の`receiver_count`は8（Q3U4）または5（MLT5系）とし、receiver recordはcount個だけ続く。
+  count 8のrecordは従来のQ3U4固定表と一致しなければならない。count 5のrecordは`global_id == local_id == index`、
+  `dev_id == 1`、`system == 3`でなければならない。`system` 3は`ISDB_T_OR_S`（tuneごとにT/Sを選択可能）を表し、
+  `TUNE`の`system`としては無効のままとする。MLT5系の`usb_present_mask`は`0x01`だけを使う。
+- `STATUS`のreceiver stateは常に8個とし、MLT5系の存在しないreceiver 5..7には新しい値5=`absent`を入れる。
+  `absent`は存在するreceiverには使わない。
+- `ACQUIRE`および各lease操作は、存在しないreceiver IDを`INVALID_ARGUMENT`で拒否する。
+- protocol minorは0のままとする。header versionの一致検査は厳密一致であり、minorを上げると同じ配布物内の
+  CLI、PC/SC adapter、既存golden vectorとの互換を理由なく失うためである。v1.0のdecoderはMLT5系の`LIST`/`STATUS`を
+  malformedとして拒否し、未知の値域を黙って誤解釈しない（fail closed）。Q3U4に対する意味は変更しない。
+
 card handleは作成したcontrol connectionに結び付ける。share modeは1=shared、2=exclusive、dispositionは
 0=leave、1=resetとする。異常切断は全handleとtransactionを解放し、最後のhandle解放時だけcard hardwareをcloseする。
 exclusive handleがある間は他のconnectを`BUSY`にし、transaction中は同じhandle以外のAPDUを`BUSY`にする。
@@ -408,6 +475,11 @@ queue overflow、sync/TEI/drop検出を0にしない。stdoutはTSだけ、全�
 ### 7.2 Android/Bionic
 
 - `px4d`は`--fd FD`を繰り返し受け取り、Q3U4の2 USB deviceをwrapできる。
+- `--fd`は筐体のUSB device数だけ指定する。Q3U4は2個、MLT5系は1個とし、0個または3個以上は拒否する。
+  wrapした全deviceが選択した1筐体に属さなければ（例: MLT5系に2個、Q3U4の片側だけに1個）失敗する。
+  v0.15までの「`--fd`はちょうど2個」はQ3U4についての規則として維持される。
+- `px4-termux`の`--usb-device`は1回（MLT5系）または2回（Q3U4）とする。1回の場合もstage 0の監督、signal転送、
+  40秒猶予は2 FD経路と同じとし、stage 1が`exec px4d --fd FD1 ...`を実行する。
 - fd modeでは`/dev/bus/usb`の列挙を要求しない。
 - fdの所有権とclose責任を明記し、double-closeしない。
 - Android NDK API 24でaarch64、armv7a、x86_64をクロスビルドし、3つのABIを同一の配布・監査対象とする。
@@ -449,7 +521,7 @@ queue overflow、sync/TEI/drop検出を0にしない。stdoutはTSだけ、全�
 最終ツリーには、少なくとも以下だけを残す。
 
 - portable sourceとplatform adapter
-- Q3U4 device definition
+- Q3U4およびMLT5系のdevice definition
 - CLI source
 - unit/integration/hardware test tools
 - CMake、CI、license、README、仕様・検証記録
@@ -462,7 +534,7 @@ v0.5のscope cleanupでは旧Windows専用source、build、package、試験記�
 
 - Linux kernel module、chardev、ioctl ABI、DKMS、Debian DKMS package
 - tracked firmware、firmwareを含むpackage素材
-- Q3U4以外のdevice implementationとpackage definition
+- Q3U4およびMLT5系以外のdevice implementationとpackage definition
 - 旧px4_drvの導入文書、kernel build文書、非対象機種の利用文書
 
 ## 9. Prior-art classification
@@ -489,13 +561,15 @@ Linux・Android・macOSを対象にする既存実装は確認できなかった
 5. Android NDK API 24の3 ABI build/ELF/artifact audit、`px4-termux`の構文およびプロセス・FD引き継ぎ試験が成功する。
 6. Android ELFにglibc/musl loader、shared libusb、host RPATH/RUNPATHが含まれない。
 7. mock USBによるQ3U4 grouping、firmware framing、I2C、tune sequence、bridge別TS demux、hotplug試験が成功する。
+   MLT5系についても識別、warm初期化順序、CXD2856ER/CXD2858ER tune sequence、5 tag demux、LIST/STATUS値域、
+   1 fd起動の試験が成功する。
 8. `smart_card_state_test`相当のATR、T=1、timeout、retry、APDU分割、抜去、再挿入試験が成功する。
 9. IPCの全messageについてgolden byte vector、malformed frame、version negotiation、権限、異常切断、
    slow-consumer/backpressure、CLI exit code試験が成功する。
 10. stream counter試験で、正常TS中に`empty_intervals`だけが非zeroでも成功し、他のerror counterが0でも
     packet/byteの進行が5秒停止した場合は失敗する。
 11. fuzzまたは境界値試験でUSB response lengthとIPC payload lengthの範囲外アクセスがない。
-12. `git ls-files`にfirmware binary、vendor driver binary、kernel module、DKMS、非Q3U4 device packageが残らない。
+12. `git ls-files`にfirmware binary、vendor driver binary、kernel module、DKMS、Q3U4/MLT5系以外のdevice packageが残らない。
 13. 全派生source fileに`SPDX-License-Identifier: GPL-2.0-only`を付け、LICENSEがGPL-2.0を示す。
 
 ### 10.2 Q3U4 hardware acceptance on Linux
@@ -547,6 +621,21 @@ px4-userlandのburstが参照結果より悪化せず、追加のUSB error、que
 `continuity_errors=453`を記録した。同一試験個体では、参照`tsukumijima/px4_drv`でも約11k TEIの署名が再現した。
 この結果は10.2.6aの既知制限の初期証拠として扱うが、Stable候補では同一条件の比較記録を改めて保存する。
 `px4-ts`はTS integrity errorをCLI exit code 8で報告する。
+
+### 10.2.7 MLT5 hardware acceptance
+
+MLT5系のhardware-verified表示は、機種・環境ごとに次を満たした場合に限る。
+
+1. `px4ctl list`が1 USB deviceを1筐体として報告し、5 receiver（全て`ISDB_T_OR_S`）と1 card readerを示す。
+2. firmwareをloadし、プロセス再起動後も再初期化できる。
+3. 少なくとも1 receiverでISDB-Tのtune、capture、stop、再openができ、TSにsync/TEI/queue/USB errorがない。
+4. 同じleaseでISDB-TとISDB-Sを切り替えるretuneができる。衛星アンテナがない環境では、ISDB-Sのtune要求が
+   有限時間で`TIMEOUT`になり、その後同じleaseでISDB-Tへ戻れることを記録し、衛星captureは未検証と表示する。
+5. 5 receiverの同時captureで、各receiverのTSがtagどおりに分配され混入がない。
+6. card未挿入/挿入、ATR、reset、基本APDUが成功する。
+7. receiverを使わずにcardだけをopenしても通信でき、receiverとcardの開閉順にかかわらず5.2節の電源規則を満たす。
+
+Q3U4の10.2各項は、MLT5系の追加によって弱めない。
 
 ### 10.3 Cross-platform support claims
 

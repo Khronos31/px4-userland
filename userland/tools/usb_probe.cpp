@@ -116,6 +116,11 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "claim failed: %s\n", error_string(runtime.error()));
         return 1;
     }
+    // Developer probe for the two-bridge PX-Q3U4 only.
+    if (runtime.value()->model() != DeviceModel::px_q3u4) {
+        std::fprintf(stderr, "claim failed: %s\n", error_string(Error::UNSUPPORTED));
+        return 1;
+    }
     std::printf("claimed base=%s dev1=%s dev2=%s\n",
                 std::string(runtime.value()->base_serial()).c_str(),
                 runtime.value()->dev1().stream_active() ? "active" : "ready",

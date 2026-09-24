@@ -1,9 +1,10 @@
-// Modified/ported for px4-userland on 2026-09-03.
+// Modified/ported for px4-userland on 2026-09-03; MLT5 support added on 2026-09-24.
 //
 // Copyright (c) 2018-2021 nns779
-// Derived from tsukumijima/px4_drv commit 9eedea8c502875a788697984b93b50032339b9aa.
+// Derived from tsukumijima/px4_drv commit d748866f0da1cb3656106a520de4e9d7f073aacd (v0.6.1).
 // Origin paths: driver/it930x.c, driver/itedtv_bus.c, driver/px4_usb.c,
-// driver/px4_device.c, winusb/src/DriverHost_PX4/itedtv_bus_winusb.c,
+// driver/px4_device.c, driver/pxmlt_device.c,
+// winusb/src/DriverHost_PX4/itedtv_bus_winusb.c,
 // winusb/src/DriverHost_PX4/px4_device.cpp.
 // Source snapshot maintained by tsukumijima.
 // SPDX-License-Identifier: GPL-2.0-only
@@ -74,6 +75,7 @@ bool run_frontend_probe_tests();
 bool run_ts_probe_tests();
 bool run_tagged_ts_demux_tests();
 bool run_q3u4_stream_tests();
+bool run_mlt5pe_tests();
 
 #if PX4_ENABLE_LIBUSB && (defined(__linux__) || defined(__ANDROID__))
 #include <fcntl.h>
@@ -374,6 +376,77 @@ std::uint8_t expect_q3u4_warm_sequence(MockTransport& transport,
     return sequence;
 }
 
+// px4_drv v0.6.1 pxmlt_device.c (PXMLT5PE_MODEL) and it930x.c: the common
+// warm prefix, five demodulator slaves on I2C buses 3/1/1/3/3, five enabled
+// serial TS ports tagged 0x17..0x57, then GPIO 7/2/11 idle in board order.
+std::uint8_t expect_mlt5pe_warm_sequence(MockTransport& transport,
+                                         std::uint8_t initial_sequence = 0U)
+{
+    std::uint8_t sequence = initial_sequence;
+    expect_register_write(transport, sequence, 0x4976U, {0U});
+    expect_register_write(transport, sequence, 0x4bfBU, {0U});
+    expect_register_write(transport, sequence, 0x4978U, {0U});
+    expect_register_write(transport, sequence, 0x4977U, {0U});
+    expect_register_write(transport, sequence, 0xda1aU, {0U});
+    expect_register_rmw(transport, sequence, 0xf41fU, 0xa1U, 0xa5U);
+    expect_register_rmw(transport, sequence, 0xda10U, 0xf3U, 0xf2U);
+    expect_register_rmw(transport, sequence, 0xf41aU, 0xa0U, 0xa1U);
+    expect_register_rmw(transport, sequence, 0xda1dU, 0x80U, 0x81U);
+    expect_register_rmw(transport, sequence, 0xdd11U, 0xffU, 0xdfU);
+    expect_register_rmw(transport, sequence, 0xdd13U, 0xffU, 0xdfU);
+    expect_register_rmw(transport, sequence, 0xdd11U, 0xdfU, 0xffU);
+    expect_register_write(transport, sequence, 0xdd88U, {0xd0U, 0x95U});
+    expect_register_write(transport, sequence, 0xdd0cU, {0x80U});
+    expect_register_rmw(transport, sequence, 0xda05U, 0x80U, 0x80U);
+    expect_register_rmw(transport, sequence, 0xda06U, 0x01U, 0x00U);
+    expect_register_rmw(transport, sequence, 0xda1dU, 0x81U, 0x80U);
+    expect_register_write(transport, sequence, 0xd920U, {0U});
+    expect_register_write(transport, sequence, 0xd833U, {1U});
+    expect_register_write(transport, sequence, 0xd830U, {0U});
+    expect_register_write(transport, sequence, 0xd831U, {1U});
+    expect_register_write(transport, sequence, 0xd832U, {0U});
+    expect_register_write(transport, sequence, 0xf6a7U, {0x07U});
+    expect_register_write(transport, sequence, 0xf103U, {0x07U});
+    expect_register_write(transport, sequence, 0x4975U, {0xcaU});
+    expect_register_write(transport, sequence, 0x4971U, {3U});
+    expect_register_write(transport, sequence, 0x4974U, {0xd8U});
+    expect_register_write(transport, sequence, 0x4970U, {1U});
+    expect_register_write(transport, sequence, 0x4973U, {0xc8U});
+    expect_register_write(transport, sequence, 0x496fU, {1U});
+    expect_register_write(transport, sequence, 0x4972U, {0xd8U});
+    expect_register_write(transport, sequence, 0x496eU, {3U});
+    expect_register_write(transport, sequence, 0x4964U, {0xc8U});
+    expect_register_write(transport, sequence, 0x4963U, {3U});
+    expect_register_write(transport, sequence, 0xda58U, {0U});
+    expect_register_write(transport, sequence, 0xda73U, {1U});
+    expect_register_write(transport, sequence, 0xda78U, {0x17U});
+    expect_register_write(transport, sequence, 0xda4cU, {1U});
+    expect_register_write(transport, sequence, 0xda59U, {0U});
+    expect_register_write(transport, sequence, 0xda74U, {1U});
+    expect_register_write(transport, sequence, 0xda79U, {0x27U});
+    expect_register_write(transport, sequence, 0xda4dU, {1U});
+    expect_register_write(transport, sequence, 0xda75U, {1U});
+    expect_register_write(transport, sequence, 0xda7aU, {0x37U});
+    expect_register_write(transport, sequence, 0xda4eU, {1U});
+    expect_register_write(transport, sequence, 0xda76U, {1U});
+    expect_register_write(transport, sequence, 0xda7bU, {0x47U});
+    expect_register_write(transport, sequence, 0xda4fU, {1U});
+    expect_register_write(transport, sequence, 0xda77U, {1U});
+    expect_register_write(transport, sequence, 0xda7cU, {0x57U});
+    expect_register_write(transport, sequence, 0xda50U, {1U});
+    expect_register_write(transport, sequence, 0xd8c4U, {1U});
+    expect_register_write(transport, sequence, 0xd8c5U, {1U});
+    expect_register_write(transport, sequence, 0xd8c3U, {1U});
+    expect_register_write(transport, sequence, 0xd8b8U, {1U});
+    expect_register_write(transport, sequence, 0xd8b9U, {1U});
+    expect_register_write(transport, sequence, 0xd8b7U, {0U});
+    expect_register_write(transport, sequence, 0xd8d4U, {1U});
+    expect_register_write(transport, sequence, 0xd8d5U, {1U});
+    expect_register_write(transport, sequence, 0xd8d3U, {0U});
+    expect_q3u4_readback(transport, sequence);
+    return sequence;
+}
+
 class RecordingQ3U4Delay final : public Q3U4Delay {
 public:
     void sleep_ms(std::uint32_t milliseconds) noexcept override
@@ -403,6 +476,23 @@ bool test_it930x_q3u4_warm_initialization()
     for (const Timeout timeout : transport.timeouts()) {
         CHECK(timeout.milliseconds == 3000U);
     }
+    return true;
+}
+
+bool test_it930x_mlt5pe_warm_initialization()
+{
+    MockTransport transport;
+    constexpr std::array<std::uint8_t, 4U> loaded_version{0U, 0U, 2U, 1U};
+    constexpr std::array<std::uint8_t, 1U> query{1U};
+    expect_command(transport, 0x22U, 0U, ByteView{query.data(), query.size()},
+                   ByteView{loaded_version.data(), loaded_version.size()});
+    expect_mlt5pe_warm_sequence(transport, 1U);
+    It930xController controller(transport, kFastPacing);
+    const auto image = FirmwareTestAccess::make_image(ByteView{kSyntheticFirmwareImage.data(),
+                                                                kSyntheticFirmwareImage.size()});
+    const auto result = controller.initialize_mlt5pe(image);
+    CHECK(result && result.value().already_loaded && result.value().verified);
+    CHECK(transport.remaining_expectations() == 0U);
     return true;
 }
 
@@ -2965,6 +3055,7 @@ int main(int argc, char** argv)
         {"it930x_sequence_wrap", test_it930x_sequence_wrap},
         {"it930x_firmware_load_paths", test_it930x_firmware_load_paths},
         {"it930x_q3u4_warm_initialization", test_it930x_q3u4_warm_initialization},
+        {"it930x_mlt5pe_warm_initialization", test_it930x_mlt5pe_warm_initialization},
         {"it930x_q3u4_power_state_after_initialization",
          test_it930x_q3u4_power_state_after_initialization},
         {"it930x_q3u4_lnb_gpio_authority",
@@ -3004,6 +3095,7 @@ int main(int argc, char** argv)
         {"ts_probe", run_ts_probe_tests},
         {"tagged_ts_demux", run_tagged_ts_demux_tests},
         {"q3u4_stream", run_q3u4_stream_tests},
+        {"mlt5pe", run_mlt5pe_tests},
 #if PX4_ENABLE_LIBUSB
         {"bulk_transport_and_mapping", test_bulk_transport_and_mapping},
         {"not_found_cancel_waits_for_callback", test_not_found_cancel_waits_for_callback},

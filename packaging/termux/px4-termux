@@ -1,14 +1,17 @@
 #!/data/data/com.termux/files/usr/bin/sh
 # SPDX-License-Identifier: GPL-2.0-only
-# Open two Q3U4 USB devices with nested termux-usb calls and pass both FDs to px4d.
+# Open the enclosure's USB devices (two for PX-Q3U4, one for PX-MLT5PE/DTV02A-5TS-P)
+# with nested termux-usb calls and pass every FD to px4d.
 set -eu
 
 usage()
 {
     printf '%s\n' \
-        'usage: px4-termux --usb-device PATH --usb-device PATH --firmware PATH' \
+        'usage: px4-termux --usb-device PATH [--usb-device PATH] --firmware PATH' \
         '                    [--device BASE_SERIAL] [--runtime-dir PATH]' \
-        '                    [--group] [--allow-lnb-power]'
+        '                    [--group] [--allow-lnb-power]' \
+        '' \
+        'Pass --usb-device twice for PX-Q3U4 and once for PX-MLT5PE/DTV02A-5TS-P.'
 }
 
 fail()
@@ -32,6 +35,38 @@ esac
 case "$script_path" in
     *[!A-Za-z0-9_./-]*) fail 'launcher callback path contains unsafe shell characters' ;;
 esac
+
+# Replace this process with px4d, passing each argument as one --fd.
+exec_px4d()
+{
+    launcher_directory=$(CDPATH='' cd -- "$(dirname -- "$script_path")" && pwd -P) ||
+        fail 'cannot resolve px4d directory'
+    px4d=$launcher_directory/px4d
+    if [ ! -x "$px4d" ]; then
+        px4d=$(command -v px4d 2>/dev/null) || fail 'px4d was not found beside the launcher or in PATH'
+    fi
+    fd_count=$#
+    for fd do
+        set -- "$@" --fd "$fd"
+    done
+    shift "$fd_count"
+    set -- "$px4d" "$@" --firmware "$PX4_TERMUX_FIRMWARE"
+    if [ -n "${PX4_TERMUX_DEVICE-}" ]; then
+        set -- "$@" --device "$PX4_TERMUX_DEVICE"
+    fi
+    if [ -n "${PX4_TERMUX_RUNTIME_DIR-}" ]; then
+        set -- "$@" --runtime-dir "$PX4_TERMUX_RUNTIME_DIR"
+    fi
+    if [ "${PX4_TERMUX_GROUP-0}" -eq 1 ]; then
+        set -- "$@" --group
+    fi
+    if [ "${PX4_TERMUX_ALLOW_LNB_POWER-0}" -eq 1 ]; then
+        set -- "$@" --allow-lnb-power
+    fi
+    unset PX4_TERMUX_STAGE PX4_TERMUX_USB2 PX4_TERMUX_FIRMWARE PX4_TERMUX_DEVICE \
+        PX4_TERMUX_RUNTIME_DIR PX4_TERMUX_GROUP PX4_TERMUX_ALLOW_LNB_POWER PX4_TERMUX_FD1
+    exec "$@"
+}
 
 valid_fd()
 {
@@ -66,7 +101,7 @@ case "$stage" in
                 case "$usb_device_count" in
                     1) usb_device_1=$2 ;;
                     2) usb_device_2=$2 ;;
-                    *) fail '--usb-device must be specified exactly twice' ;;
+                    *) fail '--usb-device must be specified once or twice' ;;
                 esac
                 shift 2
                 ;;
@@ -101,14 +136,16 @@ case "$stage" in
                 allow_lnb_power=1
                 shift
                 ;;
-            --fd|--fd=*) fail '--fd is not accepted; use --usb-device twice' ;;
+            --fd|--fd=*) fail '--fd is not accepted; use --usb-device' ;;
             --usb-device=*) fail '--usb-device requires a separate path argument' ;;
             --firmware=*|--device=*|--runtime-dir=*) fail 'options require separate arguments' ;;
             *) fail "unknown argument: $1" ;;
         esac
     done
-    [ "$usb_device_count" -eq 2 ] || fail '--usb-device must be specified exactly twice'
-    [ "$usb_device_1" != "$usb_device_2" ] || fail 'the two USB device paths must differ'
+    [ "$usb_device_count" -ge 1 ] || fail '--usb-device must be specified once or twice'
+    if [ "$usb_device_count" -eq 2 ]; then
+        [ "$usb_device_1" != "$usb_device_2" ] || fail 'the two USB device paths must differ'
+    fi
     [ -n "$firmware" ] || fail '--firmware is required'
     command -v termux-usb >/dev/null 2>&1 || fail 'termux-usb was not found in PATH'
     command -v setsid >/dev/null 2>&1 || fail 'setsid was not found in PATH'
@@ -187,6 +224,10 @@ case "$stage" in
 1)
     [ "$#" -eq 1 ] || fail 'first termux-usb callback did not provide exactly one FD'
     valid_fd "$1" || fail 'first termux-usb callback provided a missing or invalid FD'
+    if [ -z "${PX4_TERMUX_USB2-}" ]; then
+        # A single-device enclosure needs no second termux-usb open.
+        exec_px4d "$1"
+    fi
     export PX4_TERMUX_FD1="$1"
     export PX4_TERMUX_STAGE=2
     exec termux-usb -e "$script_path" "$PX4_TERMUX_USB2"
@@ -202,28 +243,7 @@ case "$stage" in
     [ "$fd1" != "$fd2" ] || fail 'termux-usb returned the same FD twice'
     [ "$fd1_target" != "$fd2_target" ] || fail 'termux-usb returned the same open device twice'
 
-    launcher_directory=$(CDPATH='' cd -- "$(dirname -- "$script_path")" && pwd -P) ||
-        fail 'cannot resolve px4d directory'
-    px4d=$launcher_directory/px4d
-    if [ ! -x "$px4d" ]; then
-        px4d=$(command -v px4d 2>/dev/null) || fail 'px4d was not found beside the launcher or in PATH'
-    fi
-    set -- "$px4d" --fd "$fd1" --fd "$fd2" --firmware "$PX4_TERMUX_FIRMWARE"
-    if [ -n "${PX4_TERMUX_DEVICE-}" ]; then
-        set -- "$@" --device "$PX4_TERMUX_DEVICE"
-    fi
-    if [ -n "${PX4_TERMUX_RUNTIME_DIR-}" ]; then
-        set -- "$@" --runtime-dir "$PX4_TERMUX_RUNTIME_DIR"
-    fi
-    if [ "${PX4_TERMUX_GROUP-0}" -eq 1 ]; then
-        set -- "$@" --group
-    fi
-    if [ "${PX4_TERMUX_ALLOW_LNB_POWER-0}" -eq 1 ]; then
-        set -- "$@" --allow-lnb-power
-    fi
-    unset PX4_TERMUX_STAGE PX4_TERMUX_USB2 PX4_TERMUX_FIRMWARE PX4_TERMUX_DEVICE \
-        PX4_TERMUX_RUNTIME_DIR PX4_TERMUX_GROUP PX4_TERMUX_ALLOW_LNB_POWER PX4_TERMUX_FD1
-    exec "$@"
+    exec_px4d "$fd1" "$fd2"
     ;;
 *) fail 'invalid internal launcher stage' ;;
 esac

@@ -63,6 +63,10 @@ int main(int argc, char** argv)
     if (!runtime) {
         return print_failure("discovery/open", runtime.error(), kDiscoveryOpenFailure);
     }
+    // Developer probe for the two-bridge PX-Q3U4 only.
+    if (runtime.value()->model() != DeviceModel::px_q3u4) {
+        return print_failure("discovery/open", Error::UNSUPPORTED, kDiscoveryOpenFailure);
+    }
     Transport& transport = arguments.device == 1U ? runtime.value()->dev1()
                                                   : runtime.value()->dev2();
     const CommandPacingOptions pacing{arguments.pacing_mode};

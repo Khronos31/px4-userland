@@ -63,9 +63,10 @@ bool parse_system(std::string_view value, System& system) noexcept
     return false;
 }
 
+// A 14-digit PX-Q3U4 base serial or a 15-digit PX-MLT5PE/DTV02A-5TS-P serial.
 bool valid_serial(std::string_view value) noexcept
 {
-    if (value.size() != 14U) return false;
+    if (value.size() != 14U && value.size() != 15U) return false;
     for (const char character : value) {
         if (character < '0' || character > '9') return false;
     }

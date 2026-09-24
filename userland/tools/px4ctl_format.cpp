@@ -14,7 +14,15 @@ const char* yes_no(std::uint8_t value) noexcept
 
 const char* system_name(ipc::System system) noexcept
 {
-    return system == ipc::System::ISDB_T ? "ISDB-T" : "ISDB-S";
+    switch (system) {
+    case ipc::System::ISDB_T:
+        return "ISDB-T";
+    case ipc::System::ISDB_S:
+        return "ISDB-S";
+    case ipc::System::ISDB_T_OR_S:
+        return "ISDB-T/S";
+    }
+    return "";
 }
 
 const char* receiver_state_name(ipc::ReceiverState state) noexcept
@@ -32,6 +40,8 @@ const char* receiver_state_name(ipc::ReceiverState state) noexcept
         return "streaming";
     case ipc::ReceiverState::error:
         return "error";
+    case ipc::ReceiverState::absent:
+        return "absent";
     }
     return "";
 }
@@ -53,7 +63,8 @@ std::string format_list(const ipc::ListResponsePayload& payload)
                                static_cast<unsigned int>(payload.usb_present_mask));
     if (length > 0) output.append(line, static_cast<std::size_t>(length));
 
-    for (const ipc::ReceiverRecord& receiver : payload.receivers) {
+    for (std::size_t index = 0U; index < payload.receiver_count; ++index) {
+        const ipc::ReceiverRecord& receiver = payload.receivers[index];
         length = std::snprintf(line, sizeof(line),
                                "receiver=%u device=%u local=%u system=%s\n",
                                static_cast<unsigned int>(receiver.global_id),
@@ -81,6 +92,8 @@ std::string format_status(const ipc::StatusResponsePayload& payload)
     std::string output;
     if (length > 0) output.append(line, static_cast<std::size_t>(length));
     for (std::size_t receiver = 0U; receiver < payload.receiver_states.size(); ++receiver) {
+        // Slots beyond a smaller enclosure are not receivers.
+        if (payload.receiver_states[receiver] == ipc::ReceiverState::absent) continue;
         length = std::snprintf(line, sizeof(line), "receiver=%u state=%s\n",
                                static_cast<unsigned int>(receiver),
                                receiver_state_name(payload.receiver_states[receiver]));

@@ -1,13 +1,15 @@
 # px4-userland
 
-`px4-userland` は、PLEX PX-Q3U4 向けのユーザー空間ドライバおよびツール群です。カーネルモジュールを使用せず、ユーザー空間からチューナーおよび内蔵 IC カードリーダーを制御し、MPEG-TS ストリームを出力します。
+`px4-userland` は、PLEX PX-Q3U4、PLEX PX-MLT5PE、e-Better DTV02A-5TS-P 向けのユーザー空間ドライバおよびツール群です。カーネルモジュールを使用せず、ユーザー空間からチューナーおよび内蔵 IC カードリーダーを制御し、MPEG-TS ストリームを出力します。
 
 ## 対応機種・動作環境
 
 ### 対応機種
 
-- **PLEX PX-Q3U4**（USB ID `0511:084a`）のみ対応
-  - 他の PX4 / PX5 シリーズなど関連機種での動作は未確認です。
+- **PLEX PX-Q3U4**（USB ID `0511:084a`）
+- **PLEX PX-MLT5PE**（USB ID `0511:024e`）
+- **e-Better DTV02A-5TS-P**（USB ID `0511:924e`）
+  - 上記以外の PX4 / PX5 / PX-MLT シリーズなど関連機種での動作は未確認です。
 
 ### 動作環境
 
@@ -43,14 +45,20 @@ IT930x ファームウェアは本ソフトウェアに同梱されていませ�
 
 Linux ディストリビューション別の実機検証済み構成例は [Linux環境別の検証済み構成例](docs/platforms/README.md) を参照してください。
 
-Linux では `px4d` の実行ユーザーが PX-Q3U4（USB ID `0511:084a`）の USB デバイスノードを読み書きできる必要があります。権限がない場合、低層原因は libusb の access denied ですが、CLI 表示は `device open: USB_IO`（終了コード 7）になります。通常の `px4d` 実行に毎回 `sudo` を使う必要はありません。
+Linux では `px4d` の実行ユーザーが対象機種（USB ID `0511:084a`、`0511:024e`、`0511:924e`）の USB デバイスノードを読み書きできる必要があります。権限がない場合、低層原因は libusb の access denied ですが、CLI 表示は `device open: USB_IO`（終了コード 7）になります。通常の `px4d` 実行に毎回 `sudo` を使う必要はありません。
 
-udev 環境では、対象を PX-Q3U4 だけに限定したルールを root で配置します。
+udev 環境では、対象を利用する機種だけに限定したルールを root で配置します。
 
 ```udev
 # /etc/udev/rules.d/70-px4-q3u4.rules
+# PX-Q3U4 を利用する場合
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="0511", ATTR{idProduct}=="084a", MODE="0660", GROUP="video"
+# PX-MLT5PE / DTV02A-5TS-P を利用する場合
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="0511", ATTR{idProduct}=="024e", MODE="0660", GROUP="video"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="0511", ATTR{idProduct}=="924e", MODE="0660", GROUP="video"
 ```
+
+カーネルに `px4_drv` が導入されている環境では、DTV02A-5TS-P / PX-MLT5PE のインターフェースがカーネルドライバへバインドされるため、`px4d` は `BUSY` で失敗します（暗黙に奪いません）。`px4d` を使う間は `px4_drv` を無効化するか、該当インターフェースを unbind してください。
 
 `px4d` を実行するユーザー（systemd などのサービスアカウントを含む）を `video` group に追加し、ルールを再読込した後、デバイスを物理的に挿し直します。
 
@@ -91,7 +99,7 @@ sudo tar -xzf px4-userland-<version>-linux-glibc-x86_64.tar.gz -C /opt/px4-userl
 内蔵 IC カードリーダーを PC/SC リーダーとして認識させる場合、アーカイブ内の `reader.conf.d/px4-userland.conf` のプレースホルダーを実際のパスに置き換えて PC/SC の設定ディレクトリに配置します。
 
 - `@PX4_RUNTIME_DIR@`: `px4d` とクライアントが共有するランタイムディレクトリ（例: `/run/px4-userland`）
-- `@PX4_BASE_SERIAL@`: 対象 PX-Q3U4 の 14 桁 base serial（2 つの USB シリアルに共通する 14 桁部分）
+- `@PX4_BASE_SERIAL@`: 対象 PX-Q3U4 の 14 桁 base serial（2 つの USB シリアルに共通する 14 桁部分）、または DTV02A-5TS-P / PX-MLT5PE の 15 桁 USB シリアル（`FRIENDLYNAME` も機種に合わせて変更してください）
 - `@PX4_IFD_LIBRARY@`: Linux では `ifd/px4-userland-ifd.so`、macOS では `ifd/px4-userland-ifd.bundle` の絶対パス
 - `@PX4_ACCESS@`: `user`（px4d と pcscd を同じユーザーで動かす private mode）または `group`（pcscd のサービスユーザーと px4d が共有する group mode）
 
@@ -163,7 +171,7 @@ test "$ready" = 1 || { echo 'px4d did not become ready' >&2; exit 1; }
 
 ## CLI 仕様
 
-`px4d`、`px4-ts`、`px4ctl` は、同一ホスト内で同じランタイムルートディレクトリ（`--runtime-dir`、省略時の既定値は `$XDG_RUNTIME_DIR`）と 14 桁の base serial（`--device`）を用いてプロセス間通信（IPC）を行います。実際のエンドポイントは、ランタイムルート下の `px4-userland/<BASE_SERIAL>/` に作成されます。group mode endpointへ接続する場合は、3つすべてに `--group` を指定し、共有groupを実効primary groupまたは補助グループ（supplementary group）に含めます。
+`px4d`、`px4-ts`、`px4ctl` は、同一ホスト内で同じランタイムルートディレクトリ（`--runtime-dir`、省略時の既定値は `$XDG_RUNTIME_DIR`）と筐体識別子（`--device`。PX-Q3U4 は 14 桁の base serial、DTV02A-5TS-P / PX-MLT5PE は 15 桁の USB シリアル）を用いてプロセス間通信（IPC）を行います。実際のエンドポイントは、ランタイムルート下の `px4-userland/<BASE_SERIAL>/` に作成されます。group mode endpointへ接続する場合は、3つすべてに `--group` を指定し、共有groupを実効primary groupまたは補助グループ（supplementary group）に含めます。
 
 ### 受信機（Receiver）番号の割り当て
 
@@ -176,11 +184,17 @@ PX-Q3U4 に搭載されている 8 つの受信機は以下の番号に割り当
 | 4, 5 | ISDB-S | デバイス 2（衛星放送） |
 | 6, 7 | ISDB-T | デバイス 2（地上波） |
 
+DTV02A-5TS-P / PX-MLT5PE の 5 つの受信機は 0〜4 番で、いずれも選局ごとに ISDB-T と ISDB-S を選択できます（同じ lease のまま切り替え可能）。`px4ctl list` では `system=ISDB-T/S` と表示され、存在しない 5〜7 番は `status` に表示されません。
+
+| 受信機番号 | 放送方式 | 備考 |
+|:---:|:---:|---|
+| 0〜4 | ISDB-T / ISDB-S | 単一デバイス（`usb-present-mask=0x01`） |
+
 1 つの受信機を同時に占有できるクライアントは 1 つです。異なる受信機同士および内蔵カードリーダーは並行して利用できます。
 
 ### Android / Termux
 
-Termux 環境では、配布アーカイブに含まれるシェルランチャー `px4-termux` を使用して `px4d` を起動します。PX-Q3U4 が公開する 2 つの USB デバイスに対するアクセス権限を Termux:API 経由で取得し、`px4d` に引き渡して動作させます。Python や補助デーモンは不要です。
+Termux 環境では、配布アーカイブに含まれるシェルランチャー `px4-termux` を使用して `px4d` を起動します。PX-Q3U4 が公開する 2 つの USB デバイス（DTV02A-5TS-P / PX-MLT5PE では 1 つ）に対するアクセス権限を Termux:API 経由で取得し、`px4d` に引き渡して動作させます。Python や補助デーモンは不要です。
 
 #### 必要環境の導入
 
@@ -228,6 +242,8 @@ chmod 700 "$runtime_dir"
   --runtime-dir "$runtime_dir"
 ```
 
+DTV02A-5TS-P / PX-MLT5PE では `--usb-device` を 1 回だけ指定し、`--device` には 15 桁の USB シリアルを指定します（Android 実機では未検証です）。
+
 - `px4-termux` はフォアグラウンドで動作します。
 - 停止する場合は `Ctrl+C` を入力するか、親プロセスへ `SIGINT`、`SIGTERM`、または `SIGHUP` を送信してください。通常の正常終了（graceful cleanup）では、シグナルが子プロセスグループへ伝達され、子プロセスの終了とソケットの削除が行われます。
 - `px4-termux` は子プロセスグループの終了を固定40秒間待ちます。猶予時間を超過して `SIGKILL` による強制終了へ移行した場合は標準エラー出力へ警告を出力し、graceful cleanup、LNB 0V、およびランタイムエンドポイントの削除を保証できません。
@@ -251,17 +267,17 @@ runtime_dir="$PREFIX/tmp/p4"
 
 ### `px4d`（デバイス所有デーモン）
 
-PX-Q3U4 の USB デバイス（2 系統）、8 つの受信機、内蔵 IC カードリーダーを一括して所有・管理します。フォアグラウンドで動作します。
+対象筐体の USB デバイス（PX-Q3U4 は 2 系統、DTV02A-5TS-P / PX-MLT5PE は 1 系統）、全受信機、内蔵 IC カードリーダーを一括して所有・管理します。フォアグラウンドで動作します。
 
 ```sh
 px4d --device BASE_SERIAL --firmware PATH [--runtime-dir PATH] [--group] [--allow-lnb-power]
 ```
 
-- `--device BASE_SERIAL`: 対象 PX-Q3U4 の 14 桁 base serial を指定します。
+- `--device BASE_SERIAL`: 対象 PX-Q3U4 の 14 桁 base serial、または DTV02A-5TS-P / PX-MLT5PE の 15 桁 USB シリアルを指定します。
 - `--firmware PATH`: IT930x ファームウェアバイナリのパスを指定します（必須）。
 - `--runtime-dir PATH`: ランタイムルートディレクトリを指定します（省略時は `$XDG_RUNTIME_DIR`）。
 - `--allow-lnb-power`: 衛星放送受信時の LNB 15V 給電を許可します（安全のための明示的 opt-in）。
-- `--fd FD --fd FD`: Android 環境などで、ホスト側が開いた 2 つの USB ファイルディスクリプタを直接渡して起動します（この場合 `--device` は任意）。
+- `--fd FD [--fd FD]`: Android 環境などで、ホスト側が開いた USB ファイルディスクリプタを直接渡して起動します。PX-Q3U4 は 2 つ、DTV02A-5TS-P / PX-MLT5PE は 1 つ指定します（この場合 `--device` は任意）。
 
 同一Linuxホスト内のlocalhost usbipを利用する場合は、VHCI側の2ノードを事前にopenし、`--fd FD --fd FD`で指定する。同一libusbコンテキスト内にexport元の物理機能とimport先のVHCI機能が同一シリアルで現れ、通常列挙では重複スロット（`INVALID_ARGUMENT`）となるためである。なお、LAN経由のusbip構成は未検証である。
 
@@ -274,7 +290,7 @@ px4-ts --device BASE_SERIAL --receiver 0..7 --system isdb-t|isdb-s --frequency-k
 ```
 
 - `--device BASE_SERIAL`: 対象デバイスの base serial（必須）。
-- `--receiver 0..7`: 利用する受信機番号（必須）。
+- `--receiver 0..7`: 利用する受信機番号（必須）。DTV02A-5TS-P / PX-MLT5PE は 0..4 です。
 - `--system isdb-t|isdb-s`: 放送方式（必須）。
 - `--frequency-khz N`: 受信周波数（kHz 単位、必須）。
 - ISDB-T 固有設定:

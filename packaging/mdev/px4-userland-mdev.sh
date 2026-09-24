@@ -62,7 +62,10 @@ for usb_device in "$sysfs_root"/bus/usb/devices/*; do
 
     vendor=$(cat "$usb_device/idVendor" 2>/dev/null) || continue
     product=$(cat "$usb_device/idProduct" 2>/dev/null) || continue
-    [ "$vendor:$product" = 0511:084a ] || continue
+    case "$vendor:$product" in
+        0511:084a|0511:024e|0511:924e) ;;
+        *) continue ;;
+    esac
 
     bus=$(cat "$usb_device/busnum" 2>/dev/null) || continue
     device=$(cat "$usb_device/devnum" 2>/dev/null) || continue

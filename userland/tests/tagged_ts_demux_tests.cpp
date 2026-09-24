@@ -1,8 +1,8 @@
-// Modified/ported for px4-userland on 2026-09-03.
+// Modified/ported for px4-userland on 2026-09-03; MLT5 support added on 2026-09-24.
 //
 // Copyright (c) 2018-2021 nns779
-// Derived from tsukumijima/px4_drv commit 9eedea8c502875a788697984b93b50032339b9aa.
-// Origin paths: driver/px4_device.c, driver/ts_sync.h,
+// Derived from tsukumijima/px4_drv commit d748866f0da1cb3656106a520de4e9d7f073aacd (v0.6.1).
+// Origin paths: driver/px4_device.c, driver/pxmlt_device.c, driver/ts_sync.h,
 // winusb/src/DriverHost_PX4/px4_device.cpp,
 // winusb/tests/ts_sync_condition_test.cpp.
 // Source snapshot maintained by tsukumijima.
@@ -195,6 +195,29 @@ bool test_invalid_tags_are_consumed()
     DEMUX_CHECK(sink.packets[0U][0U] == 0x47U);
     DEMUX_CHECK(demux.counters().invalid_tag_packets == 4U);
     DEMUX_CHECK(demux.counters().buffered_bytes == 0U);
+    return true;
+}
+
+// v0.16: the PX-MLT5PE/DTV02A-5TS-P bridge tags five inputs (0x17..0x57);
+// tags beyond max_tag remain consumed.
+bool test_mlt5pe_five_tags()
+{
+    std::vector<std::uint8_t> stream;
+    std::vector<Packet> expected;
+    for (std::uint8_t tag = 1U; tag <= 5U; ++tag) {
+        expected.push_back(make_packet(tag, static_cast<std::uint8_t>(0xc0U + tag)));
+        append_packet(stream, expected.back());
+    }
+    append_packet(stream, make_packet(6U, 0xceU));
+    append_packet(stream, make_packet(1U, 0xcfU));
+    expected.push_back(make_packet(1U, 0xcfU));
+    SinkState sink;
+    TaggedTsDemux demux(TaggedTsDemux::kMlt5PeMaxTag);
+    DEMUX_CHECK(demux.push(ByteView{stream.data(), stream.size()}, record_packet, &sink));
+    DEMUX_CHECK(check_output(sink, expected));
+    DEMUX_CHECK((sink.receiver_indices == std::vector<std::size_t>{0U, 1U, 2U, 3U, 4U, 0U}));
+    DEMUX_CHECK(demux.counters().invalid_tag_packets == 1U);
+    DEMUX_CHECK(demux.counters().sync_loss_events == 0U);
     return true;
 }
 
@@ -406,7 +429,8 @@ bool run_tagged_ts_demux_tests()
 {
     return test_aligned_tags_and_copy() && test_every_split_position() &&
            test_one_byte_feed() && test_garbage_false_sync_and_remainder() &&
-           test_invalid_tags_are_consumed() && test_aligned_tei_observer_preserves_boundary() &&
+           test_invalid_tags_are_consumed() && test_mlt5pe_five_tags() &&
+           test_aligned_tei_observer_preserves_boundary() &&
            test_reset() && test_sink_failure_retry() &&
            test_full_transfer_stress() && test_sink_failure_after_many_successes() &&
            test_input_limits_and_bounded_garbage();

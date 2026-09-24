@@ -181,6 +181,11 @@ int main(int argc, char** argv)
         report_failure("runtime open", opened.error());
         return kOpenFailure;
     }
+    // Developer probe for the two-bridge PX-Q3U4 only.
+    if (opened.value()->model() != DeviceModel::px_q3u4) {
+        report_failure("runtime open", Error::UNSUPPORTED);
+        return kOpenFailure;
+    }
     std::printf("runtime opened\n");
     if (stop_requested()) return kStopRequested;
 

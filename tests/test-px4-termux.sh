@@ -417,7 +417,24 @@ assert_file_absent "$pid_file" 'second-open failure px4d residue'
 assert_file_absent "$endpoint" 'second-open failure endpoint residue'
 
 PATH="$fake_bin:$PATH" sh "$launcher" --help >/dev/null
-if PATH="$fake_bin:$PATH" sh "$launcher" --usb-device "$usb_one" --firmware "$firmware"; then
+# v0.16: one --usb-device is the PX-MLT5PE/DTV02A-5TS-P path.  It opens only
+# that device and passes exactly one --fd.
+: > "$log"
+PATH="$fake_bin:$PATH" FAKE_PX4D_LOG="$log" FAKE_PX4D_PID="$pid_file" \
+    FAKE_TERMUX_PID_DIR="$termux_pid_dir" \
+    sh "$launcher" --usb-device "$usb_one" --firmware "$firmware" --device 000020263901491
+assert_equal 6 "$(head -n 1 "$log")" 'single-device argument count'
+assert_log_line '[--fd]' 'single-device fd option'
+assert_log_line '[7]' 'single-device fd forwarding'
+assert_log_line '[000020263901491]' 'single-device serial forwarding'
+if grep -Fx '[8]' "$log" >/dev/null; then
+    fail_test 'single-device path opened a second device'
+fi
+if PATH="$fake_bin:$PATH" sh "$launcher" --usb-device "$usb_one" --usb-device "$usb_two" \
+    --usb-device "$usb_one" --firmware "$firmware"; then
+    exit 1
+fi
+if PATH="$fake_bin:$PATH" sh "$launcher" --firmware "$firmware"; then
     exit 1
 fi
 if PATH="$fake_bin:$PATH" sh "$launcher" --usb-device "$usb_one" --usb-device "$usb_one" \

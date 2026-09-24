@@ -8,6 +8,8 @@ rules=$root/packaging/mdev/px4-userland-mdev.conf
 start=$root/packaging/mdev/px4-userland-mdev.start
 test -x "$helper" && test -x "$start" && test -f "$rules"
 grep -F 'DEVTYPE=usb_device;PRODUCT=511/84a/.*;bus/usb/[0-9]+/[0-9]+ root:video 0660' "$rules" >/dev/null
+grep -F 'DEVTYPE=usb_device;PRODUCT=511/24e/.*;bus/usb/[0-9]+/[0-9]+ root:video 0660' "$rules" >/dev/null
+grep -F 'DEVTYPE=usb_device;PRODUCT=511/924e/.*;bus/usb/[0-9]+/[0-9]+ root:video 0660' "$rules" >/dev/null
 if grep -E '(^|[[:space:]])SUBSYSTEM=usb;|root:root|0600|@[[:space:]]' "$rules" >/dev/null; then
     printf '%s\n' 'px4 mdev rules contain a broad or command rule' >&2
     exit 1
@@ -117,5 +119,26 @@ if MDEV_TEST_MODE=chmod-error MDEV_RACE_NODE=$race_node MDEV_SYSFS_ROOT=$sysfs M
     exit 1
 fi
 grep -F "mdev: chmod failed for $race_node" "$error_log" >/dev/null
+
+# v0.16: PX-MLT5PE and DTV02A-5TS-P are single USB devices; other PX-MLT
+# product IDs remain untouched.
+rm -rf "$sysfs/bus/usb/devices" "$dev/bus/usb"
+mkdir -p "$sysfs/bus/usb/devices" "$dev/bus/usb"
+: >"$log"
+make_usb mlt5pe 7 14 0511 024e
+make_node 007 014
+make_usb dtv02a 8 15 0511 924e
+make_node 008 015
+make_usb mlt5u 9 16 0511 084e
+make_node 009 016
+MDEV_SYSFS_ROOT=$sysfs MDEV_DEV_ROOT=$dev MDEV_TEST_LOG=$log \
+    PATH=$fake_bin:$PATH "$helper" --scan
+test "$(grep -c '^chown ' "$log")" -eq 2
+grep -F "chown root:video $dev/bus/usb/007/014" "$log" >/dev/null
+grep -F "chown root:video $dev/bus/usb/008/015" "$log" >/dev/null
+if grep -F '009/016' "$log" >/dev/null; then
+    printf '%s\n' 'px4 helper changed an unsupported PX-MLT node' >&2
+    exit 1
+fi
 
 printf '%s\n' 'px4 mdev scan tests: PASS'

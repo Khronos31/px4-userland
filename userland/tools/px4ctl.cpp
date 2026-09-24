@@ -47,9 +47,10 @@ Arguments invalid(std::string_view error) noexcept
     return result;
 }
 
+// A 14-digit PX-Q3U4 base serial or a 15-digit PX-MLT5PE/DTV02A-5TS-P serial.
 bool valid_serial(std::string_view value) noexcept
 {
-    if (value.size() != 14U) return false;
+    if (value.size() != 14U && value.size() != 15U) return false;
     for (const char character : value) {
         if (character < '0' || character > '9') return false;
     }
@@ -174,7 +175,7 @@ Arguments parse_arguments(int argc, const char* const* argv) noexcept
         return invalid("unexpected argument");
     }
     if (!have_device || !valid_serial(result.device)) {
-        return invalid("--device requires a 14-digit base serial");
+        return invalid("--device requires a 14-digit base serial or 15-digit serial");
     }
     if (have_runtime && result.runtime_directory.empty()) {
         return invalid("--runtime-dir must not be empty");

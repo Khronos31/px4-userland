@@ -9,6 +9,9 @@
 #include "px4/q3u4_stream.h"
 #include "px4/tuner_service.h"
 
+#include "mlt5pe_backend.h"
+#include "mlt5pe_frontend.h"
+#include "mlt5pe_power.h"
 #include "q3u4_frontend.h"
 #include "q3u4_lnb_power.h"
 #include "q3u4_card_backend.h"
@@ -36,8 +39,12 @@ void usage() noexcept
         "usage:\n"
         "  px4d --device BASE_SERIAL --firmware PATH "
         "[--runtime-dir PATH] [--group] [--allow-lnb-power]\n"
-        "  px4d --fd FD --fd FD [--device BASE_SERIAL] --firmware PATH "
+        "  px4d --fd FD [--fd FD] [--device BASE_SERIAL] --firmware PATH "
         "[--runtime-dir PATH] [--group] [--allow-lnb-power]\n"
+        "\n"
+        "  BASE_SERIAL is the 14-digit PX-Q3U4 base serial or the 15-digit\n"
+        "  PX-MLT5PE/DTV02A-5TS-P serial.  Pass one --fd per USB device: two\n"
+        "  for PX-Q3U4, one for PX-MLT5PE/DTV02A-5TS-P.\n"
         "\n"
         "  --allow-lnb-power  permit explicit ISDB-S 15 V requests; default off\n");
 }
@@ -68,6 +75,7 @@ int exit_status(Error error) noexcept
 
 class DaemonTime final : public CardTime,
                          public Q3U4FrontendDelay,
+                         public Mlt5PeDelay,
                          public TunerServiceTime {
 public:
     std::uint64_t monotonic_ms() noexcept override
@@ -83,103 +91,21 @@ public:
     }
 };
 
-}  // namespace
-
-int main(int argc, char** argv)
+// Publishes the control/data endpoints and runs the foreground loop until a
+// stop signal or loop failure.  Returns the process exit status.
+int serve(const Px4dArguments& arguments, const std::string& base_serial,
+          CardService& card_service, TunerService& tuner_service,
+          Q3U4StreamDataPlane& stream, std::uint8_t usb_present_mask,
+          std::uint8_t receiver_count) noexcept
 {
-    const Px4dArguments arguments =
-        parse_px4d_arguments(argc, const_cast<const char* const*>(argv));
-    if (!arguments.valid) {
-        std::fprintf(stderr, "argument error: %.*s\n",
-                     static_cast<int>(arguments.error.size()), arguments.error.data());
-        usage();
-        return 2;
-    }
-    if (arguments.help) {
-        usage();
-        return 0;
-    }
-
-    FirmwareProvider firmware_provider(arguments.firmware);
-    const auto firmware = firmware_provider.load();
-    if (!firmware) {
-        std::fprintf(stderr, "firmware: %s\n", error_string(firmware.error()));
-        return exit_status(firmware.error());
-    }
-    Result<std::unique_ptr<Q3U4Runtime>> runtime =
-        Result<std::unique_ptr<Q3U4Runtime>>::failure(Error::INTERNAL);
-    if (px4d_open_mode(arguments) == Px4dOpenMode::file_descriptors) {
-        const std::vector<int> file_descriptors(
-            arguments.file_descriptors.begin(), arguments.file_descriptors.end());
-        // open_fds duplicates these caller-owned descriptors.  The runtime
-        // owns and closes only its duplicates; termux-usb/UsbManager owners
-        // remain responsible for the originals.
-        runtime = Q3U4Runtime::open_fds(file_descriptors, arguments.device);
-    } else {
-        runtime = Q3U4Runtime::open_native(arguments.device);
-    }
-    if (!runtime) {
-        std::fprintf(stderr, "device open: %s\n", error_string(runtime.error()));
-        return exit_status(runtime.error());
-    }
-    const std::string base_serial(runtime.value()->base_serial());
-    if (!valid_px4d_base_serial(base_serial)) {
-        std::fprintf(stderr, "device open: invalid observed base serial\n");
-        return exit_status(Error::INVALID_ARGUMENT);
-    }
-
-    It930xController dev1(runtime.value()->dev1());
-    It930xController dev2(runtime.value()->dev2());
-    const auto initialized1 = dev1.initialize_q3u4(firmware.value());
-    if (!initialized1) {
-        std::fprintf(stderr, "device 1 initialize: %s\n",
-                     error_string(initialized1.error()));
-        return exit_status(initialized1.error());
-    }
-    const auto initialized2 = dev2.initialize_q3u4(firmware.value());
-    if (!initialized2) {
-        std::fprintf(stderr, "device 2 initialize: %s\n",
-                     error_string(initialized2.error()));
-        return exit_status(initialized2.error());
-    }
-
-    DaemonTime time;
-    It930xBridgeI2cMaster dev1_i2c(dev1);
-    It930xBridgeI2cMaster dev2_i2c(dev2);
-    It930xBackendPower dev1_power(dev1);
-    It930xBackendPower dev2_power(dev2);
-    It930xPsbPurger dev1_purger(dev1);
-    It930xPsbPurger dev2_purger(dev2);
-    Q3U4FrontendEnclosure enclosure(dev1_i2c, dev2_i2c, dev1_power,
-                                    dev2_power, time, &dev1_purger, &dev2_purger);
-    Q3U4CardBackend backend(dev1, enclosure);
-    It930xCardHardware card_hardware(dev1);
-    CardSession card_session(card_hardware, time);
-    NativeCardProtocolSession protocol(card_session);
-    CardService card_service(backend, protocol);
-    It930xLnbPower dev1_lnb(dev1);
-    It930xLnbPower dev2_lnb(dev2);
-    Q3U4LnbPowerCoordinator lnb_power(
-        dev1_lnb, dev2_lnb, arguments.allow_lnb_power);
-    Q3U4FrontendTunerBackend tuner_backend(enclosure, lnb_power);
-    PosixTunerNonceSource nonce_source;
-    const auto stream = Q3U4StreamDataPlane::create(runtime.value()->dev1(),
-                                                    runtime.value()->dev2());
-    if (!stream) {
-        std::fprintf(stderr, "stream data plane: %s\n", error_string(stream.error()));
-        return exit_status(stream.error());
-    }
-    TunerService tuner_service(tuner_backend, nonce_source, time, nullptr, nullptr,
-                               stream.value().get());
-
     const char* runtime_directory = arguments.runtime_directory.empty() ?
                                         nullptr : arguments.runtime_directory.c_str();
     const EndpointConfig endpoint{
         runtime_directory, base_serial.c_str(), kControlEndpointName,
         arguments.group ? EndpointAccess::shared_group : EndpointAccess::private_user};
     auto server = PosixControlServer::create(
-        endpoint, card_service, tuner_service, base_serial, true, 0x03U,
-        stream.value().get());
+        endpoint, card_service, tuner_service, base_serial, true, usb_present_mask,
+        &stream, receiver_count);
     if (!server) {
         std::fprintf(stderr, "control endpoint: %s\n", error_string(server.error()));
         return exit_status(server.error());
@@ -208,4 +134,151 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "px4d stopped: %s\n", error_string(loop_error));
     }
     return exit_status(loop_error);
+}
+
+int run_q3u4(const Px4dArguments& arguments, Q3U4Runtime& runtime,
+             const FirmwareImage& firmware, const std::string& base_serial) noexcept
+{
+    It930xController dev1(runtime.dev1());
+    It930xController dev2(runtime.dev2());
+    const auto initialized1 = dev1.initialize_q3u4(firmware);
+    if (!initialized1) {
+        std::fprintf(stderr, "device 1 initialize: %s\n",
+                     error_string(initialized1.error()));
+        return exit_status(initialized1.error());
+    }
+    const auto initialized2 = dev2.initialize_q3u4(firmware);
+    if (!initialized2) {
+        std::fprintf(stderr, "device 2 initialize: %s\n",
+                     error_string(initialized2.error()));
+        return exit_status(initialized2.error());
+    }
+
+    DaemonTime time;
+    It930xBridgeI2cMaster dev1_i2c(dev1);
+    It930xBridgeI2cMaster dev2_i2c(dev2);
+    It930xBackendPower dev1_power(dev1);
+    It930xBackendPower dev2_power(dev2);
+    It930xPsbPurger dev1_purger(dev1);
+    It930xPsbPurger dev2_purger(dev2);
+    Q3U4FrontendEnclosure enclosure(dev1_i2c, dev2_i2c, dev1_power,
+                                    dev2_power, time, &dev1_purger, &dev2_purger);
+    Q3U4CardBackend backend(dev1, enclosure);
+    It930xCardHardware card_hardware(dev1);
+    CardSession card_session(card_hardware, time);
+    NativeCardProtocolSession protocol(card_session);
+    CardService card_service(backend, protocol);
+    It930xLnbPower dev1_lnb(dev1);
+    It930xLnbPower dev2_lnb(dev2);
+    Q3U4LnbPowerCoordinator lnb_power(
+        dev1_lnb, dev2_lnb, arguments.allow_lnb_power);
+    Q3U4FrontendTunerBackend tuner_backend(enclosure, lnb_power);
+    PosixTunerNonceSource nonce_source;
+    const auto stream = Q3U4StreamDataPlane::create(runtime.dev1(), runtime.dev2());
+    if (!stream) {
+        std::fprintf(stderr, "stream data plane: %s\n", error_string(stream.error()));
+        return exit_status(stream.error());
+    }
+    TunerService tuner_service(tuner_backend, nonce_source, time, nullptr, nullptr,
+                               stream.value().get());
+    return serve(arguments, base_serial, card_service, tuner_service, *stream.value(),
+                 0x03U, ipc::kQ3U4ReceiverCount);
+}
+
+int run_mlt5pe(const Px4dArguments& arguments, Q3U4Runtime& runtime,
+               const FirmwareImage& firmware, const std::string& base_serial) noexcept
+{
+    It930xController device(runtime.dev1());
+    const auto initialized = device.initialize_mlt5pe(firmware);
+    if (!initialized) {
+        std::fprintf(stderr, "device initialize: %s\n", error_string(initialized.error()));
+        return exit_status(initialized.error());
+    }
+
+    DaemonTime time;
+    It930xBridgeI2cMaster bus1(device, 1U);
+    It930xBridgeI2cMaster bus3(device, 3U);
+    It930xBackendPower power(device);
+    It930xPsbPurger purger(device);
+    Mlt5PeFrontend frontend(bus1, bus3, power, time, &purger);
+    Mlt5PeCardBackend backend(device, frontend);
+    It930xCardHardware card_hardware(device);
+    CardSession card_session(card_hardware, time);
+    NativeCardProtocolSession protocol(card_session);
+    CardService card_service(backend, protocol);
+    It930xLnbPower lnb(device);
+    Mlt5PeLnbPowerCoordinator lnb_power(lnb, arguments.allow_lnb_power);
+    Mlt5PeTunerBackend tuner_backend(frontend, lnb_power);
+    PosixTunerNonceSource nonce_source;
+    const auto stream = Q3U4StreamDataPlane::create_mlt5pe(runtime.dev1());
+    if (!stream) {
+        std::fprintf(stderr, "stream data plane: %s\n", error_string(stream.error()));
+        return exit_status(stream.error());
+    }
+    TunerService tuner_service(tuner_backend, nonce_source, time, nullptr, nullptr,
+                               stream.value().get());
+    return serve(arguments, base_serial, card_service, tuner_service, *stream.value(),
+                 0x01U, ipc::kMlt5PeReceiverCount);
+}
+
+}  // namespace
+
+int main(int argc, char** argv)
+{
+    const Px4dArguments arguments =
+        parse_px4d_arguments(argc, const_cast<const char* const*>(argv));
+    if (!arguments.valid) {
+        std::fprintf(stderr, "argument error: %.*s\n",
+                     static_cast<int>(arguments.error.size()), arguments.error.data());
+        usage();
+        return 2;
+    }
+    if (arguments.help) {
+        usage();
+        return 0;
+    }
+
+    FirmwareProvider firmware_provider(arguments.firmware);
+    const auto firmware = firmware_provider.load();
+    if (!firmware) {
+        std::fprintf(stderr, "firmware: %s\n", error_string(firmware.error()));
+        return exit_status(firmware.error());
+    }
+    Result<std::unique_ptr<Q3U4Runtime>> runtime =
+        Result<std::unique_ptr<Q3U4Runtime>>::failure(Error::INTERNAL);
+    const Px4dOpenMode mode = px4d_open_mode(arguments);
+    if (mode == Px4dOpenMode::file_descriptors) {
+        const std::vector<int> file_descriptors(
+            arguments.file_descriptors.begin(),
+            arguments.file_descriptors.begin() +
+                static_cast<std::ptrdiff_t>(arguments.file_descriptor_count));
+        // open_fds duplicates these caller-owned descriptors.  The runtime
+        // owns and closes only its duplicates; termux-usb/UsbManager owners
+        // remain responsible for the originals.
+        runtime = Q3U4Runtime::open_fds(file_descriptors, arguments.device);
+    } else {
+        runtime = Q3U4Runtime::open_native(arguments.device);
+    }
+    if (!runtime) {
+        std::fprintf(stderr, "device open: %s\n", error_string(runtime.error()));
+        return exit_status(runtime.error());
+    }
+    const bool single_bridge = runtime.value()->bridge_count() == 1U;
+    // Every --fd must belong to the selected enclosure: an extra descriptor
+    // that selection ignored is an argument error, not a silent leftover.
+    if (mode == Px4dOpenMode::file_descriptors &&
+        arguments.file_descriptor_count != runtime.value()->bridge_count()) {
+        std::fprintf(stderr, "device open: descriptor count does not match %s\n",
+                     device_profile(runtime.value()->model()).name);
+        return exit_status(Error::INVALID_ARGUMENT);
+    }
+    const std::string base_serial(runtime.value()->base_serial());
+    if (!valid_px4d_base_serial(base_serial)) {
+        std::fprintf(stderr, "device open: invalid observed base serial\n");
+        return exit_status(Error::INVALID_ARGUMENT);
+    }
+    std::fprintf(stderr, "px4d device: %s\n", device_profile(runtime.value()->model()).name);
+    return single_bridge
+        ? run_mlt5pe(arguments, *runtime.value(), firmware.value(), base_serial)
+        : run_q3u4(arguments, *runtime.value(), firmware.value(), base_serial);
 }

@@ -89,8 +89,46 @@ bool test_status_prints_every_field_and_state_name()
 
 } // namespace
 
+// v0.16: a five-receiver MLT5 enclosure lists only its receivers as
+// dual-system and omits the absent STATUS slots.
+bool test_mlt5pe_list_and_status()
+{
+    static constexpr std::array<std::uint8_t, 15U> serial{
+        '0', '0', '0', '0', '2', '0', '2', '6', '3', '9', '0', '1', '4', '9', '1'};
+    const auto records = ipc::receiver_records(ipc::kMlt5PeReceiverCount);
+    if (!records) return false;
+    const ipc::ListResponsePayload list{
+        1U, ByteView{serial.data(), serial.size()}, 1U, 0x01U, records.value(),
+        ipc::kMlt5PeReceiverCount};
+    const std::string listed = tools::format_list(list);
+    if (listed != "serial=000020263901491 ready=yes usb-present-mask=0x01\n"
+                  "receiver=0 device=1 local=0 system=ISDB-T/S\n"
+                  "receiver=1 device=1 local=1 system=ISDB-T/S\n"
+                  "receiver=2 device=1 local=2 system=ISDB-T/S\n"
+                  "receiver=3 device=1 local=3 system=ISDB-T/S\n"
+                  "receiver=4 device=1 local=4 system=ISDB-T/S\n") {
+        std::fprintf(stderr, "px4ctl mlt5pe list mismatch:\n%s", listed.c_str());
+        return false;
+    }
+
+    ipc::StatusResponsePayload status{};
+    status.usb_present_mask = 0x01U;
+    status.receiver_states[4U] = ipc::ReceiverState::streaming;
+    for (std::size_t index = 5U; index < ipc::kReceiverCount; ++index)
+        status.receiver_states[index] = ipc::ReceiverState::absent;
+    const std::string printed = tools::format_status(status);
+    if (printed.find("receiver=4 state=streaming\n") == std::string::npos ||
+        printed.find("receiver=5") != std::string::npos ||
+        printed.find("absent") != std::string::npos) {
+        std::fprintf(stderr, "px4ctl mlt5pe status mismatch:\n%s", printed.c_str());
+        return false;
+    }
+    return true;
+}
+
 bool run_px4ctl_format_tests()
 {
     return test_list_does_not_invent_runtime_state() &&
-           test_status_prints_every_field_and_state_name();
+           test_status_prints_every_field_and_state_name() &&
+           test_mlt5pe_list_and_status();
 }

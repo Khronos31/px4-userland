@@ -95,6 +95,9 @@ int main(int argc, char** argv)
     if (!image) return failure("firmware", image.error(), kInit);
     const auto runtime = Q3U4Runtime::open_native(args.base_serial);
     if (!runtime) return failure("discovery/open", runtime.error(), kOpen);
+    // Developer probe for the two-bridge PX-Q3U4 only.
+    if (runtime.value()->model() != DeviceModel::px_q3u4)
+        return failure("discovery/open", Error::UNSUPPORTED, kOpen);
 
     RealDelay delay;
     It930xController dev1(runtime.value()->dev1());

@@ -1282,6 +1282,64 @@ bool test_lifecycle_barrier_races()
 
 }  // namespace
 
+// v0.16: the PX-MLT5PE/DTV02A-5TS-P plane has one bridge whose tags 1..5 map
+// to receivers 0..4, and every receiver attaches as ISDB-T or ISDB-S.
+bool test_mlt5pe_single_bridge_mapping()
+{
+    FakeTransport device;
+    const auto created = Q3U4StreamDataPlane::create_mlt5pe_for_test(
+        device, Q3U4StreamDataPlane::kMinQueuePackets,
+        Q3U4StreamDataPlane::StartupStabilizationTestConfig{0U, 0U, 0U});
+    STREAM_CHECK(created);
+    auto& plane = *created.value();
+
+    auto terrestrial = attachment(0U, 1U);
+    terrestrial.system = ipc::System::ISDB_T;
+    auto satellite = attachment(4U, 2U);
+    satellite.system = ipc::System::ISDB_S;
+    auto missing = attachment(5U, 3U);
+    STREAM_CHECK(plane.attach(missing).error() == Error::INVALID_ARGUMENT);
+    auto dual_only = terrestrial;
+    dual_only.system = ipc::System::ISDB_T_OR_S;
+    STREAM_CHECK(plane.attach(dual_only).error() == Error::INVALID_ARGUMENT);
+
+    STREAM_CHECK(plane.attach(terrestrial));
+    STREAM_CHECK(plane.attach(satellite));
+    STREAM_CHECK(device.starts == 1U);
+
+    // Tag 6 is outside the five-input board and is consumed, never routed.
+    std::vector<std::uint8_t> wire = stream(5U, 3U, 0x111U);
+    const auto first = stream(1U, 2U, 0x100U);
+    wire.insert(wire.end(), first.begin(), first.end());
+    const auto invalid = stream(6U, 2U, 0x122U);
+    wire.insert(wire.end(), invalid.begin(), invalid.end());
+    device.push(std::move(wire));
+
+    std::array<std::uint8_t, TaggedTsDemux::kPacketSize> output{};
+    for (std::size_t index = 0U; index < 3U; ++index) {
+        const auto read = plane.read(satellite, MutableByteView{output.data(), output.size()},
+                                     Timeout{1000U});
+        STREAM_CHECK(read && read.value().bytes == output.size());
+        STREAM_CHECK(output[0U] == 0x47U && output[2U] == 0x11U);
+    }
+    for (std::size_t index = 0U; index < 2U; ++index) {
+        const auto read = plane.read(terrestrial, MutableByteView{output.data(), output.size()},
+                                     Timeout{1000U});
+        STREAM_CHECK(read && read.value().bytes == output.size());
+        STREAM_CHECK(output[0U] == 0x47U && output[2U] == 0x00U);
+    }
+    const auto empty = plane.read(terrestrial, MutableByteView{output.data(), output.size()},
+                                  Timeout{50U});
+    STREAM_CHECK(empty && empty.value().bytes == 0U);
+    STREAM_CHECK(plane.bridge_sync_errors(1U).error() == Error::INVALID_ARGUMENT);
+
+    STREAM_CHECK(plane.detach(terrestrial));
+    STREAM_CHECK(device.stops == 0U);
+    STREAM_CHECK(plane.detach(satellite));
+    STREAM_CHECK(device.stops == 1U);
+    return true;
+}
+
 bool run_q3u4_stream_tests()
 {
     const bool mapping = test_mapping_and_bridge_lifecycle();
@@ -1318,5 +1376,7 @@ bool run_q3u4_stream_tests()
     if (fatal && !epoch) std::fprintf(stderr, "q3u4_stream: epoch failed\n");
     const bool races = epoch && test_lifecycle_barrier_races();
     if (epoch && !races) std::fprintf(stderr, "q3u4_stream: lifecycle races failed\n");
-    return races;
+    const bool mlt5pe = races && test_mlt5pe_single_bridge_mapping();
+    if (races && !mlt5pe) std::fprintf(stderr, "q3u4_stream: mlt5pe mapping failed\n");
+    return mlt5pe;
 }

@@ -84,9 +84,14 @@ bool test_valid_modes()
 
 bool test_fd_rejections()
 {
+    // v0.16: one --fd is the PX-MLT5PE/DTV02A-5TS-P form; zero --fd without
+    // --device is still rejected below.
     Arguments one_fd = fd_arguments();
     one_fd.erase(one_fd.begin() + 3, one_fd.begin() + 5);
-    PX4D_CHECK(!parse(one_fd).valid);
+    const Px4dArguments one_fd_result = parse(one_fd);
+    PX4D_CHECK(one_fd_result.valid && one_fd_result.file_descriptor_count == 1U &&
+               one_fd_result.file_descriptors[0U] == 10);
+    PX4D_CHECK(px4d_open_mode(one_fd_result) == Px4dOpenMode::file_descriptors);
 
     Arguments three_fds = fd_arguments();
     three_fds.insert(three_fds.end(), {"--fd", "12"});

@@ -324,6 +324,10 @@ int main(int argc, char** argv)
     if (!opened) {
         return failure("discovery/open", opened.error(), kOpenFailure);
     }
+    // Developer probe for the two-bridge PX-Q3U4 only.
+    if (opened.value()->model() != DeviceModel::px_q3u4) {
+        return failure("discovery/open", Error::UNSUPPORTED, kOpenFailure);
+    }
 
     It930xController dev1(opened.value()->dev1());
     It930xController dev2(opened.value()->dev2());

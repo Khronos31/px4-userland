@@ -133,6 +133,11 @@ add_library(px4_userland_core STATIC
     userland/src/it930x_protocol.cpp
     userland/src/logging.cpp
     userland/src/bridge_i2c.cpp
+    userland/src/cxd2856er.cpp
+    userland/src/cxd2858er.cpp
+    userland/src/mlt5pe_backend.cpp
+    userland/src/mlt5pe_frontend.cpp
+    userland/src/mlt5pe_power.cpp
     userland/src/r850.cpp
     userland/src/rt710.cpp
     userland/src/tc90522.cpp
@@ -372,6 +377,7 @@ if(PX4_BUILD_TESTS)
         userland/tests/it930x_card_tests.cpp
         userland/tests/ipc_tests.cpp
         userland/tests/ipc_state_tests.cpp
+        userland/tests/mlt5pe_tests.cpp
         userland/tests/px4d_args_tests.cpp
         userland/tests/px4d_signal_tests.cpp
         userland/tests/q3u4_frontend_tests.cpp
