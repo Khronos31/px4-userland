@@ -9,7 +9,9 @@ v0.17では、接続中の対象筐体を列挙する`px4d --list`を追加す�
 渡す筐体識別子を得るには、4.1節のUSB IDと識別子規則を自前で持ち、sysfs等から組み立てるしかなかった。
 対象機種が増えるたびに利用側の表も更新が要り、4.1節の規則とずれる余地がある。`--list`は`px4d`が
 既に持つ通常列挙とgroupingをそのまま使い、所有もfirmware loadも行わずに筐体、機種、状態、4.2節の
-receiver表を出力する。device contract、IPC、`px4ctl`/`px4-ts`の挙動は変更しない。
+receiver表を出力する。あわせて通常列挙を訂正し、openまたはdescriptor取得に失敗したデバイスを、読めていない
+serialから`invalid_serial`とせず`open_failed`として報告する（`px4-usb-probe`の出力も同様に変わる）。
+device contract、IPC、`px4ctl`/`px4-ts`の挙動は変更しない。
 v0.16では、対象機種にPLEX PX-MLT5PE（`0511:024e`）とe-Better DTV02A-5TS-P（`0511:924e`）を追加する。
 `tsukumijima/px4_drv`はDTV02A-5TS-PをPX-MLT5PEのリブランド品として扱い、両者の差分はUSB product IDだけで
 ある（driver commit `72a807de2009c2ce376953c75687b4d45708f00e`、winusb commit
@@ -274,13 +276,15 @@ slotとTSIDはIPC上で別fieldとし、値の大きさから暗黙判定しな�
     `receiver=<ID> device=<dev_id> local=<local_id> system=<ISDB-T|ISDB-S|ISDB-T/S>`で、4.2節の表をそのまま出す。
 - 対象機種のUSB IDを持ちながら筐体にまとめられなかったUSBデバイスは、筐体行の後に
   `rejected serial=<serial> model=<機種名> usb=<vid>:<pid> status=<理由>`として1台1行で出す。理由は
-  serialを読めない`invalid_serial`、またはopenできない`open_failed`（権限不足など。serialは空）とする。
-  openできなかったデバイスは、serialが空であることから`invalid_serial`と誤って報告しない。`serial`の
-  印字可能ASCII（空白を除く）以外の文字は`?`に置き換える。対象機種以外のUSBデバイスは出力しない。
+  serialを読めない、または4.1節の形式に合わない`invalid_serial`、もしくはopenまたはdescriptor取得に
+  失敗した`open_failed`（権限不足など。serialは空）とする。`open_failed`のデバイスを、serialが空であることから
+  `invalid_serial`と報告しない。`serial`の印字可能ASCII（空白を除く）以外の文字は`?`に置き換える。
+  rejected行どうしの順序は規定しない。対象機種以外のUSBデバイスは出力しない。
   速度やtopologyが条件を満たさないデバイスは筐体にまとめたうえで、その筐体を`invalid_observation`とする。
-- 対象筐体が1つもなければ何も出力せずexit 0とする。列挙自体の失敗はstderrへ理由を出し、6.5節の
-  exit codeで終了する。
-- native列挙のない経路（Android/Termuxのfd起動、FreeBSD base libusb）では`--list`の結果を保証しない。
+- 対象機種のUSBデバイスが1つもなければ何も出力せずexit 0とする。筐体がなくrejected行だけの場合も
+  exit 0とする。列挙自体の失敗やstdoutへの書き込み失敗はstderrへ理由を出し、6.5節のexit codeで終了する。
+- Android（Termux/APK）のように、USBデバイスを通常列挙・openできずfdを受け取って起動する環境では、
+  `--list`の結果を保証しない。
 
 ## 5. IC card reader contract
 

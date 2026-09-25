@@ -88,11 +88,13 @@ int list_devices() noexcept
         return exit_status(grouping.error());
     }
     const std::string output = tools::format_device_list(grouping.value());
-    if (!output.empty() &&
-        std::fwrite(output.data(), 1U, output.size(), stdout) != output.size()) {
+    if ((!output.empty() &&
+         std::fwrite(output.data(), 1U, output.size(), stdout) != output.size()) ||
+        std::fflush(stdout) != 0) {
+        std::fprintf(stderr, "list: write to stdout failed\n");
         return exit_status(Error::INTERNAL);
     }
-    return std::fflush(stdout) == 0 ? 0 : exit_status(Error::INTERNAL);
+    return 0;
 }
 
 class DaemonTime final : public CardTime,

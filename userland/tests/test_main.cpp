@@ -2668,6 +2668,9 @@ bool test_native_enumeration_reports_unopened_devices()
     auto api = std::unique_ptr<FakeApi>(new FakeApi);
     FakeDevice first = fake_device("00000000000074", 1U);
     FakeDevice second = fake_device("00000000000074", 2U);
+    // As with real libusb, the serial string is never read when open fails.
+    first.observation.serial.clear();
+    second.observation.serial.clear();
     api->devices = {&first, &second};
     api->open_result = LIBUSB_ERROR_ACCESS;
     const auto denied = RuntimeTestAccess::enumerate_native(std::move(api));
@@ -2676,6 +2679,7 @@ bool test_native_enumeration_reports_unopened_devices()
     CHECK(denied.value().rejected.size() == 2U);
     for (const RejectedObservation& rejected : denied.value().rejected) {
         CHECK(rejected.status == ObservationStatus::open_failed);
+        CHECK(rejected.observation.serial.empty());
     }
 
     auto readable_api = std::unique_ptr<FakeApi>(new FakeApi);

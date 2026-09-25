@@ -30,7 +30,7 @@ void append_field_value(std::string& output, const std::string& value)
     }
 }
 
-}  // namespace
+} // namespace
 
 std::string format_device_list(const GroupingResult& grouping)
 {
