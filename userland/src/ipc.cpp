@@ -557,7 +557,8 @@ Result<std::array<ReceiverRecord, kReceiverCount>> receiver_records(
         return Result<std::array<ReceiverRecord, kReceiverCount>>::failure(
             Error::INVALID_ARGUMENT);
     }
-    for (std::size_t index = 0U; index < receiver_count; ++index) {
+    for (std::size_t index = 0U;
+         index < receiver_count && index < kReceiverCount; ++index) {
         records[index] = expected_receiver_record(receiver_count, index, dual_system);
     }
     return Result<std::array<ReceiverRecord, kReceiverCount>>::success(records);
@@ -575,7 +576,8 @@ Result<std::size_t> encode_payload(const ListResponsePayload& value,
         (value.usb_present_mask & ~usb_present_mask_for(value.receiver_count)) != 0U) {
         return invalid();
     }
-    for (std::size_t index = 0U; index < value.receiver_count; ++index) {
+    for (std::size_t index = 0U;
+         index < value.receiver_count && index < kReceiverCount; ++index) {
         if (!valid_receiver_record(value.receivers[index], value.receiver_count, index)) {
             return invalid();
         }
@@ -596,7 +598,8 @@ Result<std::size_t> encode_payload(const ListResponsePayload& value,
     writer.u8(value.usb_present_mask);
     writer.u8(value.receiver_count);
     writer.u8(kCardReaderCount);
-    for (std::size_t index = 0U; index < value.receiver_count; ++index) {
+    for (std::size_t index = 0U;
+         index < value.receiver_count && index < kReceiverCount; ++index) {
         const ReceiverRecord& receiver = value.receivers[index];
         writer.u8(receiver.global_id);
         writer.u8(receiver.dev_id);
@@ -624,7 +627,8 @@ Result<ListResponsePayload> decode_list_response_payload(ByteView input) noexcep
         return malformed<ListResponsePayload>();
     }
     value.receiver_count = receiver_count;
-    for (std::size_t index = 0U; index < receiver_count; ++index) {
+    for (std::size_t index = 0U;
+         index < receiver_count && index < kReceiverCount; ++index) {
         std::uint8_t system = 0U;
         ReceiverRecord& receiver = value.receivers[index];
         if (!reader.u8(receiver.global_id) || !reader.u8(receiver.dev_id) ||
