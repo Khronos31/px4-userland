@@ -1340,6 +1340,31 @@ bool test_mlt5pe_single_bridge_mapping()
     return true;
 }
 
+bool test_mlt_variable_receiver_count()
+{
+    FakeTransport device;
+    const auto created = Q3U4StreamDataPlane::create_mlt_family_for_test(
+        device, DeviceModel::px_mlt8pe3, Q3U4StreamDataPlane::kMinQueuePackets,
+        Q3U4StreamDataPlane::StartupStabilizationTestConfig{0U, 0U, 0U});
+    STREAM_CHECK(created);
+    auto& plane = *created.value();
+    auto receiver = attachment(2U, 11U);
+    receiver.system = ipc::System::ISDB_S;
+    auto absent = attachment(3U, 12U);
+    STREAM_CHECK(plane.attach(absent).error() == Error::INVALID_ARGUMENT);
+    STREAM_CHECK(plane.attach(receiver));
+    device.push(stream(4U, 2U, 0x114U));
+    const auto valid = stream(5U, 2U, 0x113U);
+    device.push(valid);
+    std::array<std::uint8_t, TaggedTsDemux::kPacketSize> output{};
+    const auto read = plane.read(receiver, MutableByteView{output.data(), output.size()},
+                                 Timeout{1000U});
+    STREAM_CHECK(read && read.value().bytes == output.size());
+    STREAM_CHECK(output[0U] == 0x47U && output[2U] == 0x13U);
+    STREAM_CHECK(plane.detach(receiver));
+    return true;
+}
+
 bool run_q3u4_stream_tests()
 {
     const bool mapping = test_mapping_and_bridge_lifecycle();
@@ -1378,5 +1403,8 @@ bool run_q3u4_stream_tests()
     if (epoch && !races) std::fprintf(stderr, "q3u4_stream: lifecycle races failed\n");
     const bool mlt5pe = races && test_mlt5pe_single_bridge_mapping();
     if (races && !mlt5pe) std::fprintf(stderr, "q3u4_stream: mlt5pe mapping failed\n");
-    return mlt5pe;
+    const bool mlt_variable = mlt5pe && test_mlt_variable_receiver_count();
+    if (mlt5pe && !mlt_variable)
+        std::fprintf(stderr, "q3u4_stream: mlt variable receiver count failed\n");
+    return mlt_variable;
 }

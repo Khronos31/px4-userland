@@ -62,13 +62,40 @@ bool test_identity()
     MLT_CHECK(device_profile_for_usb_id(0x0511U, 0x083fU)->model == DeviceModel::px_w3u4);
     MLT_CHECK(device_profile(DeviceModel::px_w3u4).bridge_count == 1U &&
               device_profile(DeviceModel::px_w3u4).receiver_count == 4U);
-    // Other PX-MLT/ISDB6014 product IDs remain unsupported.
+    // Related models outside the frozen device table remain unsupported.
     MLT_CHECK(device_profile_for_usb_id(0x0511U, 0x084eU) == nullptr);
-    MLT_CHECK(device_profile_for_usb_id(0x0511U, 0x0252U) == nullptr);
-    MLT_CHECK(device_profile_for_usb_id(0x0511U, 0x0254U) == nullptr);
     MLT_CHECK(device_profile_for_usb_id(0x1234U, 0x924eU) == nullptr);
     MLT_CHECK(device_profile(DeviceModel::dtv02a_5ts_p).bridge_count == 1U &&
               device_profile(DeviceModel::dtv02a_5ts_p).receiver_count == 5U);
+
+    const std::array<std::uint16_t, 12U> added_ids{{
+        0x023fU, 0x073fU, 0x024aU, 0x074aU, 0x0252U, 0x0253U,
+        0x0254U, 0x0854U, 0x0855U, 0x0052U, 0x004bU, 0x084bU}};
+    for (const std::uint16_t product_id : added_ids) {
+        const DeviceProfile* profile = device_profile_for_usb_id(0x0511U, product_id);
+        MLT_CHECK(profile != nullptr);
+        MLT_CHECK(profile->bridge_count ==
+                  (product_id == 0x024aU || product_id == 0x074aU ? 2U : 1U));
+    }
+    MLT_CHECK(device_profile_for_usb_id(0x0511U, 0x0252U)->receiver_count == 3U);
+    MLT_CHECK(device_profile_for_usb_id(0x0511U, 0x0254U)->receiver_count == 4U &&
+              device_profile_for_usb_id(0x0511U, 0x0254U)->dual_system);
+    MLT_CHECK(!device_profile_for_usb_id(0x0511U, 0x0855U)->dual_system);
+    MLT_CHECK(device_profile_for_usb_id(0x0511U, 0x0854U)->dual_system);
+
+    const auto mlt5 = mlt_model_layout(DeviceModel::px_mlt5pe);
+    const auto mlt3 = mlt_model_layout(DeviceModel::px_mlt8pe3);
+    const auto mlt8pe5 = mlt_model_layout(DeviceModel::px_mlt8pe5);
+    const auto mlt4 = mlt_model_layout(DeviceModel::dtv02a_4ts_p);
+    MLT_CHECK(mlt5.receiver_count == 5U && mlt5.receivers[1U].i2c_address == 0x6cU &&
+              mlt5.receivers[1U].i2c_bus == 1U && mlt5.receivers[1U].port_number == 1U);
+    MLT_CHECK(mlt3.receiver_count == 3U && mlt3.receivers[1U].port_number == 3U &&
+              mlt3.receivers[2U].i2c_bus == 3U && mlt3.receivers[2U].port_number == 4U);
+    MLT_CHECK(mlt8pe5.receiver_count == 5U && mlt8pe5.receivers[0U].i2c_bus == 1U &&
+              mlt8pe5.receivers[1U].i2c_address == 0x64U &&
+              mlt8pe5.receivers[2U].i2c_address == 0x6cU);
+    MLT_CHECK(mlt4.receiver_count == 4U && mlt4.receivers[3U].i2c_address == 0x64U &&
+              mlt4.receivers[3U].port_number == 4U);
 
     MLT_CHECK(valid_device_instance("00001205000960"));
     MLT_CHECK(valid_device_instance("000020263901491"));
@@ -162,6 +189,37 @@ bool test_ipc_list_and_status()
               decoded.value().receivers[4U].dev_id == 1U &&
               decoded.value().receivers[4U].local_id == 4U &&
               decoded.value().receivers[4U].system == ipc::System::ISDB_T_OR_S);
+
+    const auto mlt3_records = ipc::receiver_records(ipc::kMlt3PeReceiverCount);
+    MLT_CHECK(mlt3_records &&
+              mlt3_records.value()[2U].system == ipc::System::ISDB_T_OR_S);
+    const auto single_flexible = ipc::receiver_records(ipc::kSingleReceiverCount, true);
+    const auto single_terrestrial = ipc::receiver_records(ipc::kSingleReceiverCount);
+    MLT_CHECK(single_flexible && single_terrestrial &&
+              single_flexible.value()[0U].system == ipc::System::ISDB_T_OR_S &&
+              single_terrestrial.value()[0U].system == ipc::System::ISDB_T);
+    const auto mlt4_records = ipc::receiver_records(4U, true);
+    MLT_CHECK(mlt4_records &&
+              mlt4_records.value()[3U].system == ipc::System::ISDB_T_OR_S);
+    const auto encodes_count = [](std::uint8_t count, bool dual_system) {
+        const auto table = ipc::receiver_records(count, dual_system);
+        if (!table) return false;
+        const std::string id = "000020263901491";
+        ipc::ListResponsePayload candidate{
+            1U, ByteView{reinterpret_cast<const std::uint8_t*>(id.data()), id.size()},
+            1U, 0x01U, table.value(), count};
+        std::array<std::uint8_t, 128U> bytes{};
+        const auto size = ipc::encode_payload(
+            candidate, MutableByteView{bytes.data(), bytes.size()});
+        if (!size) return false;
+        const auto parsed = ipc::decode_list_response_payload(
+            ByteView{bytes.data(), size.value()});
+        return parsed && parsed.value().receiver_count == count;
+    };
+    MLT_CHECK(encodes_count(1U, false) && encodes_count(1U, true) &&
+              encodes_count(3U, true) && encodes_count(4U, true) &&
+              encodes_count(4U, false) && encodes_count(5U, true) &&
+              encodes_count(8U, false));
 
     auto second_device = list;
     second_device.usb_present_mask = 0x03U;
@@ -579,6 +637,11 @@ bool test_tuner_service_dual_system()
     RecordingLnb lnb;
     Mlt5PeLnbPowerCoordinator lnb_power(lnb, true);
     Mlt5PeTunerBackend backend(frontend, lnb_power);
+    Mlt5PeTunerBackend one_terrestrial(frontend, lnb_power, 1U, false);
+    MLT_CHECK(one_terrestrial.receiver_count() == 1U &&
+              one_terrestrial.receiver_supports(0U, ipc::System::ISDB_T) &&
+              !one_terrestrial.receiver_supports(0U, ipc::System::ISDB_S) &&
+              !one_terrestrial.receiver_supports(1U, ipc::System::ISDB_T));
     FixedNonce nonce;
     ServiceTime time;
     TunerService service(backend, nonce, time);

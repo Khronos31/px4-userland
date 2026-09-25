@@ -423,6 +423,23 @@ bool test_input_limits_and_bounded_garbage()
     return true;
 }
 
+bool test_plain_single_receiver_ts()
+{
+    std::vector<std::uint8_t> stream;
+    for (std::size_t packet=0U; packet<5U; ++packet) {
+        Packet value{};
+        value.fill(static_cast<std::uint8_t>(0x60U+packet));
+        value[0U]=0x47U;
+        append_packet(stream,value);
+    }
+    SinkState sink;
+    TaggedTsDemux demux(1U,true);
+    DEMUX_CHECK(demux.push(ByteView{stream.data(),stream.size()},record_packet,&sink));
+    DEMUX_CHECK(sink.packets.size()==5U && sink.receiver_indices==std::vector<std::size_t>(5U,0U));
+    for(std::size_t i=0U;i<stream.size();++i) DEMUX_CHECK(sink.packets[i/188U][i%188U]==stream[i]);
+    return true;
+}
+
 }  // namespace
 
 bool run_tagged_ts_demux_tests()
@@ -433,5 +450,5 @@ bool run_tagged_ts_demux_tests()
            test_aligned_tei_observer_preserves_boundary() &&
            test_reset() && test_sink_failure_retry() &&
            test_full_transfer_stress() && test_sink_failure_after_many_successes() &&
-           test_input_limits_and_bounded_garbage();
+           test_input_limits_and_bounded_garbage() && test_plain_single_receiver_ts();
 }

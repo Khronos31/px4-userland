@@ -49,7 +49,7 @@ std::string format_device_list(const GroupingResult& grouping)
         const int length = std::snprintf(line, sizeof(line), " receivers=%u\n",
                                          static_cast<unsigned int>(profile.receiver_count));
         if (length > 0) output.append(line, static_cast<std::size_t>(length));
-        const auto records = ipc::receiver_records(profile.receiver_count);
+        const auto records = ipc::receiver_records(profile.receiver_count, profile.dual_system);
         if (records) {
             output += format_receiver_records(records.value().data(), profile.receiver_count);
         }

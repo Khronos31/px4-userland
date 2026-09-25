@@ -142,6 +142,7 @@ add_library(px4_userland_core STATIC
     userland/src/rt710.cpp
     userland/src/tc90522.cpp
     userland/src/q3u4_frontend.cpp
+    userland/src/single_receiver_frontend.cpp
     userland/src/q3u4_card_backend.cpp
     userland/src/q3u4_tuner_backend.cpp
     userland/src/tuner_service.cpp

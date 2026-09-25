@@ -87,7 +87,7 @@ bool test_rejected_devices_of_supported_models_only()
         rejected(kQ3U4ProductId, "bad serial\nx", ObservationStatus::invalid_serial));
     // Other USB IDs are not this product's devices.
     grouping.rejected.push_back(
-        rejected(0x084bU, "000012050009991", ObservationStatus::unsupported));
+        rejected(0x084eU, "000012050009991", ObservationStatus::unsupported));
 
     const std::string expected =
         "rejected serial= model=PX-MLT5PE usb=0511:024e status=open_failed\n"

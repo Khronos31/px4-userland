@@ -16,6 +16,7 @@
 #include "q3u4_lnb_power.h"
 #include "q3u4_card_backend.h"
 #include "q3u4_tuner_backend.h"
+#include "single_receiver_frontend.h"
 #include "q3u4_power.h"
 #include "px4d_args.h"
 #include "px4d_list_format.h"
@@ -44,9 +45,9 @@ void usage() noexcept
         "[--runtime-dir PATH] [--group] [--allow-lnb-power]\n"
         "  px4d --list\n"
         "\n"
-        "  BASE_SERIAL is the 14-digit PX-Q3U4 base serial or the 15-digit\n"
-        "  PX-MLT5PE/DTV02A-5TS-P serial.  Pass one --fd per USB device: two\n"
-        "  for PX-Q3U4, one for PX-MLT5PE/DTV02A-5TS-P.\n"
+        "  BASE_SERIAL is the 14-digit serial base for paired devices or the\n"
+        "  15-digit USB serial for single-device models.  Pass one --fd per\n"
+        "  USB device: two for paired models, one for single-device models.\n"
         "\n"
         "  --allow-lnb-power  permit explicit ISDB-S 15 V requests; default off\n"
         "  --list             print connected supported enclosures and exit;\n"
@@ -115,12 +116,21 @@ public:
     }
 };
 
+class It930xSingleReceiverPower final : public Q3U4BackendPower {
+public:
+    explicit It930xSingleReceiverPower(It930xController& controller) noexcept : controller_(controller) {}
+    Result<void> set_backend_power(bool on, Q3U4Delay& delay) noexcept override
+    { return controller_.set_single_receiver_backend_power(on, delay); }
+private:
+    It930xController& controller_;
+};
+
 // Publishes the control/data endpoints and runs the foreground loop until a
 // stop signal or loop failure.  Returns the process exit status.
 int serve(const Px4dArguments& arguments, const std::string& base_serial,
           CardService& card_service, TunerService& tuner_service,
           Q3U4StreamDataPlane& stream, std::uint8_t usb_present_mask,
-          std::uint8_t receiver_count) noexcept
+          std::uint8_t receiver_count, bool dual_system = false) noexcept
 {
     const char* runtime_directory = arguments.runtime_directory.empty() ?
                                         nullptr : arguments.runtime_directory.c_str();
@@ -129,7 +139,7 @@ int serve(const Px4dArguments& arguments, const std::string& base_serial,
         arguments.group ? EndpointAccess::shared_group : EndpointAccess::private_user};
     auto server = PosixControlServer::create(
         endpoint, card_service, tuner_service, base_serial, true, usb_present_mask,
-        &stream, receiver_count);
+        &stream, receiver_count, dual_system);
     if (!server) {
         std::fprintf(stderr, "control endpoint: %s\n", error_string(server.error()));
         return exit_status(server.error());
@@ -343,10 +353,12 @@ int run_w3u4(const Px4dArguments& arguments, Q3U4Runtime& runtime,
 }
 
 int run_mlt5pe(const Px4dArguments& arguments, Q3U4Runtime& runtime,
-               const FirmwareImage& firmware, const std::string& base_serial) noexcept
+               const FirmwareImage& firmware, const std::string& base_serial,
+               std::uint8_t receiver_count = ipc::kMlt5PeReceiverCount,
+               bool satellite_supported = true) noexcept
 {
     It930xController device(runtime.dev1());
-    const auto initialized = device.initialize_mlt5pe(firmware);
+    const auto initialized = device.initialize_mlt_family(firmware, runtime.model());
     if (!initialized) {
         std::fprintf(stderr, "device initialize: %s\n", error_string(initialized.error()));
         return exit_status(initialized.error());
@@ -357,7 +369,8 @@ int run_mlt5pe(const Px4dArguments& arguments, Q3U4Runtime& runtime,
     It930xBridgeI2cMaster bus3(device, 3U);
     It930xBackendPower power(device);
     It930xPsbPurger purger(device);
-    Mlt5PeFrontend frontend(bus1, bus3, power, time, &purger);
+    Mlt5PeFrontend frontend(bus1, bus3, power, time, &purger, receiver_count,
+                           runtime.model());
     Mlt5PeCardBackend backend(device, frontend);
     It930xCardHardware card_hardware(device);
     CardSession card_session(card_hardware, time);
@@ -365,9 +378,10 @@ int run_mlt5pe(const Px4dArguments& arguments, Q3U4Runtime& runtime,
     CardService card_service(backend, protocol);
     It930xLnbPower lnb(device);
     Mlt5PeLnbPowerCoordinator lnb_power(lnb, arguments.allow_lnb_power);
-    Mlt5PeTunerBackend tuner_backend(frontend, lnb_power);
+    Mlt5PeTunerBackend tuner_backend(frontend, lnb_power, receiver_count,
+                                     satellite_supported, runtime.model());
     PosixTunerNonceSource nonce_source;
-    const auto stream = Q3U4StreamDataPlane::create_mlt5pe(runtime.dev1());
+    const auto stream = Q3U4StreamDataPlane::create_mlt_family(runtime.dev1(), runtime.model());
     if (!stream) {
         std::fprintf(stderr, "stream data plane: %s\n", error_string(stream.error()));
         return exit_status(stream.error());
@@ -375,7 +389,37 @@ int run_mlt5pe(const Px4dArguments& arguments, Q3U4Runtime& runtime,
     TunerService tuner_service(tuner_backend, nonce_source, time, nullptr, nullptr,
                                stream.value().get());
     return serve(arguments, base_serial, card_service, tuner_service, *stream.value(),
-                 0x01U, ipc::kMlt5PeReceiverCount);
+                 0x01U, receiver_count, satellite_supported || receiver_count > 1U);
+}
+
+int run_single_receiver(const Px4dArguments& arguments, Q3U4Runtime& runtime,
+                        const FirmwareImage& firmware, const std::string& base_serial) noexcept
+{
+    It930xController device(runtime.dev1());
+    const auto initialized = device.initialize_single_receiver(firmware, runtime.model());
+    if (!initialized) {
+        std::fprintf(stderr, "device initialize: %s\n", error_string(initialized.error()));
+        return exit_status(initialized.error());
+    }
+    DaemonTime time;
+    It930xBridgeI2cMaster bridge(device, 3U);
+    It930xSingleReceiverPower power(device);
+    SingleReceiverFrontend frontend(bridge, device, power, time, runtime.model(),
+                                    arguments.allow_lnb_power);
+    It930xCardHardware card_hardware(device);
+    CardSession card_session(card_hardware, time);
+    NativeCardProtocolSession protocol(card_session);
+    CardService card_service(frontend, protocol);
+    PosixTunerNonceSource nonce_source;
+    const auto stream = Q3U4StreamDataPlane::create_single_receiver(runtime.dev1(), runtime.model());
+    if (!stream) {
+        std::fprintf(stderr, "stream data plane: %s\n", error_string(stream.error()));
+        return exit_status(stream.error());
+    }
+    TunerService tuner_service(frontend, nonce_source, time, nullptr, nullptr, stream.value().get());
+    const bool dual = device_profile(runtime.model()).dual_system;
+    return serve(arguments, base_serial, card_service, tuner_service, *stream.value(),
+                 0x01U, 1U, dual);
 }
 
 }  // namespace
@@ -437,10 +481,15 @@ int main(int argc, char** argv)
         return exit_status(Error::INVALID_ARGUMENT);
     }
     std::fprintf(stderr, "px4d device: %s\n", device_profile(model).name);
-    if (model == DeviceModel::px_w3u4) {
+    if (device_profile(model).bridge_count == 1U &&
+        !device_profile(model).dual_system &&
+        device_profile(model).receiver_count == ipc::kW3U4ReceiverCount) {
         return run_w3u4(arguments, *runtime.value(), firmware.value(), base_serial);
     }
-    return single_bridge
-        ? run_mlt5pe(arguments, *runtime.value(), firmware.value(), base_serial)
-        : run_q3u4(arguments, *runtime.value(), firmware.value(), base_serial);
+    if (!single_bridge) return run_q3u4(arguments, *runtime.value(), firmware.value(), base_serial);
+    const DeviceProfile& profile = device_profile(model);
+    if (profile.receiver_count == 1U)
+        return run_single_receiver(arguments, *runtime.value(), firmware.value(), base_serial);
+    return run_mlt5pe(arguments, *runtime.value(), firmware.value(), base_serial,
+                      profile.receiver_count, profile.dual_system);
 }
