@@ -45,6 +45,7 @@ using namespace px4::userland::pcsc;
 struct MockState final {
     bool present = false;
     bool initialized = false;
+    Error factory_connect_error = Error::OK;
     Error status_error = Error::OK;
     Error connect_error = Error::OK;
     Error reset_error = Error::OK;
@@ -164,6 +165,10 @@ public:
         const IfdEndpoint& endpoint) noexcept override
     {
         ++state_.factory_connects;
+        if (state_.factory_connect_error != Error::OK) {
+            return Result<std::unique_ptr<IfdCardClient>>::failure(
+                state_.factory_connect_error);
+        }
         if (endpoint.device_instance != "00001205000960") {
             return Result<std::unique_ptr<IfdCardClient>>::failure(Error::NOT_FOUND);
         }
@@ -455,9 +460,61 @@ bool test_adapter_state_and_recovery()
     state.status_error = Error::OK;
     CHECK(adapter.create_channel_by_name(0U, name) == IfdResult::success);
     state.status_error = Error::DISCONNECTED;
-    CHECK(adapter.presence(0U) == IfdResult::no_such_device);
-    CHECK(adapter.presence(0U) == IfdResult::no_such_device);
-    CHECK(state.closes == 2U);
+    CHECK(adapter.presence(0U) == IfdResult::icc_not_present);
+    CHECK(adapter.presence(0U) == IfdResult::icc_not_present);
+    CHECK(state.factory_connects == 3U && state.closes == 3U);
+    return true;
+}
+
+bool test_adapter_lazy_reconnect()
+{
+    MockState state;
+    state.present = true;
+    state.factory_connect_error = Error::NOT_FOUND;
+    MockFactory factory(state);
+    IfdAdapter adapter(factory);
+    constexpr const char* name =
+        "px4-userland:device=00001205000960:access=user";
+
+    CHECK(adapter.create_channel_by_name(0U, name) == IfdResult::success);
+    CHECK(state.factory_connects == 1U);
+    CHECK(adapter.presence(0U) == IfdResult::icc_not_present);
+    CHECK(state.factory_connects == 2U);
+
+    std::array<std::uint8_t, 1U> attribute{};
+    std::size_t attribute_length = attribute.size();
+    CHECK(adapter.get_capability(
+              0U, kAttrIccPresence,
+              MutableByteView{attribute.data(), attribute.size()},
+              attribute_length) == IfdResult::success);
+    CHECK(attribute_length == 1U && attribute[0] == 0U);
+
+    std::array<std::uint8_t, kIfdAtrMaxLength> atr{};
+    std::size_t atr_length = atr.size();
+    CHECK(adapter.power(0U, IfdPowerAction::power_up,
+                        MutableByteView{atr.data(), atr.size()}, atr_length) ==
+          IfdResult::icc_not_present);
+    CHECK(atr_length == 0U);
+    const std::array<std::uint8_t, 1U> apdu{0x00U};
+    std::array<std::uint8_t, 2U> response{};
+    std::size_t response_length = response.size();
+    CHECK(adapter.transmit(
+              0U, kIfdTransmitProtocolT1, ByteView{apdu.data(), apdu.size()},
+              MutableByteView{response.data(), response.size()}, response_length) ==
+          IfdResult::icc_not_present);
+    CHECK(response_length == 0U);
+    atr_length = atr.size();
+    CHECK(adapter.power(0U, IfdPowerAction::power_down,
+                        MutableByteView{atr.data(), atr.size()}, atr_length) ==
+          IfdResult::success);
+    CHECK(atr_length == 0U);
+
+    state.factory_connect_error = Error::OK;
+    CHECK(adapter.presence(0U) == IfdResult::icc_present);
+    CHECK(state.factory_connects == 6U);
+    CHECK(adapter.close_channel(0U) == IfdResult::success);
+    CHECK(state.closes == 1U);
+    CHECK(adapter.close_channel(0U) == IfdResult::no_such_device);
     return true;
 }
 
@@ -486,11 +543,11 @@ bool test_adapter_timeout_and_buffer_errors()
               MutableByteView{response.data(), response.size()}, response_length) ==
           IfdResult::response_timeout);
     CHECK(response_length == 0U && state.closes == 1U);
-    CHECK(adapter.presence(0U) == IfdResult::no_such_device);
+    CHECK(adapter.presence(0U) == IfdResult::icc_present);
+    CHECK(state.factory_connects == 2U);
 
     state.transmit_error = Error::OK;
     state.initialized = false;
-    CHECK(adapter.create_channel_by_name(0U, name) == IfdResult::success);
     std::array<std::uint8_t, 1U> short_atr{};
     atr_length = short_atr.size();
     CHECK(adapter.power(0U, IfdPowerAction::power_up,
@@ -721,8 +778,8 @@ bool test_exported_abi_over_real_ipc()
     CHECK(runner.healthy());
     CHECK(server->shutdown());
     CHECK(!std::filesystem::exists(socket_path));
-    CHECK(IFDHICCPresence(0U) == IFD_NO_SUCH_DEVICE);
-    CHECK(IFDHCloseChannel(0U) == IFD_NO_SUCH_DEVICE);
+    CHECK(IFDHICCPresence(0U) == IFD_ICC_NOT_PRESENT);
+    CHECK(IFDHCloseChannel(0U) == IFD_SUCCESS);
     return true;
 }
 
@@ -733,6 +790,7 @@ int main()
     if (!test_reader_config_template() ||
         !test_device_name_and_error_mapping() ||
         !test_adapter_state_and_recovery() ||
+        !test_adapter_lazy_reconnect() ||
         !test_adapter_timeout_and_buffer_errors() ||
         !test_exported_abi_over_real_ipc()) {
         return 1;
