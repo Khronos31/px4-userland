@@ -269,7 +269,7 @@ slotとTSIDはIPC上で別fieldとし、値の大きさから暗黙判定しな�
   - 筐体行: `serial=<識別子> model=<機種名> usb=<vid>:<pid> status=<状態> receivers=<数>`。
     `serial`は`--device`へ渡す4.1節の識別子、`model`は4.1節の表の機種名、`usb`は4桁小文字16進、
     `status`はgroupingの結果（`ready`、`incomplete`、`duplicate`、`invalid_observation`）とする。
-    `ready`以外の筐体に対して`px4d --device`は起動しない。
+    `ready`以外の筐体では`px4d --device`は起動できない。
   - 続く`receivers`個のreceiver行: `px4ctl list`（6.4節`LIST`）と同じ書式
     `receiver=<ID> device=<dev_id> local=<local_id> system=<ISDB-T|ISDB-S|ISDB-T/S>`で、4.2節の表をそのまま出す。
 - 対象機種のUSB IDを持ちながら筐体にまとめられなかったUSBデバイスは、筐体行の後に
@@ -598,15 +598,16 @@ Linux・Android・macOSを対象にする既存実装は確認できなかった
    MLT5系についても識別、warm初期化順序、CXD2856ER/CXD2858ER tune sequence、5 tag demux、LIST/STATUS値域、
    1 fd起動の試験が成功する。
 8. `smart_card_state_test`相当のATR、T=1、timeout、retry、APDU分割、抜去、再挿入試験が成功する。
-9. `px4d --list`の出力について、Q3U4とMLT5系の筐体行とreceiver表、`incomplete`、`rejected`行と
-   serialの置換、対象筐体なしの試験、およびopenできないデバイスを`open_failed`として報告する列挙の試験が成功する。
-10. IPCの全messageについてgolden byte vector、malformed frame、version negotiation、権限、異常切断、
+9. IPCの全messageについてgolden byte vector、malformed frame、version negotiation、権限、異常切断、
    slow-consumer/backpressure、CLI exit code試験が成功する。
-11. stream counter試験で、正常TS中に`empty_intervals`だけが非zeroでも成功し、他のerror counterが0でも
+10. stream counter試験で、正常TS中に`empty_intervals`だけが非zeroでも成功し、他のerror counterが0でも
     packet/byteの進行が5秒停止した場合は失敗する。
-12. fuzzまたは境界値試験でUSB response lengthとIPC payload lengthの範囲外アクセスがない。
-13. `git ls-files`にfirmware binary、vendor driver binary、kernel module、DKMS、Q3U4/MLT5系以外のdevice packageが残らない。
-14. 全派生source fileに`SPDX-License-Identifier: GPL-2.0-only`を付け、LICENSEがGPL-2.0を示す。
+11. fuzzまたは境界値試験でUSB response lengthとIPC payload lengthの範囲外アクセスがない。
+12. `git ls-files`にfirmware binary、vendor driver binary、kernel module、DKMS、Q3U4/MLT5系以外のdevice packageが残らない。
+13. 全派生source fileに`SPDX-License-Identifier: GPL-2.0-only`を付け、LICENSEがGPL-2.0を示す。
+14. `px4d --list`の出力について、Q3U4とMLT5系の筐体行とreceiver表、`incomplete`、`rejected`行と
+    serialの置換、対象筐体なしの試験、およびopenできないデバイスを`open_failed`として報告する列挙の試験が
+    成功する。
 
 ### 10.2 Q3U4 hardware acceptance on Linux
 
