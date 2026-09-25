@@ -1,14 +1,19 @@
 # px4-userland 仕様
 
-Status: Frozen v0.18 (2026-09-25)
+Status: Frozen v0.19 (2026-09-25)
 
 本書の`MUST`、`MUST NOT`、`SHOULD`は規範要件を示す。実機観測で前提の誤りが判明した場合も暗黙に
 実装だけを変えず、本書のversionと変更理由を更新してから実装する。
 
-v0.18ではupstream `tsukumijima/px4_drv`でUSB ID、receiver数、system構成を確認した12機種を追加する。
-Q3U4系は既存W3U4/Q3U4経路を再利用し、MLT系はモデル別receiver wiringで一般化する。1 receiver機種は
-TC90522/R850/RT710を用いるmodel-specific frontend、single TS stream、backend power、card経路を実装した。
-追加12機種の実機動作はhardware-unverifiedであり、カードreaderを含む受入確認は未実施とする。
+v0.19では、同一lease内の再選局（same-lease retune）を許す。`STOP_STREAM`で`consumed`になったleaseでも
+`TUNE`成功後に`START_STREAM`を再実行できる。wire形式は変えない。`ATTACH_STREAM`のnonceは`ACQUIRE`が
+発行した値をlease内で使い回し、tokenの有効性はarm（`START_STREAM`から`ATTACH_STREAM`または5秒満了まで）
+単位で成立する。各armは1回のattachmentだけを受け付け、5秒窓と合わせて期限切れ・再利用を拒否する（6.3節）。
+
+### v0.19 change record (2026-09-25)
+
+- 6.3節: 同一lease内の再選局を追加。`TUNE`成功で`consumed`を`none`へ戻し（re-arm）、`START_STREAM`を再実行
+  可能にする。nonceはlease内で不変とし、token有効性はarm単位と定義した。wire形式・protocol versionは不変。
 
 ### v0.18 change record (2026-09-25)
 
@@ -470,7 +475,11 @@ B-CASの実カードをQ3U4受入試験の対象とする。ACASは模擬試験�
 - `ACQUIRE`成功時、daemonは`u64 lease_id`と128-bit CSPRNG nonceを返す。leaseはcontrol connection、receiver、
   instanceに結び付け、再接続へ持ち越せない。
 - `START_STREAM`成功後5秒以内にdata endpointへ接続し、`ATTACH_STREAM` payloadとしてlease IDとnonceを送る。
-  期限切れ、再利用、別instanceのtokenは拒否する。
+  tokenはarm単位で有効とする。armは`START_STREAM`成功から`ATTACH_STREAM`受付または5秒満了までを指し、
+  各armは1回のattachmentだけを受け付ける。期限切れ、同一arm内での再利用、別instanceのtokenは拒否する。
+- 同一leaseの再選局を許す。`STOP_STREAM`後のleaseは`consumed`となり、`TUNE`成功で再び`START_STREAM`を
+  実行できる。nonceは`ACQUIRE`が発行した値をleaseの間使い回し、`START_STREAM`を実行するたびに新しいarmを
+  開始する。wire形式は変わらず、`START_STREAM`応答はemptyのままとする。
 - receiverごとのTS queueは有限長とし、既定65,536 packet、設定可能範囲4,096..262,144 packetとする。
   queue満杯ではUSB callbackをblockせず、そのclientを`SLOW_CONSUMER`で終了する。dropして配信継続しない。
 - `TS_DATA` payloadは`u64 sequence, u64 cumulative_drop_count, u32 byte_count, bytes[byte_count]`とし、

@@ -1088,8 +1088,22 @@ bool test_stream_authorization_and_mapping()
                 stopped.value().counters.bytes == 2068U);
     TUNER_CHECK(service.status().value().receiver_states[2] == ReceiverState::tuned);
     TUNER_CHECK(service.detach_stream(attached.value()).error() == Error::NOT_FOUND);
+    // START_STREAM without a retune is still BUSY on a consumed lease.
     TUNER_CHECK(service.start_stream(10U, terrestrial_lease.value().lease_id)
                     .error() == Error::BUSY);
+    // A successful retune re-arms the same lease; the ACQUIRE nonce stays the
+    // same but each arm accepts exactly one attachment.
+    TUNER_CHECK(service.tune(10U, terrestrial(terrestrial_lease.value().lease_id)));
+    TUNER_CHECK(service.start_stream(10U, terrestrial_lease.value().lease_id));
+    TUNER_CHECK(service.attach_stream(terrestrial_lease.value().lease_id,
+                                      wrong_nonce).error() == Error::NOT_FOUND);
+    const auto reattached = service.attach_stream(
+        terrestrial_lease.value().lease_id, terrestrial_lease.value().nonce);
+    TUNER_CHECK(reattached);
+    TUNER_CHECK(reattached.value().attachment_id != 0U &&
+                reattached.value().attachment_id != attached.value().attachment_id);
+    TUNER_CHECK(service.status().value().receiver_states[2] == ReceiverState::streaming);
+    TUNER_CHECK(service.stop_stream(10U, terrestrial_lease.value().lease_id));
 
     TUNER_CHECK(service.start_stream(11U, satellite_lease.value().lease_id));
     const auto satellite_attached = service.attach_stream(
