@@ -296,6 +296,7 @@ runtime_dir="$PREFIX/tmp/p4"
 
 ```sh
 px4d --device BASE_SERIAL --firmware PATH [--runtime-dir PATH] [--group] [--allow-lnb-power]
+px4d --list
 ```
 
 - `--device BASE_SERIAL`: 対象 PX-Q3U4 の 14 桁 base serial、または DTV02A-5TS-P / PX-MLT5PE の 15 桁 USB シリアルを指定します。
@@ -303,6 +304,19 @@ px4d --device BASE_SERIAL --firmware PATH [--runtime-dir PATH] [--group] [--allo
 - `--runtime-dir PATH`: ランタイムルートディレクトリを指定します（省略時は `$XDG_RUNTIME_DIR`）。
 - `--allow-lnb-power`: 衛星放送受信時の LNB 15V 給電を許可します（安全のための明示的 opt-in）。
 - `--fd FD [--fd FD]`: Android 環境などで、ホスト側が開いた USB ファイルディスクリプタを直接渡して起動します。PX-Q3U4 は 2 つ、DTV02A-5TS-P / PX-MLT5PE は 1 つ指定します（この場合 `--device` は任意）。
+- `--list`: 接続中の対象筐体を列挙して終了します（単独で指定）。`--device` に渡す識別子、機種、状態、各受信機の放送方式を出力します。デバイスを所有せず、ファームウェアも稼働中の `px4d` も不要です（仕様は `SPEC.md` 4.6 節）。
+
+```text
+$ px4d --list
+serial=00001205000960 model=PX-Q3U4 usb=0511:084a status=ready receivers=8
+receiver=0 device=1 local=0 system=ISDB-S
+receiver=1 device=1 local=1 system=ISDB-S
+receiver=2 device=1 local=2 system=ISDB-T
+...
+serial=000020263901491 model=DTV02A-5TS-P usb=0511:924e status=ready receivers=5
+receiver=0 device=1 local=0 system=ISDB-T/S
+...
+```
 
 同一Linuxホスト内のlocalhost usbipを利用する場合は、VHCI側の2ノードを事前にopenし、`--fd FD --fd FD`で指定する。同一libusbコンテキスト内にexport元の物理機能とimport先のVHCI機能が同一シリアルで現れ、通常列挙では重複スロット（`INVALID_ARGUMENT`）となるためである。なお、LAN経由のusbip構成は未検証である。
 

@@ -63,14 +63,22 @@ std::string format_list(const ipc::ListResponsePayload& payload)
                                static_cast<unsigned int>(payload.usb_present_mask));
     if (length > 0) output.append(line, static_cast<std::size_t>(length));
 
-    for (std::size_t index = 0U; index < payload.receiver_count; ++index) {
-        const ipc::ReceiverRecord& receiver = payload.receivers[index];
-        length = std::snprintf(line, sizeof(line),
-                               "receiver=%u device=%u local=%u system=%s\n",
-                               static_cast<unsigned int>(receiver.global_id),
-                               static_cast<unsigned int>(receiver.dev_id),
-                               static_cast<unsigned int>(receiver.local_id),
-                               system_name(receiver.system));
+    output += format_receiver_records(payload.receivers.data(), payload.receiver_count);
+    return output;
+}
+
+std::string format_receiver_records(const ipc::ReceiverRecord* records, std::size_t count)
+{
+    std::string output;
+    char line[160]{};
+    for (std::size_t index = 0U; index < count; ++index) {
+        const ipc::ReceiverRecord& receiver = records[index];
+        const int length = std::snprintf(line, sizeof(line),
+                                         "receiver=%u device=%u local=%u system=%s\n",
+                                         static_cast<unsigned int>(receiver.global_id),
+                                         static_cast<unsigned int>(receiver.dev_id),
+                                         static_cast<unsigned int>(receiver.local_id),
+                                         system_name(receiver.system));
         if (length > 0) output.append(line, static_cast<std::size_t>(length));
     }
     return output;

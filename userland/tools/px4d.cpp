@@ -18,6 +18,7 @@
 #include "q3u4_tuner_backend.h"
 #include "q3u4_power.h"
 #include "px4d_args.h"
+#include "px4d_list_format.h"
 #include "px4d_signals.h"
 
 #include <chrono>
@@ -41,12 +42,15 @@ void usage() noexcept
         "[--runtime-dir PATH] [--group] [--allow-lnb-power]\n"
         "  px4d --fd FD [--fd FD] [--device BASE_SERIAL] --firmware PATH "
         "[--runtime-dir PATH] [--group] [--allow-lnb-power]\n"
+        "  px4d --list\n"
         "\n"
         "  BASE_SERIAL is the 14-digit PX-Q3U4 base serial or the 15-digit\n"
         "  PX-MLT5PE/DTV02A-5TS-P serial.  Pass one --fd per USB device: two\n"
         "  for PX-Q3U4, one for PX-MLT5PE/DTV02A-5TS-P.\n"
         "\n"
-        "  --allow-lnb-power  permit explicit ISDB-S 15 V requests; default off\n");
+        "  --allow-lnb-power  permit explicit ISDB-S 15 V requests; default off\n"
+        "  --list             print connected supported enclosures and exit;\n"
+        "                     read-only, needs neither firmware nor a daemon\n");
 }
 
 int exit_status(Error error) noexcept
@@ -71,6 +75,24 @@ int exit_status(Error error) noexcept
     case Error::INTERNAL: return 70;
     }
     return 70;
+}
+
+// `px4d --list` (SPEC 4.6).  Native enumeration only reads descriptors and
+// the serial string; it never claims an interface, so it is safe while other
+// px4d instances own their enclosures.
+int list_devices() noexcept
+{
+    const auto grouping = Q3U4Runtime::enumerate_native();
+    if (!grouping) {
+        std::fprintf(stderr, "enumeration failed: %s\n", error_string(grouping.error()));
+        return exit_status(grouping.error());
+    }
+    const std::string output = tools::format_device_list(grouping.value());
+    if (!output.empty() &&
+        std::fwrite(output.data(), 1U, output.size(), stdout) != output.size()) {
+        return exit_status(Error::INTERNAL);
+    }
+    return std::fflush(stdout) == 0 ? 0 : exit_status(Error::INTERNAL);
 }
 
 class DaemonTime final : public CardTime,
@@ -237,6 +259,7 @@ int main(int argc, char** argv)
         usage();
         return 0;
     }
+    if (arguments.list) return list_devices();
 
     FirmwareProvider firmware_provider(arguments.firmware);
     const auto firmware = firmware_provider.load();

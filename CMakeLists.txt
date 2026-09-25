@@ -428,6 +428,8 @@ if(PX4_BUILD_TESTS)
             userland/tests/px4_ts_tests.cpp
             userland/tools/px4ctl_format.cpp
             userland/tests/px4ctl_format_tests.cpp
+            userland/tools/px4d_list_format.cpp
+            userland/tests/px4d_list_format_tests.cpp
         )
         target_link_libraries(px4_userland_tests PRIVATE px4_userland_posix_ipc)
         target_compile_definitions(px4_userland_tests PRIVATE
@@ -530,6 +532,8 @@ if(TARGET px4_userland_posix_ipc)
     if(PX4_ENABLE_LIBUSB)
         add_executable(px4d
             userland/tools/px4d.cpp
+            userland/tools/px4d_list_format.cpp
+            userland/tools/px4ctl_format.cpp
             userland/tools/px4d_signals.cpp
             userland/src/px4d_args.cpp
         )

@@ -174,10 +174,27 @@ bool test_device_and_general_rejections()
     return true;
 }
 
+// `--list` needs neither firmware nor a device and must stand alone, so a
+// listing can never be mistaken for starting a daemon.
+bool test_list_mode()
+{
+    const Px4dArguments list = parse({"px4d", "--list"});
+    PX4D_CHECK(list.valid && list.list && !list.help);
+    PX4D_CHECK(list.device.empty() && list.firmware.empty());
+    PX4D_CHECK(!parse(native_arguments()).list);
+
+    Arguments combined = native_arguments();
+    combined.push_back("--list");
+    PX4D_CHECK(!parse(combined).valid);
+    PX4D_CHECK(!parse({"px4d", "--list", "--list"}).valid);
+    PX4D_CHECK(!parse({"px4d", "--list", "--help"}).valid);
+    return true;
+}
+
 }  // namespace
 
 bool run_px4d_args_tests()
 {
     return test_valid_modes() && test_fd_rejections() &&
-           test_device_and_general_rejections();
+           test_device_and_general_rejections() && test_list_mode();
 }

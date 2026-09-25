@@ -63,6 +63,7 @@ bool run_posix_tuner_nonce_tests();
 bool run_control_workers_tests();
 bool run_px4_ts_tests();
 bool run_px4ctl_format_tests();
+bool run_px4d_list_format_tests();
 #endif
 bool run_q3u4_frontend_tests();
 bool run_q3u4_card_backend_tests();
@@ -3083,6 +3084,7 @@ int main(int argc, char** argv)
         {"control_workers", run_control_workers_tests},
         {"px4_ts", run_px4_ts_tests},
         {"px4ctl_format", run_px4ctl_format_tests},
+        {"px4d_list_format", run_px4d_list_format_tests},
 #endif
         {"q3u4_frontend_lifecycle", run_q3u4_frontend_tests},
         {"q3u4_card_backend", run_q3u4_card_backend_tests},

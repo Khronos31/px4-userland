@@ -1,10 +1,15 @@
 # px4-userland 仕様
 
-Status: Frozen v0.16 (2026-09-24)
+Status: Frozen v0.17 (2026-09-25)
 
 本書の`MUST`、`MUST NOT`、`SHOULD`は規範要件を示す。実機観測で前提の誤りが判明した場合も暗黙に
 実装だけを変えず、本書のversionと変更理由を更新してから実装する。
 
+v0.17では、接続中の対象筐体を列挙する`px4d --list`を追加する（4.6節）。v0.16まで、利用側が`px4d --device`へ
+渡す筐体識別子を得るには、4.1節のUSB IDと識別子規則を自前で持ち、sysfs等から組み立てるしかなかった。
+対象機種が増えるたびに利用側の表も更新が要り、4.1節の規則とずれる余地がある。`--list`は`px4d`が
+既に持つ通常列挙とgroupingをそのまま使い、所有もfirmware loadも行わずに筐体、機種、状態、4.2節の
+receiver表を出力する。device contract、IPC、`px4ctl`/`px4-ts`の挙動は変更しない。
 v0.16では、対象機種にPLEX PX-MLT5PE（`0511:024e`）とe-Better DTV02A-5TS-P（`0511:924e`）を追加する。
 `tsukumijima/px4_drv`はDTV02A-5TS-PをPX-MLT5PEのリブランド品として扱い、両者の差分はUSB product IDだけで
 ある（driver commit `72a807de2009c2ce376953c75687b4d45708f00e`、winusb commit
@@ -118,6 +123,8 @@ MLT5系は1つのIT930xだけを持つ単一USBデバイスであり、`px4d`は
 - `px4d`: USBデバイス、ファームウェア、受信機、TS転送、共有電源、カードセッションを所有する。
 - `px4-ts`: `px4d`へ接続し、1受信機を確保してMPEG-TSをstdoutまたは指定ファイルへ出力する。
 - `px4ctl`: デバイス一覧、状態、統計、カード状態、ATR、reset、APDU送受信を扱う診断・制御CLI。
+
+`px4d --list`は例外として何も所有せず、接続中の対象筐体を列挙して終了する（4.6節）。
 
 `px4d`はforeground動作を標準とし、自身でdaemonizeしない。プロセス監視は利用側へ委ねる。
 LNB 15Vは安全上の明示的opt-inとし、`px4d --allow-lnb-power`なしで受けた15V要求は、GPIOを書き込まず
@@ -247,6 +254,29 @@ slotとTSIDはIPC上で別fieldとし、値の大きさから暗黙判定しな�
   追記する仕様変更を先に行う。
 - firmwareの探索、ダウンロード、archive展開、vendor driverからの抽出は行わない。
 - git追跡対象、source archive、release artifactへfirmwareまたは元vendor driverを含めない。
+
+### 4.6 Enclosure enumeration
+
+`px4d --list`は、4.1節の通常列挙とgroupingで見つかった対象筐体をstdoutへ出力して終了する。
+利用側が4.1節のUSB IDや識別子規則を持たずに、`px4d --device`へ渡す識別子と各receiverの方式を得るための口である。
+
+- `--list`は単独でだけ受理し、他のoptionと組み合わせた場合はusage error（exit 2）とする。firmware、
+  runtime directory、稼働中の`px4d`を必要としない。
+- 列挙はdescriptorとserial stringの読み取りだけを行い、interfaceをclaimしない。firmware load、GPIO、
+  LNB、カードには触れない。別の`px4d`が所有中の筐体も列挙できる。
+- 出力は1行1 recordの空白区切り`key=value`とし、筐体ごとに次の順で出す。
+  - 筐体行: `serial=<識別子> model=<機種名> usb=<vid>:<pid> status=<状態> receivers=<数>`。
+    `serial`は`--device`へ渡す4.1節の識別子、`model`は4.1節の表の機種名、`usb`は4桁小文字16進、
+    `status`はgroupingの結果（`ready`、`incomplete`、`duplicate`、`invalid_observation`）とする。
+    `ready`以外の筐体に対して`px4d --device`は起動しない。
+  - 続く`receivers`個のreceiver行: `px4ctl list`（6.4節`LIST`）と同じ書式
+    `receiver=<ID> device=<dev_id> local=<local_id> system=<ISDB-T|ISDB-S|ISDB-T/S>`で、4.2節の表をそのまま出す。
+- 対象機種のUSB IDを持ちながらgroupingできなかったUSBデバイスは、筐体行の後に
+  `rejected serial=<serial> model=<機種名> usb=<vid>:<pid> status=<理由>`として1台1行で出す。`serial`の
+  印字可能ASCII（空白を除く）以外の文字は`?`に置き換える。対象機種以外のUSBデバイスは出力しない。
+- 対象筐体が1つもなければ何も出力せずexit 0とする。列挙自体の失敗はstderrへ理由を出し、6.5節の
+  exit codeで終了する。
+- native列挙のない経路（Android/Termuxのfd起動、FreeBSD base libusb）では`--list`の結果を保証しない。
 
 ## 5. IC card reader contract
 
@@ -564,13 +594,15 @@ Linux・Android・macOSを対象にする既存実装は確認できなかった
    MLT5系についても識別、warm初期化順序、CXD2856ER/CXD2858ER tune sequence、5 tag demux、LIST/STATUS値域、
    1 fd起動の試験が成功する。
 8. `smart_card_state_test`相当のATR、T=1、timeout、retry、APDU分割、抜去、再挿入試験が成功する。
-9. IPCの全messageについてgolden byte vector、malformed frame、version negotiation、権限、異常切断、
+9. `px4d --list`の出力について、Q3U4とMLT5系の筐体行とreceiver表、`incomplete`、`rejected`行と
+   serialの置換、対象筐体なしの試験が成功する。
+10. IPCの全messageについてgolden byte vector、malformed frame、version negotiation、権限、異常切断、
    slow-consumer/backpressure、CLI exit code試験が成功する。
-10. stream counter試験で、正常TS中に`empty_intervals`だけが非zeroでも成功し、他のerror counterが0でも
+11. stream counter試験で、正常TS中に`empty_intervals`だけが非zeroでも成功し、他のerror counterが0でも
     packet/byteの進行が5秒停止した場合は失敗する。
-11. fuzzまたは境界値試験でUSB response lengthとIPC payload lengthの範囲外アクセスがない。
-12. `git ls-files`にfirmware binary、vendor driver binary、kernel module、DKMS、Q3U4/MLT5系以外のdevice packageが残らない。
-13. 全派生source fileに`SPDX-License-Identifier: GPL-2.0-only`を付け、LICENSEがGPL-2.0を示す。
+12. fuzzまたは境界値試験でUSB response lengthとIPC payload lengthの範囲外アクセスがない。
+13. `git ls-files`にfirmware binary、vendor driver binary、kernel module、DKMS、Q3U4/MLT5系以外のdevice packageが残らない。
+14. 全派生source fileに`SPDX-License-Identifier: GPL-2.0-only`を付け、LICENSEがGPL-2.0を示す。
 
 ### 10.2 Q3U4 hardware acceptance on Linux
 
