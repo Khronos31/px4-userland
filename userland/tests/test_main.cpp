@@ -2660,6 +2660,37 @@ bool test_fd_enclosure_batch()
 #endif
 }
 
+bool test_native_enumeration_reports_unopened_devices()
+{
+    // `px4d --list` shows why a supported device is missing from the
+    // enclosures.  A root-owned USB node must read as open_failed, not as a
+    // bad serial derived from the string that could not be read.
+    auto api = std::unique_ptr<FakeApi>(new FakeApi);
+    FakeDevice first = fake_device("00000000000074", 1U);
+    FakeDevice second = fake_device("00000000000074", 2U);
+    api->devices = {&first, &second};
+    api->open_result = LIBUSB_ERROR_ACCESS;
+    const auto denied = RuntimeTestAccess::enumerate_native(std::move(api));
+    CHECK(denied);
+    CHECK(denied.value().groups.empty());
+    CHECK(denied.value().rejected.size() == 2U);
+    for (const RejectedObservation& rejected : denied.value().rejected) {
+        CHECK(rejected.status == ObservationStatus::open_failed);
+    }
+
+    auto readable_api = std::unique_ptr<FakeApi>(new FakeApi);
+    FakeDevice readable_first = fake_device("00000000000076", 1U);
+    FakeDevice readable_second = fake_device("00000000000076", 2U);
+    readable_api->devices = {&readable_second, &readable_first};
+    const auto readable = RuntimeTestAccess::enumerate_native(std::move(readable_api));
+    CHECK(readable);
+    CHECK(readable.value().rejected.empty());
+    CHECK(readable.value().groups.size() == 1U);
+    CHECK(readable.value().groups[0U].base_serial == "00000000000076");
+    CHECK(readable.value().groups[0U].status == GroupStatus::ready);
+    return true;
+}
+
 bool test_runtime_native_transaction_and_ownership()
 {
     std::vector<std::string> lifecycle;
@@ -3106,6 +3137,8 @@ int main(int argc, char** argv)
         {"stream_completion_submission_order", test_stream_completion_submission_order},
         {"fd_ownership_and_init_mode", test_fd_ownership_and_init_mode},
         {"fd_enclosure_batch", test_fd_enclosure_batch},
+        {"native_enumeration_reports_unopened_devices",
+         test_native_enumeration_reports_unopened_devices},
         {"runtime_native_transaction_and_ownership", test_runtime_native_transaction_and_ownership},
         {"runtime_context_serialization", test_runtime_context_serialization},
         {"command_event_dispatch_does_not_starve_stream_replenishment",

@@ -263,7 +263,8 @@ slotとTSIDはIPC上で別fieldとし、値の大きさから暗黙判定しな�
 - `--list`は単独でだけ受理し、他のoptionと組み合わせた場合はusage error（exit 2）とする。firmware、
   runtime directory、稼働中の`px4d`を必要としない。
 - 列挙はdescriptorとserial stringの読み取りだけを行い、interfaceをclaimしない。firmware load、GPIO、
-  LNB、カードには触れない。別の`px4d`が所有中の筐体も列挙できる。
+  LNB、カードには触れない。OSが所有中のデバイスのopenを許す環境では、別の`px4d`が所有中の筐体も
+  列挙できる。
 - 出力は1行1 recordの空白区切り`key=value`とし、筐体ごとに次の順で出す。
   - 筐体行: `serial=<識別子> model=<機種名> usb=<vid>:<pid> status=<状態> receivers=<数>`。
     `serial`は`--device`へ渡す4.1節の識別子、`model`は4.1節の表の機種名、`usb`は4桁小文字16進、
@@ -271,9 +272,12 @@ slotとTSIDはIPC上で別fieldとし、値の大きさから暗黙判定しな�
     `ready`以外の筐体に対して`px4d --device`は起動しない。
   - 続く`receivers`個のreceiver行: `px4ctl list`（6.4節`LIST`）と同じ書式
     `receiver=<ID> device=<dev_id> local=<local_id> system=<ISDB-T|ISDB-S|ISDB-T/S>`で、4.2節の表をそのまま出す。
-- 対象機種のUSB IDを持ちながらgroupingできなかったUSBデバイスは、筐体行の後に
-  `rejected serial=<serial> model=<機種名> usb=<vid>:<pid> status=<理由>`として1台1行で出す。`serial`の
+- 対象機種のUSB IDを持ちながら筐体にまとめられなかったUSBデバイスは、筐体行の後に
+  `rejected serial=<serial> model=<機種名> usb=<vid>:<pid> status=<理由>`として1台1行で出す。理由は
+  serialを読めない`invalid_serial`、またはopenできない`open_failed`（権限不足など。serialは空）とする。
+  openできなかったデバイスは、serialが空であることから`invalid_serial`と誤って報告しない。`serial`の
   印字可能ASCII（空白を除く）以外の文字は`?`に置き換える。対象機種以外のUSBデバイスは出力しない。
+  速度やtopologyが条件を満たさないデバイスは筐体にまとめたうえで、その筐体を`invalid_observation`とする。
 - 対象筐体が1つもなければ何も出力せずexit 0とする。列挙自体の失敗はstderrへ理由を出し、6.5節の
   exit codeで終了する。
 - native列挙のない経路（Android/Termuxのfd起動、FreeBSD base libusb）では`--list`の結果を保証しない。
@@ -595,7 +599,7 @@ Linux・Android・macOSを対象にする既存実装は確認できなかった
    1 fd起動の試験が成功する。
 8. `smart_card_state_test`相当のATR、T=1、timeout、retry、APDU分割、抜去、再挿入試験が成功する。
 9. `px4d --list`の出力について、Q3U4とMLT5系の筐体行とreceiver表、`incomplete`、`rejected`行と
-   serialの置換、対象筐体なしの試験が成功する。
+   serialの置換、対象筐体なしの試験、およびopenできないデバイスを`open_failed`として報告する列挙の試験が成功する。
 10. IPCの全messageについてgolden byte vector、malformed frame、version negotiation、権限、異常切断、
    slow-consumer/backpressure、CLI exit code試験が成功する。
 11. stream counter試験で、正常TS中に`empty_intervals`だけが非zeroでも成功し、他のerror counterが0でも

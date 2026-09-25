@@ -81,16 +81,16 @@ bool test_rejected_devices_of_supported_models_only()
 {
     GroupingResult grouping;
     grouping.rejected.push_back(
-        rejected(kPxMlt5PeProductId, "000020263901491", ObservationStatus::insufficient_speed));
+        rejected(kPxMlt5PeProductId, "", ObservationStatus::open_failed));
     // A serial descriptor is untrusted: it must not split or add a line.
     grouping.rejected.push_back(
         rejected(kQ3U4ProductId, "bad serial\nx", ObservationStatus::invalid_serial));
     // Other USB IDs are not this product's devices.
-    RejectedObservation other = rejected(0x084bU, "000012050009991", ObservationStatus::unsupported);
-    grouping.rejected.push_back(other);
+    grouping.rejected.push_back(
+        rejected(0x084bU, "000012050009991", ObservationStatus::unsupported));
 
     const std::string expected =
-        "rejected serial=000020263901491 model=PX-MLT5PE usb=0511:024e status=insufficient_speed\n"
+        "rejected serial= model=PX-MLT5PE usb=0511:024e status=open_failed\n"
         "rejected serial=bad?serial?x model=PX-Q3U4 usb=0511:084a status=invalid_serial\n";
     CHECK(tools::format_device_list(grouping) == expected);
     return true;
