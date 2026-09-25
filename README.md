@@ -7,6 +7,7 @@
 ### 対応機種
 
 - **PLEX PX-Q3U4**（USB ID `0511:084a`）
+- **PLEX PX-W3U4**（USB ID `0511:083f`）。Q3U4 の片側 1 本。受信機は 4（衛星 2、地デジ 2）。hardware-verified ではない
 - **PLEX PX-MLT5PE**（USB ID `0511:024e`）
 - **e-Better DTV02A-5TS-P**（USB ID `0511:924e`）
 
@@ -18,7 +19,6 @@
 
 | 機種 | USB ID |
 |---|---|
-| PX-W3U4 | `0511:083f` |
 | PX-W3PE4 | `0511:023f` |
 | PX-Q3PE4 | `0511:024a` |
 | PX-W3PE5 | `0511:073f` |

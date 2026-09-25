@@ -327,13 +327,14 @@ bool valid_tune(const TuneRequestPayload& value) noexcept
 
 bool valid_receiver_count(std::uint8_t count) noexcept
 {
-    return count == kQ3U4ReceiverCount || count == kMlt5PeReceiverCount;
+    return count == kQ3U4ReceiverCount || count == kW3U4ReceiverCount ||
+           count == kMlt5PeReceiverCount;
 }
 
-// The MLT5 family has a single USB device, dev_id 1.
+// Q3U4 is the only enclosure with two USB devices.
 std::uint8_t usb_present_mask_for(std::uint8_t count) noexcept
 {
-    return count == kMlt5PeReceiverCount ? 0x01U : kUsbPresentMask;
+    return count == kQ3U4ReceiverCount ? kUsbPresentMask : 0x01U;
 }
 
 // Precondition: valid_receiver_count(count) and global < count.

@@ -30,6 +30,7 @@ struct StreamLayout final {
 };
 
 constexpr StreamLayout kQ3U4Layout{2U, 4U, false};
+constexpr StreamLayout kW3U4Layout{1U, 4U, false};
 constexpr StreamLayout kMlt5PeLayout{1U, 5U, true};
 
 // The demodulator can assert lock before its TS output and the IT930x packet
@@ -1003,6 +1004,18 @@ Result<std::unique_ptr<Q3U4StreamDataPlane>> Q3U4StreamDataPlane::create(
 {
     auto impl = Impl::create(dev1, dev2, queue_packets,
                              StartupStabilizationPolicy{}, kQ3U4Layout);
+    if (!impl) return Result<std::unique_ptr<Q3U4StreamDataPlane>>::failure(impl.error());
+    std::unique_ptr<Q3U4StreamDataPlane> value(
+        new (std::nothrow) Q3U4StreamDataPlane(std::move(impl.value())));
+    if (!value) return Result<std::unique_ptr<Q3U4StreamDataPlane>>::failure(Error::INTERNAL);
+    return Result<std::unique_ptr<Q3U4StreamDataPlane>>::success(std::move(value));
+}
+
+Result<std::unique_ptr<Q3U4StreamDataPlane>> Q3U4StreamDataPlane::create_w3u4(
+    Transport& device, std::size_t queue_packets) noexcept
+{
+    auto impl = Impl::create(device, device, queue_packets,
+                             StartupStabilizationPolicy{}, kW3U4Layout);
     if (!impl) return Result<std::unique_ptr<Q3U4StreamDataPlane>>::failure(impl.error());
     std::unique_ptr<Q3U4StreamDataPlane> value(
         new (std::nothrow) Q3U4StreamDataPlane(std::move(impl.value())));

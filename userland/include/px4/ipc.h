@@ -94,6 +94,7 @@ enum class ReceiverState : std::uint8_t {
 
 // Receiver counts carried by LIST.  Each count has one fixed record table.
 inline constexpr std::uint8_t kQ3U4ReceiverCount = 8U;
+inline constexpr std::uint8_t kW3U4ReceiverCount = 4U;
 inline constexpr std::uint8_t kMlt5PeReceiverCount = 5U;
 
 enum class ShareMode : std::uint8_t {

@@ -185,6 +185,139 @@ int run_q3u4(const Px4dArguments& arguments, Q3U4Runtime& runtime,
                  0x03U, ipc::kQ3U4ReceiverCount);
 }
 
+// PX-W3U4 has no second bridge.  The Q3U4 coordinator still describes two
+// bridges; power and LNB calls for receivers 0..3 stay on the first, and the
+// second answers success without a USB write.
+class AbsentBridgePower final : public Q3U4BackendPower {
+public:
+    Result<void> set_backend_power(bool, Q3U4Delay&) noexcept override
+    {
+        return Result<void>::success();
+    }
+};
+
+class W3U4TunerBackend final : public TunerServiceBackend {
+public:
+    W3U4TunerBackend(Q3U4FrontendEnclosure& enclosure,
+                     Q3U4LnbPowerCoordinator& lnb_power) noexcept
+        : inner_(enclosure, lnb_power)
+    {
+    }
+
+    std::uint8_t receiver_count() const noexcept override
+    {
+        return ipc::kW3U4ReceiverCount;
+    }
+
+    bool receiver_supports(std::uint8_t receiver, ipc::System system) const noexcept override
+    {
+        if (receiver >= ipc::kW3U4ReceiverCount) return false;
+        const bool satellite = receiver < 2U;
+        return system == (satellite ? ipc::System::ISDB_S : ipc::System::ISDB_T);
+    }
+
+    bool requires_terrestrial_lock_settle() const noexcept override { return true; }
+
+    Result<void> open_receiver(std::uint8_t receiver) noexcept override
+    {
+        return inner_.open_receiver(receiver);
+    }
+    Result<void> tune_terrestrial(std::uint8_t receiver, std::uint32_t frequency_khz,
+                                  std::uint32_t timeout_ms) noexcept override
+    {
+        return inner_.tune_terrestrial(receiver, frequency_khz, timeout_ms);
+    }
+    Result<void> tune_satellite(std::uint8_t receiver, std::uint32_t frequency_khz,
+                                std::uint32_t timeout_ms) noexcept override
+    {
+        return inner_.tune_satellite(receiver, frequency_khz, timeout_ms);
+    }
+    Result<bool> is_locked(std::uint8_t receiver, ipc::System system) noexcept override
+    {
+        return inner_.is_locked(receiver, system);
+    }
+    Result<void> select_satellite_slot(std::uint8_t receiver, std::uint8_t slot,
+                                       std::uint32_t timeout_ms) noexcept override
+    {
+        return inner_.select_satellite_slot(receiver, slot, timeout_ms);
+    }
+    Result<void> select_satellite_tsid(std::uint8_t receiver, std::uint16_t tsid,
+                                       std::uint32_t timeout_ms) noexcept override
+    {
+        return inner_.select_satellite_tsid(receiver, tsid, timeout_ms);
+    }
+    Result<void> close_receiver(std::uint8_t receiver) noexcept override
+    {
+        return inner_.close_receiver(receiver);
+    }
+    Result<void> start_capture(std::uint8_t receiver, ipc::System system) noexcept override
+    {
+        return inner_.start_capture(receiver, system);
+    }
+    Result<void> stop_capture(std::uint8_t receiver, ipc::System system) noexcept override
+    {
+        return inner_.stop_capture(receiver, system);
+    }
+    Result<void> begin_tune_power(std::uint8_t receiver, ipc::System system,
+                                  std::uint8_t lnb_voltage) noexcept override
+    {
+        return inner_.begin_tune_power(receiver, system, lnb_voltage);
+    }
+    Result<void> commit_tune_power(std::uint8_t receiver) noexcept override
+    {
+        return inner_.commit_tune_power(receiver);
+    }
+    Result<void> rollback_tune_power(std::uint8_t receiver) noexcept override
+    {
+        return inner_.rollback_tune_power(receiver);
+    }
+    void mark_receiver_disconnected(std::uint8_t receiver) noexcept override
+    {
+        inner_.mark_receiver_disconnected(receiver);
+    }
+    Result<void> shutdown() noexcept override { return inner_.shutdown(); }
+
+private:
+    Q3U4FrontendTunerBackend inner_;
+};
+
+int run_w3u4(const Px4dArguments& arguments, Q3U4Runtime& runtime,
+             const FirmwareImage& firmware, const std::string& base_serial) noexcept
+{
+    It930xController device(runtime.dev1());
+    const auto initialized = device.initialize_q3u4(firmware);
+    if (!initialized) {
+        std::fprintf(stderr, "device initialize: %s\n", error_string(initialized.error()));
+        return exit_status(initialized.error());
+    }
+
+    DaemonTime time;
+    It930xBridgeI2cMaster bridge_i2c(device);
+    It930xBackendPower power(device);
+    AbsentBridgePower absent_power;
+    It930xPsbPurger purger(device);
+    Q3U4FrontendEnclosure enclosure(bridge_i2c, bridge_i2c, power, absent_power,
+                                    time, &purger, nullptr);
+    Q3U4CardBackend backend(device, enclosure);
+    It930xCardHardware card_hardware(device);
+    CardSession card_session(card_hardware, time);
+    NativeCardProtocolSession protocol(card_session);
+    CardService card_service(backend, protocol);
+    It930xLnbPower lnb(device);
+    Q3U4LnbPowerCoordinator lnb_power(lnb, lnb, arguments.allow_lnb_power);
+    W3U4TunerBackend tuner_backend(enclosure, lnb_power);
+    PosixTunerNonceSource nonce_source;
+    const auto stream = Q3U4StreamDataPlane::create_w3u4(runtime.dev1());
+    if (!stream) {
+        std::fprintf(stderr, "stream data plane: %s\n", error_string(stream.error()));
+        return exit_status(stream.error());
+    }
+    TunerService tuner_service(tuner_backend, nonce_source, time, nullptr, nullptr,
+                               stream.value().get());
+    return serve(arguments, base_serial, card_service, tuner_service, *stream.value(),
+                 0x01U, ipc::kW3U4ReceiverCount);
+}
+
 int run_mlt5pe(const Px4dArguments& arguments, Q3U4Runtime& runtime,
                const FirmwareImage& firmware, const std::string& base_serial) noexcept
 {
@@ -263,6 +396,7 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "device open: %s\n", error_string(runtime.error()));
         return exit_status(runtime.error());
     }
+    const DeviceModel model = runtime.value()->model();
     const bool single_bridge = runtime.value()->bridge_count() == 1U;
     // Every --fd must belong to the selected enclosure: an extra descriptor
     // that selection ignored is an argument error, not a silent leftover.
@@ -277,7 +411,10 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "device open: invalid observed base serial\n");
         return exit_status(Error::INVALID_ARGUMENT);
     }
-    std::fprintf(stderr, "px4d device: %s\n", device_profile(runtime.value()->model()).name);
+    std::fprintf(stderr, "px4d device: %s\n", device_profile(model).name);
+    if (model == DeviceModel::px_w3u4) {
+        return run_w3u4(arguments, *runtime.value(), firmware.value(), base_serial);
+    }
     return single_bridge
         ? run_mlt5pe(arguments, *runtime.value(), firmware.value(), base_serial)
         : run_q3u4(arguments, *runtime.value(), firmware.value(), base_serial);

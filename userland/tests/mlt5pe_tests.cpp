@@ -59,6 +59,9 @@ bool test_identity()
     MLT_CHECK(device_profile_for_usb_id(0x0511U, 0x924eU)->model ==
               DeviceModel::dtv02a_5ts_p);
     MLT_CHECK(device_profile_for_usb_id(0x0511U, 0x084aU)->model == DeviceModel::px_q3u4);
+    MLT_CHECK(device_profile_for_usb_id(0x0511U, 0x083fU)->model == DeviceModel::px_w3u4);
+    MLT_CHECK(device_profile(DeviceModel::px_w3u4).bridge_count == 1U &&
+              device_profile(DeviceModel::px_w3u4).receiver_count == 4U);
     // Other PX-MLT/ISDB6014 product IDs remain unsupported.
     MLT_CHECK(device_profile_for_usb_id(0x0511U, 0x084eU) == nullptr);
     MLT_CHECK(device_profile_for_usb_id(0x0511U, 0x0252U) == nullptr);
@@ -86,6 +89,18 @@ bool test_identity()
     auto slow = dtv;
     slow.speed = UsbSpeed::full;
     MLT_CHECK(validate_q3u4_observation(slow) == ObservationStatus::insufficient_speed);
+
+    const auto w3u4_a = observation(kW3U4ProductId, "000012050009601");
+    const auto w3u4_b = observation(kW3U4ProductId, "000012050009602");
+    MLT_CHECK(validate_q3u4_observation(w3u4_a) == ObservationStatus::usable);
+    const auto w3u4_grouped = group_q3u4_devices(
+        std::vector<DeviceObservation>{w3u4_a, w3u4_b});
+    MLT_CHECK(w3u4_grouped && w3u4_grouped.value().groups.size() == 2U);
+    for (const Q3U4Group& group : w3u4_grouped.value().groups) {
+        MLT_CHECK(group.status == GroupStatus::ready &&
+                  group.model == DeviceModel::px_w3u4 && group.devices[0U] &&
+                  !group.devices[1U]);
+    }
 
     const auto q3u4_main = observation(kQ3U4ProductId, "000012050009601");
     const auto q3u4_sub = observation(kQ3U4ProductId, "000012050009602");
@@ -163,6 +178,27 @@ bool test_ipc_list_and_status()
     MLT_CHECK(!ipc::decode_list_response_payload(ByteView{tampered.data(), encoded.value()}));
 
     // Q3U4 keeps its fixed table and default count.
+    const auto w3u4 = ipc::receiver_records(ipc::kW3U4ReceiverCount);
+    MLT_CHECK(w3u4);
+    MLT_CHECK(w3u4.value()[0].system == ipc::System::ISDB_S &&
+              w3u4.value()[0].dev_id == 1U && w3u4.value()[0].local_id == 0U);
+    MLT_CHECK(w3u4.value()[2].system == ipc::System::ISDB_T &&
+              w3u4.value()[2].local_id == 2U);
+    const std::string w3u4_serial = "000012050009601";
+    ipc::ListResponsePayload w3u4_list{
+        1U,
+        ByteView{reinterpret_cast<const std::uint8_t*>(w3u4_serial.data()), w3u4_serial.size()},
+        1U, 0x01U, w3u4.value(), ipc::kW3U4ReceiverCount};
+    const auto w3u4_encoded =
+        ipc::encode_payload(w3u4_list, MutableByteView{buffer.data(), buffer.size()});
+    MLT_CHECK(w3u4_encoded && w3u4_encoded.value() == 14U + w3u4_serial.size() + 4U * 4U);
+    const auto w3u4_decoded = ipc::decode_list_response_payload(
+        ByteView{buffer.data(), w3u4_encoded.value()});
+    MLT_CHECK(w3u4_decoded && w3u4_decoded.value().receiver_count == 4U &&
+              w3u4_decoded.value().usb_present_mask == 0x01U &&
+              w3u4_decoded.value().receivers[1].system == ipc::System::ISDB_S &&
+              w3u4_decoded.value().receivers[3].system == ipc::System::ISDB_T);
+
     const auto q3u4 = ipc::receiver_records(ipc::kQ3U4ReceiverCount);
     MLT_CHECK(q3u4 && q3u4.value()[4U].dev_id == 2U &&
               q3u4.value()[4U].system == ipc::System::ISDB_S);

@@ -34,6 +34,10 @@ public:
     // 0..4, each attachable as ISDB-T or ISDB-S.
     static Result<std::unique_ptr<Q3U4StreamDataPlane>> create_mlt5pe(
         Transport& device, std::size_t queue_packets = kDefaultQueuePackets) noexcept;
+    // PX-W3U4: one Q3U4 bridge.  Tags 1..4 map to receivers 0..3, with the
+    // same fixed systems (0/1 ISDB-S, 2/3 ISDB-T).
+    static Result<std::unique_ptr<Q3U4StreamDataPlane>> create_w3u4(
+        Transport& device, std::size_t queue_packets = kDefaultQueuePackets) noexcept;
     ~Q3U4StreamDataPlane() noexcept override;
 
     Q3U4StreamDataPlane(const Q3U4StreamDataPlane&) = delete;

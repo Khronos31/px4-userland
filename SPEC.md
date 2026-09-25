@@ -92,8 +92,9 @@ support matrixと実機検証経路は次のとおりとする。
 - ファームウェアのダウンロード、vendor driverからの抽出、変換機能。
 - mirakcの同梱またはmirakc側の変更。
 - Home Assistantアドオンの作成または変更。
-- PX-W3U4、PX-Q3PE4、PX-Q3PE5、PX-W3PE5、PX-MLT5U、PX-MLT8PE3、PX-MLT8PE5、ISDB6014、ISDB2056、
-  DTV02A-1T1S-Uなど、Q3U4およびMLT5系（PX-MLT5PE、DTV02A-5TS-P）以外の動作保証。
+- PX-Q3PE4、PX-Q3PE5、PX-W3PE5、PX-MLT5U、PX-MLT8PE3、PX-MLT8PE5、ISDB6014、ISDB2056、
+  DTV02A-1T1S-Uなど、Q3U4、PX-W3U4、およびMLT5系（PX-MLT5PE、DTV02A-5TS-P）以外の動作保証。
+  PX-W3U4 は実装するが hardware-verified ではない。
 - 配布用Android APKまたはdtv-androidへの統合。Google TV Streamer実機検証用のad-hoc APKは試験器具として許容する。
 - B-CAS/ACASの暗号処理、ECM処理、TSのスクランブル解除。
 - ネットワーク越しの利用。IPCは同一ホスト内に限定する。

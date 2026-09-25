@@ -14,8 +14,9 @@
 namespace px4::userland {
 namespace {
 
-constexpr std::array<DeviceProfile, 3U> kDeviceProfiles{{
+constexpr std::array<DeviceProfile, 4U> kDeviceProfiles{{
     {DeviceModel::px_q3u4, kQ3U4ProductId, "PX-Q3U4", 2U, 8U},
+    {DeviceModel::px_w3u4, kW3U4ProductId, "PX-W3U4", 1U, 4U},
     {DeviceModel::px_mlt5pe, kPxMlt5PeProductId, "PX-MLT5PE", 1U, 5U},
     {DeviceModel::dtv02a_5ts_p, kDtv02a5TsPProductId, "DTV02A-5TS-P", 1U, 5U},
 }};
