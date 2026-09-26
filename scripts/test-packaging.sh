@@ -209,6 +209,19 @@ if PATH="$script_dir/testdata:$PATH" PX4_TEST_OTOOL_MODE=bad-ifd-libusb \
     printf '%s\n' 'negative macOS IFD libusb linkage test failed' >&2
     exit 1
 fi
+for otool_mode in bad-libusb bad-homebrew; do
+    if PATH="$script_dir/testdata:$PATH" PX4_TEST_OTOOL_MODE="$otool_mode" \
+        python3 "$script_dir/audit-artifact.py" --platform darwin-arm64 --build-dir "$test_root/macos-build" \
+        --ifd-bundle "$test_root/ifd.bundle"; then
+        printf '%s\n' "negative macOS $otool_mode linkage test failed" >&2
+        exit 1
+    fi
+done
+tar -xOzf "$test_root/out-macos/px4-userland-$version-darwin-arm64.tar.gz" \
+    DEPENDENCY-NOTICE.txt | grep -Fx 'dependency.libusb.linkage=static' >/dev/null
+tar -xOzf "$test_root/out-macos/px4-userland-$version-darwin-arm64.tar.gz" \
+    DEPENDENCY-NOTICE.txt | grep -Fx "corresponding-source-archive=px4-userland-$version-source.tar.gz" >/dev/null
+printf '%s\n' 'macOS static libusb linkage tests: PASS'
 real_android_platform=${PX4_REAL_ANDROID_PLATFORM:-}
 real_android_build_dir=${PX4_REAL_ANDROID_BUILD_DIR:-}
 real_android_link_map_dir=${PX4_REAL_ANDROID_LINK_MAP_DIR:-}

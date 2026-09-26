@@ -44,11 +44,17 @@ if modified.count(new) != 2:
     raise SystemExit(f"expected two replacement URLs after replacement, found {modified.count(new)}")
 p.write_text(modified, newline="\n")
 PY
-"$root/scripts/build-linux-static.sh" --output "$work/original" --libusb-source-dir "$work/original-source"
-"$root/scripts/build-linux-static.sh" --output "$work/modified" --libusb-source-dir "$work/modified-source"
-orig=$(sha256sum "$work/original/px4d" | awk '{print $1}')
-changed=$(sha256sum "$work/modified/px4d" | awk '{print $1}')
-[ "$orig" != "$changed" ] || { printf '%s\n' 'relink did not change px4d' >&2; exit 1; }
+if [ "$(uname -s)" = Darwin ]; then
+    "$root/scripts/build-macos-static.sh" --build-dir "$work/original" --libusb-source-dir "$work/original-source"
+    "$root/scripts/build-macos-static.sh" --build-dir "$work/modified" --libusb-source-dir "$work/modified-source"
+else
+    "$root/scripts/build-linux-static.sh" --output "$work/original" --libusb-source-dir "$work/original-source"
+    "$root/scripts/build-linux-static.sh" --output "$work/modified" --libusb-source-dir "$work/modified-source"
+fi
+if cmp -s "$work/original/px4d" "$work/modified/px4d"; then
+    printf '%s\n' 'relink did not change px4d' >&2
+    exit 1
+fi
 modified_marker_count=$(strings "$work/modified/px4d" | grep -F -c 'libusb.relink-test.invalid' || true)
 [ "$modified_marker_count" -ge 1 ] || {
     printf '%s\n' 'modified libusb marker is absent from relinked px4d' >&2

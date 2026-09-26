@@ -74,7 +74,7 @@ IT930x ファームウェアは本ソフトウェアに同梱されていませ�
 ### 実行時ライブラリ
 
 - **Linux**: `px4d`、`px4-ts`、`px4ctl` はPT_INTERPとDT_NEEDEDを持たないmusl完全静的ELFです。PC/SCリーダーとして利用する場合は、hostの`pcscd`が読み込むlibc別（glibcまたはmusl）のIFD Handlerが必要です。
-- **macOS**: ホスト環境の libusb、PC/SC デーモン。
+- **macOS**: libusb は実行ファイルへ静的リンク済みで、Homebrew の libusb は不要です。`px4d`、`px4-ts`、`px4ctl` は macOS 標準のライブラリとフレームワークだけに依存します。PC/SC リーダーとして利用する場合は PC/SC デーモンが必要です。
 - **Android**: libusb は実行ファイルへ静的リンク済みです。Termux 環境で `px4-termux` を利用する場合は、Termux:API アプリ、`termux-api` パッケージ（`termux-usb` を提供）、および依存関係である `util-linux`（`setsid` を提供）が必要です。Python や補助デーモンは不要です。
 
 ### Linux の USB アクセス権限
@@ -428,6 +428,14 @@ production executableを作り、hostのPC/SC IFDは`build-linux-ifd.sh`で別�
 scripts/build-linux-static.sh --output build-linux-static
 scripts/build-linux-ifd.sh --libc glibc --output build-linux-ifd-glibc
 scripts/build-linux-ifd.sh --libc musl --output build-linux-ifd-musl
+```
+
+macOS arm64のrelease buildでは、`build-macos-static.sh`が固定sourceのlibusb 1.0.30を
+静的libraryとしてbuildし、3つのproduction executableとPC/SC IFD bundleをbuildする。
+
+```sh
+scripts/build-macos-static.sh --build-dir build-macos \
+  --pcsc-include-dir "$(brew --prefix pcsc-lite)/include/PCSC"
 ```
 
 固定sourceからの再buildやrelinkが必要な場合は、対応source archiveに含まれる

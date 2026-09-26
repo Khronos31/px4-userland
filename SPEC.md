@@ -1,9 +1,23 @@
 # px4-userland 仕様
 
-Status: Frozen v0.19 (2026-09-25)
+Status: Frozen v0.20 (2026-09-26)
 
 本書の`MUST`、`MUST NOT`、`SHOULD`は規範要件を示す。実機観測で前提の誤りが判明した場合も暗黙に
 実装だけを変えず、本書のversionと変更理由を更新してから実装する。
+
+v0.20では、macOS（darwin-arm64）のproduction executableへlibusb 1.0.30を静的リンクする。v0.19までは
+host-provided dynamic libusbを意図しており、配布した`px4d`がHomebrewのlibusb dylibを要求していた。macOS利用者に
+Homebrew導入を求めないよう、LinuxおよびAndroidと同じ固定source・checksumのlibusbを使い、7.3節の規定どおり
+exact source、license、notice、build/relink obligationsへ切り替える（7.3節、10.4節）。
+
+### v0.20 change record (2026-09-26)
+
+- 7.3節、10.4節: macOS production executableはlibusb 1.0.30を静的包含し、`otool -L`でlibusb dylibと
+  macOS system（`/usr/lib/`、`/System/Library/`）以外のdependencyを持たないことを検証する。IFD bundleはlibusbを
+  linkしないまま変えない。libusbのexact source、notice、relink instructionsはLinuxと同じ対応source archiveで提供し、
+  relinkはmacOS上でもCIで検証する。
+- 10.4節: Linux、macOS、Androidの全binary archiveに、検証済みlibusb 1.0.30のexact `libusb/COPYING`を含める。
+  binary noticeでこの同梱を明示し、別個のcorresponding-source archiveはexact sourceとbuild/relink materialsを提供する。
 
 v0.19では、同一lease内の再選局（same-lease retune）を許す。`STOP_STREAM`で`consumed`になったleaseでも
 `TUNE`成功後に`START_STREAM`を再実行できる。wire形式は変えない。`ATTACH_STREAM`のnonceは`ACQUIRE`が
@@ -620,8 +634,9 @@ queue overflow、sync/TEI/drop検出を0にしない。stdoutはTSだけ、全�
 - Linux production executableはlibusb 1.0.30を静的包含したmusl完全静的ELFとし、`readelf -l`のPT_INTERPと
   `readelf -d`のDT_NEEDEDを持たないことを検証する。IFD Handlerだけはhost-loadable shared objectとし、
   glibc archiveはglibc 2.31 baseline、musl archiveはmatching musl ABIでビルドする。
-  macOS Mach-Oは`otool -L`でhost-provided dynamic libusbを検証し、各出力をrelease evidenceへ保存する。
-  staticになっていたbinaryはdynamic releaseとして出さない。
+  macOS production executableはlibusb 1.0.30を静的包含したMach-Oとし、`otool -L`でlibusb dylibを持たず、
+  dependencyがmacOS system（`/usr/lib/`、`/System/Library/`）だけであることを検証して、各出力をrelease evidenceへ
+  保存する。macOS IFD bundleはlibusbをlinkしない。staticになっていたbinaryはdynamic releaseとして出さない。
 - libusb、pcsc-lite、その他のhost dependencyをstaticまたはbundleした場合は、Androidと同等のexact source、license、
   notice、build/relink obligationsへ切り替える。
 
@@ -809,19 +824,21 @@ Latitude native、Latitude Alpine Dockerは別runtime経路であり、いずれ
 | `px4-userland-<version>-android-armv7a.tar.gz` | Android API 24+、Bionic armv7a、Termux/Google TV用 |
 | `px4-userland-<version>-android-x86_64.tar.gz` | Android API 24+、Bionic x86_64、Termux/Bliss OS用 |
 
-各archiveは該当platformの`px4d`、`px4-ts`、`px4ctl`、利用可能なnative card adapter、GPL license、READMEを含む。
+各archiveは該当platformの`px4d`、`px4-ts`、`px4ctl`、利用可能なnative card adapter、GPL license、README、検証済み
+libusb 1.0.30のexact `libusb/COPYING`を含む。license textは追跡対象のpackaging materialからofflineで包装し、hashを検査する。
 Android archiveは既存の3つのELFに加え、libusbをリンクしないシェルランチャー `px4-termux` を含む。既存3 ELFの
 inventory、LGPL、NDK、corresponding-source、relink監査は弱めない。ランチャーはELF/static-link inventoryの
 対象外であることを監査上明示する。
 Linuxの3実行ファイルはlibusb 1.0.30を静的包含したmusl完全静的ELFとし、IFDだけがarchive名のhost libcに依存する。
-Android版libusbはstatic linkとし、macOSはhost-provided dynamic dependencyを意図する。firmware、APK、HAOS add-on、
+Android版とmacOS版のlibusbもstatic linkとし、macOSの3実行ファイルはmacOS system libraryとframework以外に
+依存しない。firmware、APK、HAOS add-on、
 mirakcはどのrelease artifactにも含めない。
 source archiveは `__pycache__/`、`.pyc`、`.pyo`、`.pyd` などのPythonバイトコードを含めない。
 
-Android binary release gateは次の全項目を満たすまで未完成とする。
+全対応platform共通のbinary archive release gateは次の全項目を満たすまで未完成とする。
 
-1. 各Android binary archiveのrootにGPL license (`LICENSE`)、libusb LGPL license/COPYING、static libusb 1.0.30と
-   NDK runtimeを明示するprominent plain-text notice、`THIRD_PARTY_NOTICES.md`、`README.md`を含める。
+1. 各binary archiveにGPL license (`LICENSE`)、exact libusb LGPL license/COPYING、prominent plain-text notice、
+   `THIRD_PARTY_NOTICES.md`、`README.md`を含める。Android noticeはstatic libusb 1.0.30とNDK runtimeも明示する。
 2. 同じGitHub Release pageにcorresponding-source archiveをbinary archiveと同行させ、exact px4-userland source、
    binaryに使ったexact libusb source、各sourceの検証hash、build/relink instructionsを含める。GitHub自動source
    archiveだけでは、downloaded libusb sourceがないためこの要件を満たさない。
@@ -832,8 +849,11 @@ Android binary release gateは次の全項目を満たすまで未完成とす�
 4. NDK r27の`libc++_static`/`libc++abi`について、Apache-2.0 WITH LLVM-exceptionのterms、`NOTICE`、
    `NOTICE.toolchain`をreleaseへ含め、実際にlinkされたarchive member inventoryをartifactごとに保存する。
 5. Linux production executableは`readelf -l`でPT_INTERPなし、`readelf -d`でDT_NEEDEDなしを検証する。Linux IFDは
-   archive名に対応するglibc 2.31またはmuslのshared objectとして監査し、macOS binaryは`otool -L`でdynamic libusbを検証する。
-6. Linux static libusbのexact source、license text、notice、build/relink instructionsは対応source archiveへ含める。
+   archive名に対応するglibc 2.31またはmuslのshared objectとして監査し、macOS binaryは`otool -L`でlibusb dylibと
+   macOS system以外のdependencyがないことを検証する。
+6. Linux/macOS static libusbのexact source、license text、notice、build/relink instructionsは対応source archiveへ含める。
+   Linux/macOS binary archiveの`DEPENDENCY-NOTICE.txt`はstatic libusb 1.0.30、LGPL-2.1-or-later、対応source archive名を
+   明示し、全platformのbinary archiveで`libusb/COPYING`が検証済みexact license textと一致することを監査する。
 
 このgateの包装・manifest・checksum・binary/source archive auditは、local packaging scriptsと
 `.github/workflows/build_userland.yml`の`release-candidate` workflowとして実装済みである。workflowはtagや

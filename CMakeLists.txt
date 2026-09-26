@@ -66,6 +66,8 @@ endif()
 
 set(PX4_LIBUSB_INCLUDE_DIR "" CACHE PATH "libusb-1.0 include directory override")
 set(PX4_LIBUSB_LIBRARY "" CACHE FILEPATH "libusb-1.0 library override")
+set(PX4_LIBUSB_LINK_LIBRARIES "" CACHE STRING
+    "Extra link items a static PX4_LIBUSB_LIBRARY needs (its pkg-config Libs.private)")
 
 find_package(Threads REQUIRED)
 
@@ -115,6 +117,12 @@ if(PX4_ENABLE_LIBUSB)
             INTERFACE_INCLUDE_DIRECTORIES "${PX4_LIBUSB_INCLUDE_DIR}"
         )
         set(PX4_LIBUSB_TARGET px4_libusb)
+    endif()
+    if(TARGET px4_libusb AND PX4_LIBUSB_LINK_LIBRARIES)
+        separate_arguments(px4_libusb_link_items UNIX_COMMAND
+            "${PX4_LIBUSB_LINK_LIBRARIES}")
+        set_property(TARGET px4_libusb PROPERTY
+            INTERFACE_LINK_LIBRARIES ${px4_libusb_link_items})
     endif()
 endif()
 

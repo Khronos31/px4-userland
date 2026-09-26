@@ -195,7 +195,7 @@ def main() -> int:
             "dependency.libusb.linkage=static\n"
             "corresponding-source-archive=present\n\n"
             "This archive contains the exact repository source snapshot and verified libusb 1.0.30 source "
-            "needed to rebuild or relink the Linux static and Android binaries. See BUILD-RELINK.md, THIRD_PARTY_NOTICES.md, "
+            "needed to rebuild or relink the Linux static, macOS, and Android binaries. See BUILD-RELINK.md, THIRD_PARTY_NOTICES.md, "
             "and third_party/libusb-1.0.30/COPYING.\n",
         )
         write_file(stage / "DEPENDENCY-NOTICE.txt", notice.encode())

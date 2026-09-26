@@ -2,4 +2,6 @@ IMPORTANT DEPENDENCY NOTICE
 
 px4-userland @VERSION@ dependency notice for @PLATFORM@
 
+Every Linux, macOS, and Android binary archive includes the exact libusb 1.0.30 license text at `libusb/COPYING`.
+
 @DEPENDENCY_TEXT@

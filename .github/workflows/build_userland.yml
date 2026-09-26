@@ -255,6 +255,28 @@ jobs:
             scripts/test-static-relink.sh --libusb-source-archive /src/third_party/libusb-1.0.30.tar.bz2'
           find "$source_root" -depth -delete
 
+  source-relink-macos:
+    name: Corresponding-source static relink proof macOS arm64
+    needs: source-archive
+    runs-on: macos-14
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: rc-source
+          path: ${{ runner.temp }}/source-archive
+      - name: Relink modified libusb source on macOS
+        run: |
+          set -eu
+          brew install ninja
+          source_root="$RUNNER_TEMP/source-root"
+          mkdir -p "$source_root"
+          tar -xzf "$RUNNER_TEMP"/source-archive/*.tar.gz -C "$source_root"
+          test -f "$source_root/third_party/libusb-1.0.30.tar.bz2"
+          cd "$source_root/repository"
+          scripts/test-static-relink.sh --libusb-source-archive "$source_root/third_party/libusb-1.0.30.tar.bz2"
+          cd "$RUNNER_TEMP"
+          find "$source_root" -depth -delete
+
   macos:
     name: macOS
     runs-on: macos-14
@@ -262,20 +284,19 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Install build tools
         run: |
-          brew install ninja libusb pcsc-lite pkgconf
+          brew install ninja pcsc-lite pkgconf
           command -v otool
           command -v nm
           command -v strip
-      - name: Build and test
+      - name: Build with static libusb 1.0.30 and test
         run: |
           pcsc_prefix="$(brew --prefix pcsc-lite)"
           pcsc_include="$pcsc_prefix/include/PCSC"
-          PKG_CONFIG_PATH="$(brew --prefix libusb)/lib/pkgconfig:$pcsc_prefix/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+          PKG_CONFIG_PATH="$pcsc_prefix/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
           export PKG_CONFIG_PATH
           pkg-config --modversion libpcsclite
-          cmake -S . -B build-userland -G Ninja -DCMAKE_BUILD_TYPE=Release -DPX4_BUILD_TESTS=ON -DPX4_REQUIRE_PCSC_IFD=ON -DPX4_PCSC_IFD_INCLUDE_DIR:PATH="$pcsc_include"
+          scripts/build-macos-static.sh --build-dir build-userland --pcsc-include-dir "$pcsc_include" --tests
           test "$(sed -n 's/^PX4_PCSC_IFD_INCLUDE_DIR:PATH=//p' build-userland/CMakeCache.txt)" = "$pcsc_include"
-          cmake --build build-userland
           ctest --test-dir build-userland -R '^px4_ifd_(tests|symbols)$' --no-tests=error --output-on-failure
           ctest --test-dir build-userland --output-on-failure
           version="$(tr -d '\n' < VERSION)"
@@ -284,6 +305,15 @@ jobs:
             --build-dir build-userland --ifd-bundle build-userland/px4-userland-ifd.bundle \
             --reader-template packaging/pcsc/reader.conf.d/px4-userland.conf.in \
             --output-dir "$RUNNER_TEMP/release-candidate/macos"
+          extract="$RUNNER_TEMP/packaged-macos"
+          mkdir -p "$extract"
+          tar -xzf "$RUNNER_TEMP/release-candidate/macos/px4-userland-$version-darwin-arm64.tar.gz" -C "$extract"
+          for program in px4d px4-ts px4ctl; do
+            otool -L "$extract/$program"
+            if otool -L "$extract/$program" | grep -F libusb; then exit 1; fi
+            "$extract/$program" --help
+          done
+          find "$extract" -depth -delete
       - name: Upload macOS candidate archive
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -371,7 +401,7 @@ jobs:
 
   release-candidate:
     name: Assemble release-candidate artifact
-    needs: [ubuntu-glibc-tests, linux-x86_64, linux-aarch64, static-start-x86_64, static-start-aarch64, source-relink-x86_64, source-relink-aarch64, macos, android-api-24, source-archive]
+    needs: [ubuntu-glibc-tests, linux-x86_64, linux-aarch64, static-start-x86_64, static-start-aarch64, source-relink-x86_64, source-relink-aarch64, source-relink-macos, macos, android-api-24, source-archive]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2

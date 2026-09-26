@@ -3,7 +3,7 @@
 This corresponding-source archive records repository commit `@COMMIT@` and
 tree `@TREE@`. The `repository/` directory is the exact tracked source tree;
 `third_party/libusb-1.0.30/` and its original verified source archive are the
-libusb sources used for the static Linux and Android binaries.
+libusb sources used for the static Linux, macOS, and Android binaries.
 
 ## Linux static build and IFD variants
 
@@ -70,22 +70,26 @@ The production release evidence path intentionally accepts only the pinned,
 checksum-verified libusb source archive; local relink builds do not emit that
 release evidence.
 
-## macOS arm64 rebuild
+## macOS arm64 rebuild and LGPL relink
 
-Install CMake, Ninja, Homebrew libusb, pkgconf, and Homebrew pcsc-lite. Export
-their pkg-config paths, configure with the exact pcsc-lite include directory,
-and build the CLIs and bundle:
+Install the Xcode command line tools, CMake, Ninja, and Homebrew pcsc-lite
+(for the IFD headers only). From this archive root, build libusb 1.0.30 as a
+static library from the verified source archive, then `px4d` linked against
+it together with `px4-ts`, `px4ctl`, and the IFD bundle:
 
 ```sh
-pcsc_prefix="$(brew --prefix pcsc-lite)"
-export PKG_CONFIG_PATH="$(brew --prefix libusb)/lib/pkgconfig:$pcsc_prefix/lib/pkgconfig"
-cmake -S repository -B build-macos -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DPX4_BUILD_TESTS=OFF \
-  -DPX4_REQUIRE_PCSC_IFD=ON \
-  -DPX4_PCSC_IFD_INCLUDE_DIR="$pcsc_prefix/include/PCSC"
-cmake --build build-macos --target px4d px4-ts px4ctl px4_ifd_bundle
+cd repository
+scripts/build-macos-static.sh --build-dir ../build-macos \
+  --pcsc-include-dir "$(brew --prefix pcsc-lite)/include/PCSC" \
+  --libusb-source-archive ../third_party/libusb-1.0.30.tar.bz2
+scripts/test-static-relink.sh \
+  --libusb-source-archive ../third_party/libusb-1.0.30.tar.bz2
 ```
 
-The macOS products intentionally use host-provided shared libusb. Firmware
-is neither required to compile nor present in this archive.
+To relink with a modified LGPL libusb, modify a copy of
+`third_party/libusb-1.0.30/` and pass that directory to
+`scripts/build-macos-static.sh --libusb-source-dir` instead of
+`--libusb-source-archive`. The script links libusb's `Libs.private` system
+frameworks (IOKit, CoreFoundation, Security) and `libobjc`. The IFD bundle
+does not link libusb. Firmware is neither required to compile nor present in
+this archive.

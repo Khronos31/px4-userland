@@ -33,8 +33,22 @@ grep -F 'linux-musl-x86_64' "$workflow" >/dev/null
 grep -F 'linux-glibc-aarch64' "$workflow" >/dev/null
 grep -F 'linux-musl-aarch64' "$workflow" >/dev/null
 test "$(grep -c 'scripts/test-static-relink.sh --libusb-source-archive /src/third_party/libusb-1.0.30.tar.bz2' "$workflow")" -eq 2
-test "$(grep -c 'name: Corresponding-source static relink proof' "$workflow")" -eq 2
-grep -F 'source-relink-x86_64, source-relink-aarch64' "$workflow" >/dev/null
+test "$(grep -c 'name: Corresponding-source static relink proof' "$workflow")" -eq 3
+grep -F 'source-relink-x86_64, source-relink-aarch64, source-relink-macos' "$workflow" >/dev/null
+macos_block=$(awk '
+    $0 == "  macos:" { in_job = 1; next }
+    in_job && /^  [^ ]/ { exit }
+    in_job { print }
+' "$workflow")
+printf '%s\n' "$macos_block" | grep -F 'scripts/build-macos-static.sh --build-dir build-userland' >/dev/null
+if printf '%s\n' "$macos_block" | grep -E 'brew install.*[[:space:]]libusb([[:space:]]|$)' >/dev/null; then
+    printf '%s\n' 'macOS release build must not use Homebrew libusb' >&2
+    exit 1
+fi
+# shellcheck disable=SC2016
+grep -F 'scripts/test-static-relink.sh --libusb-source-archive "$source_root/third_party/libusb-1.0.30.tar.bz2"' "$workflow" >/dev/null
+# shellcheck disable=SC2016
+grep -F 'PX4_LIBUSB_LIBRARY="$prefix/lib/libusb-1.0.a"' "$root/scripts/build-macos-static.sh" >/dev/null
 test "$(grep -c 'packaged-musl-' "$workflow")" -eq 2
 test "$(grep -c 'PX4_BUILD_TESTS=ON' "$workflow")" -ge 3
 test "$(grep -c 'ctest --test-dir' "$workflow")" -ge 3
