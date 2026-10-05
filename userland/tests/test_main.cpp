@@ -752,6 +752,28 @@ bool test_single_receiver_lnb_15v_rejected()
     return true;
 }
 
+bool test_single_receiver_terrestrial_lock_settle()
+{
+    // px4_drv sets PTX_CHRDEV_WAIT_AFTER_LOCK_TC_T for ISDB2056, M1UR, and
+    // S1UR (including ISDBT2071), which covers every one-receiver model.
+    NoopSingleReceiverBridge bridge;
+    NoopSingleReceiverBackendPower power;
+    NoopSingleReceiverDelay delay;
+    constexpr std::array<DeviceModel, 5U> single_receiver_models{{
+        DeviceModel::px_m1ur,
+        DeviceModel::px_s1ur,
+        DeviceModel::dtv03a_1tu,
+        DeviceModel::dtv02_1t1s_u,
+        DeviceModel::dtv02a_1t1s_u}};
+    for (const DeviceModel model : single_receiver_models) {
+        MockTransport transport;
+        It930xController controller(transport, kFastPacing);
+        const SingleReceiverFrontend frontend(bridge, controller, power, delay, model);
+        CHECK(frontend.requires_terrestrial_lock_settle());
+    }
+    return true;
+}
+
 bool test_single_receiver_warm_initialization_skips_gpio11()
 {
     constexpr std::array<std::uint8_t, 4U> loaded_version{0U, 0U, 2U, 1U};
@@ -3512,6 +3534,8 @@ int main(int argc, char** argv)
          test_it930x_q3u4_lnb_gpio_authority},
         {"single_receiver_lnb_15v_rejected",
          test_single_receiver_lnb_15v_rejected},
+        {"single_receiver_terrestrial_lock_settle",
+         test_single_receiver_terrestrial_lock_settle},
         {"single_receiver_warm_initialization_skips_gpio11",
          test_single_receiver_warm_initialization_skips_gpio11},
         {"single_receiver_cold_initialization_skips_gpio11",

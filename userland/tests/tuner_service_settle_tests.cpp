@@ -59,6 +59,7 @@ public:
                                   std::uint32_t) noexcept override
     {
         events.push_back(2);
+        if (time != nullptr && tune_ms != 0U) time->sleep_ms(tune_ms);
         return Result<void>::success();
     }
 
@@ -118,6 +119,8 @@ public:
     std::deque<Result<bool>> lock_results;
     std::vector<int> events;
     TunerServiceTime* time = nullptr;
+    // Time the frontend tune itself takes (e.g. the single-receiver 100 ms).
+    std::uint32_t tune_ms = 0U;
     std::uint64_t commit_time = 0U;
     std::size_t rollbacks = 0U;
 };
@@ -193,6 +196,26 @@ bool test_lock_after_340ms_has_no_extra_settle()
     return true;
 }
 
+bool test_settle_starts_after_frontend_tune()
+{
+    Backend backend;
+    Clock clock;
+    backend.time = &clock;
+    backend.tune_ms = 100U;
+    Nonce nonce;
+    TunerService service(backend, nonce, clock);
+    const auto lease = service.acquire(1U, 2U);
+    SETTLE_CHECK(lease);
+
+    // The settle counts from the first lock check, not from the TUNE start,
+    // so time spent inside the frontend tune does not shorten it.
+    SETTLE_CHECK(service.tune(1U, terrestrial(lease.value().lease_id)));
+    SETTLE_CHECK(clock.sleeps.size() == 2U && clock.sleeps[0U] == 100U &&
+                clock.sleeps[1U] == 340U);
+    SETTLE_CHECK(clock.now == 440U && backend.commit_time == 440U);
+    return true;
+}
+
 bool test_insufficient_timeout_rolls_back_without_sleep()
 {
     Backend backend;
@@ -250,6 +273,7 @@ int main()
     return test_immediate_lock_waits_before_commit() &&
                    test_delayed_lock_waits_only_remaining_settle() &&
                    test_lock_after_340ms_has_no_extra_settle() &&
+                   test_settle_starts_after_frontend_tune() &&
                    test_insufficient_timeout_rolls_back_without_sleep() &&
                    test_settle_reaching_deadline_times_out_without_sleep() &&
                    test_satellite_does_not_settle()
