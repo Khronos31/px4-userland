@@ -645,6 +645,63 @@ bool test_q3u4_satellite_failure_stages_and_cleanup()
 
     {
         Bridge bridge;
+        Bridge unused_bridge;
+        CoordinatorBackend power;
+        CoordinatorBackend unused_power;
+        Delay delay;
+        Q3U4FrontendEnclosure enclosure(bridge, unused_bridge, power,
+                                        unused_power, delay);
+        FRONTEND_LIFECYCLE_CHECK(enclosure.open_satellite(0U));
+        bridge.queue_read({0U, 0U, 0x01U});
+        FRONTEND_LIFECYCLE_CHECK(enclosure.tune_satellite(0U, 1049480U));
+        // The TSID appears on the last TMCC read, after the waits have used
+        // the whole 100 ms budget.  It was read in time, so it is still
+        // written and checked once without a further wait.
+        for (std::size_t count = 0U; count < 10U; ++count)
+            bridge.queue_read({0U, 0U});
+        bridge.queue_read({0x12U, 0x34U});
+        bridge.queue_read({0x12U, 0x34U});
+        const auto before_select = delay.delays.size();
+        const auto before_batches = bridge.batches.size();
+        FRONTEND_LIFECYCLE_CHECK(enclosure.select_satellite_slot_with_timeout(0U, 3U, 100U));
+        FRONTEND_LIFECYCLE_CHECK(delay.delays.size() - before_select == 10U);
+        FRONTEND_LIFECYCLE_CHECK(
+            find_batch_index_after(bridge, before_batches - 1U, 0x11U,
+                                   {{0x8fU, 0x12U, 0x34U}}) !=
+            static_cast<std::size_t>(-1));
+        FRONTEND_LIFECYCLE_CHECK(enclosure.close_receiver(0U));
+    }
+
+    {
+        Bridge bridge;
+        Bridge unused_bridge;
+        CoordinatorBackend power;
+        CoordinatorBackend unused_power;
+        Delay delay;
+        Q3U4FrontendEnclosure enclosure(bridge, unused_bridge, power,
+                                        unused_power, delay);
+        FRONTEND_LIFECYCLE_CHECK(enclosure.open_satellite(0U));
+        bridge.queue_read({0U, 0U, 0x01U});
+        FRONTEND_LIFECYCLE_CHECK(enclosure.tune_satellite(0U, 1049480U));
+        // Same boundary, but the single read-back with no budget left does
+        // not match: it fails at verify without waiting any further.
+        for (std::size_t count = 0U; count < 10U; ++count)
+            bridge.queue_read({0U, 0U});
+        bridge.queue_read({0x12U, 0x34U});
+        bridge.queue_read({0x22U, 0x11U});
+        const auto before_select = delay.delays.size();
+        const auto failed =
+            enclosure.select_satellite_slot_with_timeout(0U, 3U, 100U);
+        FRONTEND_LIFECYCLE_CHECK(!failed && failed.error() == Error::TIMEOUT);
+        FRONTEND_LIFECYCLE_CHECK(delay.delays.size() - before_select == 10U);
+        FRONTEND_LIFECYCLE_CHECK(std::string_view(enclosure.bank(Q3U4Bridge::dev1)
+                                                      .diagnostic_stage()) ==
+                                 "satellite_slot_verify");
+        FRONTEND_LIFECYCLE_CHECK(enclosure.close_receiver(0U));
+    }
+
+    {
+        Bridge bridge;
         Delay delay;
         Power power;
         Q3U4Frontend frontend(bridge, power, delay);
