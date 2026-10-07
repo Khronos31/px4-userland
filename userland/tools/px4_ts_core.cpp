@@ -63,6 +63,35 @@ bool parse_system(std::string_view value, System& system) noexcept
     return false;
 }
 
+// Exactly `digits` ASCII decimal digits, no sign or leading text.  Fixed digit
+// counts keep T7/T027/BS1 out of the accepted grammar.
+bool parse_fixed_decimal(std::string_view text, std::size_t digits,
+                         unsigned int& value) noexcept
+{
+    if (text.size() != digits) return false;
+    unsigned int parsed = 0U;
+    for (const char character : text) {
+        if (character < '0' || character > '9') return false;
+        parsed = parsed * 10U + static_cast<unsigned int>(character - '0');
+    }
+    value = parsed;
+    return true;
+}
+
+// One or two decimal digits without a leading zero (0 and 10..99).
+bool parse_short_decimal(std::string_view text, unsigned int& value) noexcept
+{
+    if (text.empty() || text.size() > 2U) return false;
+    if (text.size() == 2U && text[0] == '0') return false;
+    unsigned int parsed = 0U;
+    for (const char character : text) {
+        if (character < '0' || character > '9') return false;
+        parsed = parsed * 10U + static_cast<unsigned int>(character - '0');
+    }
+    value = parsed;
+    return true;
+}
+
 // A 14-digit PX-Q3U4 base serial or a 15-digit PX-MLT5PE/DTV02A-5TS-P serial.
 bool valid_serial(std::string_view value) noexcept
 {
@@ -123,6 +152,74 @@ bool valid_arguments(const Px4TsArguments& arguments) noexcept
 
 }  // namespace
 
+Px4TsChannel parse_px4_ts_channel(std::string_view text) noexcept
+{
+    if (text.empty()) return Px4TsChannel{};
+    unsigned int number = 0U;
+    if (text[0] == 'T') {
+        if (!parse_fixed_decimal(text.substr(1U), 2U, number) || number < 13U ||
+            number > 62U)
+            return Px4TsChannel{};
+        Px4TsChannel result;
+        result.valid = true;
+        result.kind = Px4TsChannelKind::terrestrial;
+        result.system = System::ISDB_T;
+        result.frequency_khz = 395142U + static_cast<std::uint64_t>(number) * 6000U;
+        return result;
+    }
+    if (text[0] >= '0' && text[0] <= '9') {
+        if (!parse_fixed_decimal(text, 2U, number) || number < 13U || number > 62U)
+            return Px4TsChannel{};
+        Px4TsChannel result;
+        result.valid = true;
+        result.kind = Px4TsChannelKind::terrestrial;
+        result.system = System::ISDB_T;
+        result.frequency_khz = 395142U + static_cast<std::uint64_t>(number) * 6000U;
+        return result;
+    }
+    if (text.rfind("BS", 0U) == 0U) {
+        const std::string_view rest = text.substr(2U);
+        const std::size_t underscore = rest.find('_');
+        if (underscore == std::string_view::npos) {
+            if (!parse_fixed_decimal(rest, 2U, number) || number < 1U ||
+                number > 23U || (number % 2U) == 0U)
+                return Px4TsChannel{};
+            Px4TsChannel result;
+            result.valid = true;
+            result.kind = Px4TsChannelKind::satellite_transponder;
+            result.system = System::ISDB_S;
+            result.frequency_khz =
+                1049480U + ((number - 1U) / 2U) * 38360U;
+            return result;
+        }
+        unsigned int slot = 0U;
+        if (!parse_fixed_decimal(rest.substr(0U, underscore), 2U, number) ||
+            number < 1U || number > 23U || (number % 2U) == 0U ||
+            !parse_short_decimal(rest.substr(underscore + 1U), slot) || slot > 11U)
+            return Px4TsChannel{};
+        Px4TsChannel result;
+        result.valid = true;
+        result.kind = Px4TsChannelKind::satellite_slot;
+        result.system = System::ISDB_S;
+        result.frequency_khz = 1049480U + ((number - 1U) / 2U) * 38360U;
+        result.slot = static_cast<std::uint16_t>(slot);
+        return result;
+    }
+    if (text.rfind("CS", 0U) == 0U) {
+        if (!parse_short_decimal(text.substr(2U), number) || number < 2U ||
+            number > 24U || (number % 2U) != 0U)
+            return Px4TsChannel{};
+        Px4TsChannel result;
+        result.valid = true;
+        result.kind = Px4TsChannelKind::satellite_cs;
+        result.system = System::ISDB_S;
+        result.frequency_khz = 1613000U + ((number - 2U) / 2U) * 40000U;
+        result.slot = 0U;
+        return result;
+    }
+    return Px4TsChannel{};
+}
+
 Px4TsArguments parse_px4_ts_arguments(int argc,
                                       const char* const* argv) noexcept
 {
@@ -140,6 +237,8 @@ Px4TsArguments parse_px4_ts_arguments(int argc,
     bool have_bandwidth = false;
     bool have_lnb = false;
     bool have_timeout = false;
+    bool have_channel = false;
+    std::string_view channel_text;
     for (int index = 1; index < argc; ++index) {
         if (argv[index] == nullptr) return invalid("null argument");
         const std::string_view option(argv[index]);
@@ -160,6 +259,7 @@ Px4TsArguments parse_px4_ts_arguments(int argc,
                                  option == "--system" || option == "--frequency-khz" ||
                                  option == "--stream-id" || option == "--slot" ||
                                  option == "--bandwidth-hz" || option == "--lnb-voltage" ||
+                                 option == "--channel" ||
                                  option == "--tune-timeout-ms" ||
                                  option == "--duration-seconds" || option == "--packet-count";
         if (!takes_value) return invalid("unknown argument");
@@ -192,6 +292,10 @@ Px4TsArguments parse_px4_ts_arguments(int argc,
             if (have_frequency || !parse_unsigned(value, result.frequency_khz))
                 return invalid("frequency-khz is invalid");
             have_frequency = true;
+        } else if (option == "--channel") {
+            if (have_channel) return invalid("duplicate --channel");
+            have_channel = true;
+            channel_text = value;
         } else if (option == "--stream-id") {
             if (have_stream_id || !parse_unsigned(value, result.stream_id) ||
                 result.stream_id == 0xffffU)
@@ -227,8 +331,27 @@ Px4TsArguments parse_px4_ts_arguments(int argc,
     if (have_device == have_instance)
         return invalid("exactly one of --device or --instance is required");
     if (!have_receiver) return invalid("--receiver is required");
-    if (!have_system) return invalid("--system is required");
-    if (!have_frequency) return invalid("--frequency-khz is required");
+    if (have_channel) {
+        if (have_system || have_frequency)
+            return invalid("--channel cannot be combined with --system or --frequency-khz");
+        const Px4TsChannel channel = parse_px4_ts_channel(channel_text);
+        if (!channel.valid) return invalid("channel is invalid");
+        result.system = channel.system;
+        result.frequency_khz = channel.frequency_khz;
+        if (channel.kind == Px4TsChannelKind::satellite_slot) {
+            if (have_stream_id || have_slot)
+                return invalid("channel already includes the slot");
+            result.slot = channel.slot;
+            have_slot = true;
+        } else if (channel.kind == Px4TsChannelKind::satellite_cs &&
+                   !have_stream_id && !have_slot) {
+            result.slot = channel.slot;
+            have_slot = true;
+        }
+    } else {
+        if (!have_system) return invalid("--system is required");
+        if (!have_frequency) return invalid("--frequency-khz is required");
+    }
     if (result.output.empty()) result.output = "-";
     if (have_runtime && result.runtime_directory.empty())
         return invalid("--runtime-dir must not be empty");
@@ -253,6 +376,9 @@ void print_px4_ts_usage(void* output) noexcept
     std::fprintf(file,
                  "usage: px4-ts (--device BASE_SERIAL | --instance TOKEN) --receiver 0..7 "
                  "--system isdb-t|isdb-s --frequency-khz N [options]\n"
+                 "       px4-ts (--device BASE_SERIAL | --instance TOKEN) --receiver 0..7 "
+                 "--channel CH [options]\n"
+                 "  --channel CH                   (T13..T62 | 13..62 | BS<nn>[_<slot>] | CS<n>)\n"
                  "  --stream-id N | --slot 0..11   (isdb-s, exactly one)\n"
                  "  --bandwidth-hz N               (isdb-t default 6000000)\n"
                  "  --lnb-voltage 0|15             (isdb-s; 15 is daemon-dependent)\n"
