@@ -192,7 +192,42 @@ E04長いruntime path失敗と単発CC事象をそれぞれ別logに保持。
 受信中の列挙でinvalid_serialになる既存事象は[Issue #48](https://github.com/Khronos31/px4-userland/issues/48)、
 MLT5系切断通知の未対応は[Issue #47](https://github.com/Khronos31/px4-userland/issues/47)で継続。
 
-本節は候補実機試験と受入判断の記録。結果commitへのtag付け、最終CI、配布payload比較と公開asset確認は別工程。
+### 結果commit・tag CIと公開asset確認
+
+結果commit `7ad5f6691f77a9aa58c4097f8b6dfea77f6d9b6a`へannotated tag `v0.1.10`を付けた。
+tag push run [`37662317383`](https://github.com/Khronos31/px4-userland/actions/runs/37662317383)と
+main push run [`37662317396`](https://github.com/Khronos31/px4-userland/actions/runs/37662317396)は、
+同じ結果commitに対する独立runで、両方18 jobすべて成功。
+9 archive本体と外側`SHA256SUMS`は全件byte-identical、外側checksumのSHA-256は
+`8ef0dee40a0f01763260b7a8032dc18a6363b059fac9add04b876b9f88d94151`。
+実効tool/package inventoryの270 entry（job別compiler・SDK・CMake・apk等）は両runで一致。
+Xcode15.4/15F31d、SDK14.5、CMake4.4.3、Ninja1.13.2、NDK/compilerとpinned inputsを確認した。
+runner imageは元候補と同じversion集合で、build job別の比較は以下のとおり。
+
+| build job | tag run runner image | main run runner image |
+|---|---|---|
+| Linux x86_64 | ubuntu-24.04 / 20261004.327.1 | ubuntu-24.04 / 20260927.320.1 |
+| Linux aarch64 | ubuntu-24.04-arm / 20260927.135.1 | 同左 |
+| macOS | macos-14-arm64 / 20260831.0302.1 | 同左 |
+| Android aarch64 | ubuntu-24.04 / 20261004.327.1 | ubuntu-24.04 / 20260927.320.1 |
+| Android armv7a・x86_64 | ubuntu-24.04 / 20260927.320.1 | ubuntu-24.04 / 20261004.327.1 |
+
+最終8 binary archiveを元の実機候補run `37602531584`と比較し、全file inventory、type、mode、
+link先が一致。file payloadの差はREADME、manifest、内側checksumの3 fileのみ。
+manifestは項目別に照合し、差を`source_ref`とREADME file entryのhash/sizeだけに限定できた。
+実行ファイル、Termux launcher、IFD、link inventory、その他全payloadはbyte-identical。
+各内側checksumが成功し、source archiveのREADME/SPEC/試験記録/手順/VERSION/製品sourceが
+結果commitのsnapshotと一致した。実機試験を結果commit後に繰り返した意味ではない。
+ローカルの照合証拠は`final-payload-report.json`、`final-tag/`、`final-main/`、`ci-logs/`。
+
+独立した公開前レビューはPROCEED。未解明のMac事象、receiver7、MLT5認定失効、soak省略を
+release notesへ明記し、payload照合完了後に公開した。
+[v0.1.10 Stable](https://github.com/Khronos31/px4-userland/releases/tag/v0.1.10)は
+2026-10-07T17:58:59Zに公開（JST10-08 02:58:59）。Latest、draft=false、prerelease=false。
+draft upload後と公開後にそれぞれ9 archive + 外側checksumの全10 assetを再downloadし、
+最終tag CI artifactとのbyte一致とchecksum成功を確認した。公開hashの正本はreleaseの
+[`SHA256SUMS`](https://github.com/Khronos31/px4-userland/releases/download/v0.1.10/SHA256SUMS)。
+この公開後記録はmainへ追記し、既に公開したtagとassetは固定する。
 
 ## 2026-10-02 v0.1.9 release-candidate試験（必須matrix完了）
 
