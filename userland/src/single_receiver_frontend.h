@@ -46,6 +46,8 @@ public:
     Result<void> initialize_uart() noexcept override;
     Result<bool> detect_card() noexcept override;
 private:
+    Result<void> select_satellite_tsid_locked(std::uint16_t tsid,
+                                               std::uint32_t timeout_ms) noexcept;
     Result<void> acquire_power() noexcept;
     Result<void> release_power() noexcept;
     Result<void> initialize_frontend() noexcept;

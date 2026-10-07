@@ -8,6 +8,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 #include "bridge_i2c.h"
+#include "single_receiver_frontend.h"
 #include "tc90522.h"
 
 #include "px4/mock_transport.h"
@@ -106,6 +107,97 @@ public:
     bool fail_reads = false;
     bool fail_writes = false;
     Error failure = Error::DISCONNECTED;
+};
+
+class SingleReceiverSelectionBridge final : public BridgeI2cMaster {
+public:
+    Result<void> request(BridgeI2cRequest* requests,
+                         std::size_t count) noexcept override
+    {
+        if (requests == nullptr || count == 0U)
+            return Result<void>::failure(Error::INVALID_ARGUMENT);
+        ++request_count;
+        if (failure != Error::OK) {
+            const Error result = failure;
+            failure = Error::OK;
+            return Result<void>::failure(result);
+        }
+        std::uint8_t register_pointer = 0U;
+        std::uint8_t address = 0U;
+        for (std::size_t index = 0U; index < count; ++index) {
+            auto& request = requests[index];
+            address = request.address;
+            if (request.type == BridgeI2cRequestType::write &&
+                request.write_data.size != 0U) {
+                const auto* data = request.write_data.data;
+                if (data[0] == 0xfeU && request.write_data.size >= 2U &&
+                    (data[1] & 1U) != 0U) {
+                    repeater_read = true;
+                } else if (data[0] != 0xfeU) {
+                    register_pointer = data[0];
+                    if (data[0] == 0x8fU && request.write_data.size >= 3U) {
+                        selected_tsid = static_cast<std::uint16_t>(
+                            (static_cast<std::uint16_t>(data[1]) << 8U) | data[2]);
+                        tsid_writes.push_back(selected_tsid);
+                    }
+                }
+            } else if (request.type == BridgeI2cRequestType::read) {
+                std::fill(request.read_data.data,
+                          request.read_data.data + request.read_data.size, 0U);
+                if (repeater_read) {
+                    if (address == 0x11U && request.read_data.size >= 4U)
+                        request.read_data.data[3] = 0x0eU;
+                    else if (address == 0x11U && request.read_data.size == 3U)
+                        request.read_data.data[2] = 0x01U;
+                    else if (address == 0x10U && request.read_data.size != 0U)
+                        request.read_data.data[0] = 0x19U;
+                    repeater_read = false;
+                } else if (address == 0x11U && register_pointer >= 0xceU &&
+                           register_pointer < 0xe6U) {
+                    const std::size_t slot = (register_pointer - 0xceU) / 2U;
+                    tmcc_slots.push_back(static_cast<std::uint8_t>(slot));
+                    if (slot < slot_tsids.size()) {
+                        request.read_data.data[0] = static_cast<std::uint8_t>(
+                            slot_tsids[slot] >> 8U);
+                        request.read_data.data[1] = static_cast<std::uint8_t>(
+                            slot_tsids[slot]);
+                    }
+                } else if (address == 0x11U && register_pointer == 0xe6U) {
+                    const std::uint16_t value = mismatch_readback
+                        ? static_cast<std::uint16_t>(selected_tsid + 1U)
+                        : selected_tsid;
+                    tsid_readbacks.push_back(value);
+                    request.read_data.data[0] = static_cast<std::uint8_t>(value >> 8U);
+                    request.read_data.data[1] = static_cast<std::uint8_t>(value);
+                }
+            }
+        }
+        return Result<void>::success();
+    }
+
+    std::array<std::uint16_t, 12U> slot_tsids{};
+    std::vector<std::uint16_t> tsid_writes;
+    std::vector<std::uint16_t> tsid_readbacks;
+    std::vector<std::uint8_t> tmcc_slots;
+    std::uint16_t selected_tsid = 0U;
+    Error failure = Error::OK;
+    bool mismatch_readback = false;
+    bool repeater_read = false;
+    std::size_t request_count = 0U;
+};
+
+class SingleReceiverSelectionPower final : public Q3U4BackendPower {
+public:
+    Result<void> set_backend_power(bool, Q3U4Delay&) noexcept override
+    {
+        return Result<void>::success();
+    }
+};
+
+class SingleReceiverSelectionDelay final : public Q3U4FrontendDelay {
+public:
+    void sleep_ms(std::uint32_t value) noexcept override { slept_ms += value; }
+    std::uint32_t slept_ms = 0U;
 };
 
 bool check_write(const RecordedOperation& operation, std::uint8_t address,
@@ -623,6 +715,89 @@ bool test_controller_failure_detail_for_translated_batch()
     return true;
 }
 
+bool test_single_receiver_satellite_selection()
+{
+    SingleReceiverSelectionBridge bridge;
+    SingleReceiverSelectionPower power;
+    SingleReceiverSelectionDelay delay;
+    MockTransport transport;
+    It930xController controller(transport);
+    SingleReceiverFrontend frontend(bridge, controller, power, delay,
+                                    DeviceModel::px_m1ur);
+    const std::size_t before_unopened = bridge.request_count;
+    FRONTEND_CHECK(frontend.select_satellite_tsid(0U, 0x1234U, 0U).error() ==
+                   Error::NOT_READY);
+    FRONTEND_CHECK(bridge.request_count == before_unopened);
+    FRONTEND_CHECK(frontend.open_receiver(0U));
+    const std::size_t before_invalid = bridge.request_count;
+    FRONTEND_CHECK(frontend.select_satellite_slot(1U, 0U, 0U).error() ==
+                   Error::INVALID_ARGUMENT);
+    FRONTEND_CHECK(frontend.select_satellite_slot(0U, 12U, 0U).error() ==
+                   Error::INVALID_ARGUMENT);
+    FRONTEND_CHECK(bridge.request_count == before_invalid);
+    const std::size_t before_tune = bridge.request_count;
+    FRONTEND_CHECK(frontend.select_satellite_tsid(0U, 0x1234U, 0U).error() ==
+                   Error::NOT_READY);
+    FRONTEND_CHECK(bridge.request_count == before_tune);
+    FRONTEND_CHECK(frontend.tune_satellite(0U, 1049480U, 500U));
+
+    bridge.slot_tsids[2U] = 0x1111U;
+    FRONTEND_CHECK(frontend.select_satellite_slot(0U, 2U, 0U));
+    FRONTEND_CHECK(bridge.selected_tsid == 0x1111U);
+    FRONTEND_CHECK(bridge.tsid_writes.back() == 0x1111U &&
+                   bridge.tsid_readbacks.back() == 0x1111U &&
+                   bridge.tmcc_slots.back() == 2U);
+    bridge.slot_tsids[3U] = 0x2222U;
+    FRONTEND_CHECK(frontend.select_satellite_slot(0U, 3U, 0U));
+    FRONTEND_CHECK(bridge.selected_tsid == 0x2222U);
+    FRONTEND_CHECK(bridge.tsid_writes.back() == 0x2222U &&
+                   bridge.tsid_readbacks.back() == 0x2222U &&
+                   bridge.tmcc_slots.back() == 3U);
+    FRONTEND_CHECK(frontend.select_satellite_tsid(0U, 0x3333U, 0U));
+    FRONTEND_CHECK(bridge.selected_tsid == 0x3333U);
+    FRONTEND_CHECK(bridge.tsid_writes.back() == 0x3333U &&
+                   bridge.tsid_readbacks.back() == 0x3333U);
+
+    bridge.slot_tsids[4U] = 0U;
+    const std::uint32_t slept_before = delay.slept_ms;
+    const auto missing = frontend.select_satellite_slot(0U, 4U, 20U);
+    FRONTEND_CHECK(!missing && missing.error() == Error::TIMEOUT);
+    FRONTEND_CHECK(delay.slept_ms == slept_before + 20U);
+
+    bridge.failure = Error::USB_IO;
+    const auto io_failure = frontend.select_satellite_tsid(0U, 0x4545U, 0U);
+    FRONTEND_CHECK(!io_failure && io_failure.error() == Error::USB_IO);
+    bridge.failure = Error::DISCONNECTED;
+    const auto io_disconnect = frontend.select_satellite_tsid(0U, 0x4646U, 0U);
+    FRONTEND_CHECK(!io_disconnect && io_disconnect.error() == Error::DISCONNECTED);
+
+    bridge.mismatch_readback = true;
+    const auto mismatch = frontend.select_satellite_tsid(0U, 0x4444U, 0U);
+    FRONTEND_CHECK(!mismatch && mismatch.error() == Error::TIMEOUT);
+    const std::size_t before_disconnect = bridge.request_count;
+    frontend.mark_receiver_disconnected(0U);
+    const auto disconnected = frontend.select_satellite_tsid(0U, 0x5555U, 10U);
+    FRONTEND_CHECK(!disconnected && disconnected.error() == Error::DISCONNECTED);
+    FRONTEND_CHECK(bridge.request_count == before_disconnect);
+    FRONTEND_CHECK(frontend.close_receiver(0U));
+
+    SingleReceiverSelectionBridge terrestrial_bridge;
+    SingleReceiverSelectionPower terrestrial_power;
+    SingleReceiverSelectionDelay terrestrial_delay;
+    MockTransport terrestrial_transport;
+    It930xController terrestrial_controller(terrestrial_transport);
+    SingleReceiverFrontend terrestrial(terrestrial_bridge, terrestrial_controller,
+                                       terrestrial_power, terrestrial_delay,
+                                       DeviceModel::dtv03a_1tu);
+    FRONTEND_CHECK(terrestrial.open_receiver(0U));
+    const std::size_t unsupported_before = terrestrial_bridge.request_count;
+    const auto unsupported = terrestrial.select_satellite_tsid(0U, 0x1234U, 0U);
+    FRONTEND_CHECK(!unsupported && unsupported.error() == Error::UNSUPPORTED);
+    FRONTEND_CHECK(terrestrial_bridge.request_count == unsupported_before);
+    FRONTEND_CHECK(terrestrial.close_receiver(0U));
+    return true;
+}
+
 }  // namespace
 
 bool run_frontend_tests()
@@ -630,5 +805,6 @@ bool run_frontend_tests()
     return test_mapping() && test_bridge_batch_recording() &&
            test_tc_direct_and_multiple() && test_repeater_translation() &&
            test_ts_helpers_and_decoding() && test_controller_wire_batch() &&
-           test_controller_failure_detail_for_translated_batch();
+           test_controller_failure_detail_for_translated_batch() &&
+           test_single_receiver_satellite_selection();
 }
