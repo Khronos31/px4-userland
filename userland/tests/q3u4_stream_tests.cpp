@@ -158,6 +158,14 @@ public:
         });
     }
 
+    bool wait_for_stop_entered() noexcept
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        return changed.wait_for(lock, std::chrono::seconds(5), [&]() noexcept {
+            return stop_entered;
+        });
+    }
+
     bool wait_for_cancel_count(std::size_t count) noexcept
     {
         std::unique_lock<std::mutex> lock(mutex);
@@ -1280,6 +1288,64 @@ bool test_lifecycle_barrier_races()
     return true;
 }
 
+bool test_pump_failure_shutdown_destruction_race()
+{
+    for (std::uint64_t iteration = 0U; iteration < 256U; ++iteration) {
+        FakeTransport dev1;
+        FakeTransport dev2;
+        auto created = create_test_plane(
+            dev1, dev2, Q3U4StreamDataPlane::kMinQueuePackets);
+        STREAM_CHECK(created);
+        const auto value = attachment(0U, 1000U + iteration);
+        STREAM_CHECK(created.value()->attach(value));
+        STREAM_CHECK(dev1.wait_for_count(1U));
+        {
+            std::lock_guard<std::mutex> lock(dev1.mutex);
+            dev1.cancel_error = Error::USB_IO;
+            dev1.stop_error = Error::USB_IO;
+            dev1.block_stop = true;
+        }
+        dev1.fail(Error::USB_IO);
+        STREAM_CHECK(dev1.wait_for_stop_entered());
+
+        if ((iteration & 1U) == 0U) {
+            std::atomic<bool> shutdown_started{false};
+            Result<void> shutdown_result = Result<void>::success();
+            std::thread shutdown([&]() noexcept {
+                shutdown_started.store(true);
+                shutdown_result = created.value()->shutdown();
+            });
+            while (!shutdown_started.load()) std::this_thread::yield();
+            {
+                std::lock_guard<std::mutex> lock(dev1.mutex);
+                dev1.allow_stop = true;
+                dev1.changed.notify_all();
+            }
+            shutdown.join();
+            STREAM_CHECK(!shutdown_result && shutdown_result.error() == Error::USB_IO);
+            created.value().reset();
+        } else {
+            std::atomic<bool> destruction_started{false};
+            std::thread destruction([&]() noexcept {
+                destruction_started.store(true);
+                created.value().reset();
+            });
+            while (!destruction_started.load()) std::this_thread::yield();
+            {
+                std::lock_guard<std::mutex> lock(dev1.mutex);
+                dev1.allow_stop = true;
+                dev1.changed.notify_all();
+            }
+            destruction.join();
+        }
+        {
+            std::lock_guard<std::mutex> lock(dev1.mutex);
+            STREAM_CHECK(dev1.cancels == 1U && dev1.stops == 1U);
+        }
+    }
+    return true;
+}
+
 }  // namespace
 
 // v0.16: the PX-MLT5PE/DTV02A-5TS-P plane has one bridge whose tags 1..5 map
@@ -1401,7 +1467,10 @@ bool run_q3u4_stream_tests()
     if (fatal && !epoch) std::fprintf(stderr, "q3u4_stream: epoch failed\n");
     const bool races = epoch && test_lifecycle_barrier_races();
     if (epoch && !races) std::fprintf(stderr, "q3u4_stream: lifecycle races failed\n");
-    const bool mlt5pe = races && test_mlt5pe_single_bridge_mapping();
+    const bool pump_race = races && test_pump_failure_shutdown_destruction_race();
+    if (races && !pump_race)
+        std::fprintf(stderr, "q3u4_stream: pump failure shutdown race failed\n");
+    const bool mlt5pe = pump_race && test_mlt5pe_single_bridge_mapping();
     if (races && !mlt5pe) std::fprintf(stderr, "q3u4_stream: mlt5pe mapping failed\n");
     const bool mlt_variable = mlt5pe && test_mlt_variable_receiver_count();
     if (mlt5pe && !mlt_variable)
