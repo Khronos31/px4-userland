@@ -505,6 +505,17 @@ if(PX4_BUILD_TESTS)
     px4_enable_project_warnings(px4_userland_q3u4_power_order_tests)
     add_test(NAME px4_userland_q3u4_power_order_tests
              COMMAND px4_userland_q3u4_power_order_tests)
+    add_executable(px4_userland_q3u4_disconnect_tests
+        userland/tests/q3u4_disconnect_tests.cpp)
+    target_link_libraries(px4_userland_q3u4_disconnect_tests
+        PRIVATE px4_userland_core)
+    target_include_directories(px4_userland_q3u4_disconnect_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/src)
+    target_compile_features(px4_userland_q3u4_disconnect_tests PRIVATE cxx_std_17)
+    px4_enable_project_warnings(px4_userland_q3u4_disconnect_tests)
+    add_test(NAME px4_userland_q3u4_disconnect_tests
+             COMMAND px4_userland_q3u4_disconnect_tests)
     if(PX4_ENABLE_LIBUSB)
         add_test(NAME px4_userland_fail_safe_abandonment
             COMMAND px4_userland_tests --fail-safe-abandonment)
