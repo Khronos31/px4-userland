@@ -1,9 +1,22 @@
 # px4-userland 仕様
 
-Status: Frozen v0.27 (2026-10-01)
+Status: Frozen v0.28 (2026-10-07)
 
 本書の`MUST`、`MUST NOT`、`SHOULD`は規範要件を示す。実機観測で前提の誤りが判明した場合も暗黙に
 実装だけを変えず、本書のversionと変更理由を更新してから実装する。
+
+### v0.28 change record (2026-10-07)
+
+- 6.5節: `px4-ts`へ`--channel CH`を追加し、mirakcが渡すチャンネル表記からsystem・
+  frequency_khz・ISDB-Sのslotを導出する公開CLI契約を定める。`T<NN>`と`<NN>`は地上波物理
+  チャンネル13〜62を`395142 + NN * 6000` kHzへ、`BS<NN>`と`BS<NN>_<S>`は奇数トランスポンダ
+  01〜23を`1049480 + ((NN - 1) / 2) * 38360` kHzへ、`CS<N>`は偶数トランスポンダ2〜24を
+  `1613000 + ((N - 2) / 2) * 40000` kHzへ変換する。`BS<NN>_<S>`はslot S（0〜11）を固定し、
+  `BS<NN>`は`--slot`/`--stream-id`を必須、`CS<N>`は既定slot 0で上書き可能とする。
+- 6.5節: `--channel`は`--system`/`--frequency-khz`と排他、`BS<NN>_<S>`は`--slot`/`--stream-id`と
+  排他、`T<NN>`/`<NN>`は`--slot`/`--stream-id`を受け付けない。接頭辞は大文字、桁数と桁上がりは
+  厳密に検査し、これ以外の表記・範囲外はusage error（exit 2）とする。表記は以後互換性を保つ
+  公開インターフェースとする。
 
 ### v0.27 change record (2026-10-01)
 
@@ -806,6 +819,24 @@ CLI exit codeは0=success、2=usage、3=not found/not ready、4=busy、5=timeout
 7=USB/disconnect、8=TS integrity/backpressure、9=card/protocol、10=firmware、70=internalとする。
 `px4-ts`は要求されたduration/packet countへの到達または明示的な正常stopだけを0とし、daemon切断、USB抜去、
 queue overflow、sync/TEI/drop検出を0にしない。stdoutはTSだけ、全診断はstderrへ出す。
+
+`px4-ts --channel CH`は、公開チャンネル表記から`system`と`frequency_khz`、ISDB-Sではslotを導出する。
+受け付ける表記は次の形式だけとし、接頭辞`T`/`BS`/`CS`は大文字に限る。前後の空白、符号、余分な文字、
+先頭ゼロは拒否する。
+
+- `T<NN>`および`<NN>`: 地上波物理チャンネルNN（ちょうど2桁の10進数、13〜62）。`system=ISDB_T`、
+  `frequency_khz=395142 + NN * 6000`。slotは持たず、`--slot`/`--stream-id`と併用できない。
+- `BS<NN>`: BSトランスポンダNN（ちょうど2桁の10進数、奇数01〜23）。`system=ISDB_S`、
+  `frequency_khz=1049480 + ((NN - 1) / 2) * 38360`。`--slot`または`--stream-id`が必須。
+- `BS<NN>_<S>`: 上記BSにslot S（1〜2桁の10進数で先頭ゼロなし、0〜11）を付けたもの。slotはSに固定し、
+  `--slot`/`--stream-id`と併用できない。
+- `CS<N>`: CSトランスポンダN（1〜2桁の10進数で先頭ゼロなし、偶数2〜24）。`system=ISDB_S`、
+  `frequency_khz=1613000 + ((N - 2) / 2) * 40000`。既定slotは0とし、`--slot`/`--stream-id`で
+  上書きできる。
+
+`--channel`は`--system`・`--frequency-khz`と同時指定できず、これら以外のオプションとは併用できる。
+不正な表記や範囲外はusage error（exit 2）とし、stderrへ理由を1行で出す。受信機が方式に対応するかの
+判定はdaemonの既存検査に委ね、CLIは機種表を持たない。この表記は以後互換性を保つ公開インターフェースとする。
 
 ## 7. Portability contract
 

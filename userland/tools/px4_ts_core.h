@@ -9,6 +9,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 namespace px4::userland::cli {
 
@@ -17,6 +18,29 @@ enum class Px4TsFailureKind : std::uint8_t {
     ts_integrity,
     output,
 };
+
+// How a channel name determines the ISDB-S slot.  satellite_transponder
+// carries no slot and needs --slot or --stream-id; satellite_slot fixes it in
+// the notation; satellite_cs defaults to slot 0 but accepts an override.
+enum class Px4TsChannelKind : std::uint8_t {
+    terrestrial,
+    satellite_transponder,
+    satellite_slot,
+    satellite_cs,
+};
+
+struct Px4TsChannel final {
+    bool valid = false;
+    ipc::System system = ipc::System::ISDB_T;
+    std::uint64_t frequency_khz = 0U;
+    Px4TsChannelKind kind = Px4TsChannelKind::terrestrial;
+    std::uint16_t slot = 0xffffU;
+};
+
+// Pure conversion from a channel name (T27, 27, BS01_0, BS01, CS2) to the
+// tune parameters.  I/O-free so the CLI parser and unit tests share one
+// implementation.
+Px4TsChannel parse_px4_ts_channel(std::string_view text) noexcept;
 
 struct Px4TsArguments final {
     bool valid = false;

@@ -377,10 +377,17 @@ receiver=0 device=1 local=0 system=ISDB-T/S lnb_15v_supported=true
 px4-ts (--device SERIAL | --instance TOKEN) --receiver 0..7 --system isdb-t|isdb-s --frequency-khz N [--runtime-dir PATH] [--group] [OPTIONS]
 ```
 
+`--channel CH` を使うと、チャンネル表記から方式と周波数、ISDB-S の slot を決められます。
+
+```sh
+px4-ts (--device SERIAL | --instance TOKEN) --receiver 0..7 --channel CH [--runtime-dir PATH] [--group] [OPTIONS]
+```
+
 - `--device SERIAL` / `--instance TOKEN`: 対象デーモンの接続先をどちらか一方で指定します。位置指定で起動したデーモンには同じTOKENを指定してください。
 - `--receiver 0..7`: 利用する受信機番号（必須）。DTV02A-5TS-P / PX-MLT5PE は 0..4 です。
 - `--system isdb-t|isdb-s`: 放送方式（必須）。
 - `--frequency-khz N`: 受信周波数（kHz 単位、必須）。
+- `--channel CH`: チャンネル表記（後述）から方式と周波数を決めます。`--system` / `--frequency-khz` とは同時指定できません。
 - ISDB-T 固有設定:
   - 帯域幅は 6MHz（6000000Hz）固定です。
 - ISDB-S 固有設定:
@@ -393,6 +400,30 @@ px4-ts (--device SERIAL | --instance TOKEN) --receiver 0..7 --system isdb-t|isdb
   - `--tune-timeout-ms N`: チューニング待機時間（ミリ秒、範囲: 100〜30000、既定値: 10000）。
   - `--lnb-voltage 0|15`: LNB 出力電圧の要求（既定値: 0）。15V 対応機種では `px4d --allow-lnb-power` との併用が必要です。PX-M1UR と DTV02-1T1S-U / DTV02A-1T1S-U は 0V での ISDB-S 受信のみが仕様上の対象で、後者2機種は実機未検証です。
   - `--runtime-dir PATH`: `px4d` と共有するランタイムルートディレクトリ（省略時は `$XDG_RUNTIME_DIR`）。
+
+#### `--channel` の表記
+
+`--channel CH` は mirakc が渡すチャンネル表記を受け付け、方式と周波数、ISDB-S の slot へ変換します。受け付ける表記は利用側と共有する**互換性を保つ公開インターフェース**であり、これ以外の表記は usage error（exit 2）で拒否します。
+
+| 表記 | 例 | 意味 | system | frequency_khz | ISDB-S stream 選択 |
+|---|---|---|---|---|---|
+| `T<NN>` | `T27` | 地上波物理チャンネル 13〜62 | isdb-t | `395142 + NN * 6000` | なし |
+| `<NN>` | `27` | `T<NN>` と同じ（数値だけの地上波物理チャンネル） | isdb-t | `395142 + NN * 6000` | なし |
+| `BS<NN>_<S>` | `BS01_0` | BS トランスポンダ NN（奇数 01〜23）、slot S（0〜11） | isdb-s | `1049480 + ((NN - 1) / 2) * 38360` | slot = S |
+| `BS<NN>` | `BS01` | BS トランスポンダ NN（奇数 01〜23） | isdb-s | `1049480 + ((NN - 1) / 2) * 38360` | `--slot` か `--stream-id` が必須 |
+| `CS<N>` | `CS2` | CS トランスポンダ N（偶数 2〜24） | isdb-s | `1613000 + ((N - 2) / 2) * 40000` | 既定 slot = 0。`--slot` / `--stream-id` で上書き可 |
+
+- `--channel` と `--system` / `--frequency-khz` は同時指定できません。
+- `BS<NN>_<S>` は slot を表記に含むため `--slot` / `--stream-id` と同時指定できません。
+- `T<NN>` / `<NN>` は ISDB-T のため `--slot` / `--stream-id` を指定できません。
+- `BS<NN>` は `--slot` または `--stream-id` が必須です。
+
+mirakc の tuner command では、チャンネル表記をそのまま `--channel` へ渡せます。
+
+```sh
+/opt/px4-userland/px4-ts --instance <TOKEN> --receiver <N> \
+  --channel {{{channel}}} --runtime-dir <RUNTIME_DIR> --output -
+```
 
 #### 終了コード
 

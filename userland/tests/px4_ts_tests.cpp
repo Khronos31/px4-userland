@@ -910,6 +910,112 @@ bool test_argument_contract()
     return true;
 }
 
+bool test_channel_conversion()
+{
+    for (unsigned int number = 13U; number <= 62U; ++number) {
+        char text[4]{};
+        std::snprintf(text, sizeof(text), "T%02u", number);
+        const Px4TsChannel labelled = parse_px4_ts_channel(text);
+        CHECK(labelled.valid && labelled.system == System::ISDB_T &&
+              labelled.kind == Px4TsChannelKind::terrestrial &&
+              labelled.slot == 0xffffU &&
+              labelled.frequency_khz ==
+                  395142U + static_cast<std::uint64_t>(number) * 6000U);
+        const Px4TsChannel bare = parse_px4_ts_channel(std::string_view(text).substr(1U));
+        CHECK(bare.valid && bare.system == System::ISDB_T &&
+              bare.frequency_khz == labelled.frequency_khz);
+    }
+    for (unsigned int number = 1U; number <= 23U; number += 2U) {
+        char transponder[8]{};
+        std::snprintf(transponder, sizeof(transponder), "BS%02u", number);
+        const Px4TsChannel without_slot = parse_px4_ts_channel(transponder);
+        CHECK(without_slot.valid && without_slot.system == System::ISDB_S &&
+              without_slot.kind == Px4TsChannelKind::satellite_transponder &&
+              without_slot.slot == 0xffffU &&
+              without_slot.frequency_khz ==
+                  1049480U + ((number - 1U) / 2U) * 38360U);
+        for (unsigned int slot = 0U; slot <= 11U; slot += 11U) {
+            char text[16]{};
+            std::snprintf(text, sizeof(text), "BS%02u_%u", number, slot);
+            const Px4TsChannel with_slot = parse_px4_ts_channel(text);
+            CHECK(with_slot.valid && with_slot.system == System::ISDB_S &&
+                  with_slot.kind == Px4TsChannelKind::satellite_slot &&
+                  with_slot.slot == slot &&
+                  with_slot.frequency_khz == without_slot.frequency_khz);
+        }
+    }
+    for (unsigned int number = 2U; number <= 24U; number += 2U) {
+        char text[8]{};
+        std::snprintf(text, sizeof(text), "CS%u", number);
+        const Px4TsChannel cs = parse_px4_ts_channel(text);
+        CHECK(cs.valid && cs.system == System::ISDB_S &&
+              cs.kind == Px4TsChannelKind::satellite_cs && cs.slot == 0U &&
+              cs.frequency_khz == 1613000U + ((number - 2U) / 2U) * 40000U);
+    }
+    CHECK(parse_px4_ts_channel("T27").frequency_khz == 557142U);
+    CHECK(parse_px4_ts_channel("27").frequency_khz == 557142U);
+    CHECK(parse_px4_ts_channel("BS01_0").frequency_khz == 1049480U &&
+          parse_px4_ts_channel("BS01_0").slot == 0U);
+    CHECK(parse_px4_ts_channel("BS23_3").frequency_khz == 1471440U &&
+          parse_px4_ts_channel("BS23_3").slot == 3U);
+    CHECK(parse_px4_ts_channel("CS2").frequency_khz == 1613000U);
+    CHECK(parse_px4_ts_channel("CS24").frequency_khz == 2053000U);
+    const char* rejected[] = {
+        "T12", "T63", "12", "63", "T7", "t27", "T027", " T27", "T27 ",
+        "BS02_0", "BS25_0", "BS1_0", "BS01_12", "BS01_00", "BS01_",
+        "BS01_0_1", "CS1", "CS3", "CS26", "CS02", "CS", "BS", ""};
+    for (const char* text : rejected) CHECK(!parse_px4_ts_channel(text).valid);
+    return true;
+}
+
+bool test_channel_argument_contract()
+{
+    CHECK(!parse({"px4-ts", "--device", "00001205000960", "--receiver", "0",
+                  "--system", "isdb-t", "--channel", "T27"}).valid);
+    CHECK(!parse({"px4-ts", "--device", "00001205000960", "--receiver", "0",
+                  "--frequency-khz", "40000", "--channel", "T27"}).valid);
+    CHECK(!parse({"px4-ts", "--device", "00001205000960", "--receiver", "0",
+                  "--channel", "T12"}).valid);
+    const Px4TsArguments terrestrial = parse(
+        {"px4-ts", "--device", "00001205000960", "--receiver", "0", "--channel", "T27"});
+    CHECK(terrestrial.valid && terrestrial.system == System::ISDB_T &&
+          terrestrial.frequency_khz == 557142U);
+    CHECK(parse({"px4-ts", "--device", "00001205000960", "--receiver", "0",
+                 "--channel", "27"}).valid);
+    CHECK(!parse({"px4-ts", "--device", "00001205000960", "--receiver", "0",
+                  "--channel", "T27", "--slot", "0"}).valid);
+    CHECK(!parse({"px4-ts", "--device", "00001205000960", "--receiver", "0",
+                  "--channel", "T27", "--stream-id", "1"}).valid);
+    const Px4TsArguments bs_slot = parse(
+        {"px4-ts", "--device", "00001205000960", "--receiver", "0", "--channel", "BS01_0"});
+    CHECK(bs_slot.valid && bs_slot.system == System::ISDB_S && bs_slot.slot == 0U &&
+          bs_slot.frequency_khz == 1049480U);
+    CHECK(!parse({"px4-ts", "--device", "00001205000960", "--receiver", "0",
+                  "--channel", "BS01_0", "--slot", "5"}).valid);
+    CHECK(!parse({"px4-ts", "--device", "00001205000960", "--receiver", "0",
+                  "--channel", "BS01_0", "--stream-id", "5"}).valid);
+    CHECK(!parse({"px4-ts", "--device", "00001205000960", "--receiver", "0",
+                  "--channel", "BS01"}).valid);
+    const Px4TsArguments bs_stream = parse({"px4-ts", "--device", "00001205000960",
+        "--receiver", "0", "--channel", "BS01", "--stream-id", "42"});
+    CHECK(bs_stream.valid && bs_stream.system == System::ISDB_S &&
+          bs_stream.stream_id == 42U && bs_stream.slot == 0xffffU);
+    const Px4TsArguments bs_explicit_slot = parse({"px4-ts", "--device", "00001205000960",
+        "--receiver", "0", "--channel", "BS01", "--slot", "3"});
+    CHECK(bs_explicit_slot.valid && bs_explicit_slot.slot == 3U);
+    const Px4TsArguments cs = parse(
+        {"px4-ts", "--device", "00001205000960", "--receiver", "0", "--channel", "CS2"});
+    CHECK(cs.valid && cs.system == System::ISDB_S && cs.slot == 0U &&
+          cs.frequency_khz == 1613000U);
+    const Px4TsArguments cs_slot = parse({"px4-ts", "--device", "00001205000960",
+        "--receiver", "0", "--channel", "CS2", "--slot", "5"});
+    CHECK(cs_slot.valid && cs_slot.slot == 5U);
+    CHECK(terrestrial_arguments().valid);
+    CHECK(parse({"px4-ts", "--device", "00001205000960", "--receiver", "7",
+                 "--system", "isdb-s", "--frequency-khz", "146875", "--slot", "0"}).valid);
+    return true;
+}
+
 bool test_runner_packets_and_satellite()
 {
     CHECK(run_fake(FakeMode::normal, terrestrial_arguments(), Error::OK, 188U));
@@ -1196,6 +1302,7 @@ bool test_runner_duration_signal_and_output()
 
 bool run_px4_ts_tests()
 {
-    return test_argument_contract() && test_runner_packets_and_satellite() &&
+    return test_argument_contract() && test_channel_conversion() &&
+           test_channel_argument_contract() && test_runner_packets_and_satellite() &&
            test_runner_protocol_and_cleanup_errors() && test_runner_duration_signal_and_output();
 }
