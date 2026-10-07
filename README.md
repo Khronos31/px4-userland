@@ -65,6 +65,10 @@
 
 機能軸別の対応状況は下表のとおりです（SPEC 10.3 準拠）。
 
+v0.1.10では配布binary 8種の短時間実機確認を実施しました。PX-Q3U4のreceiver 7の既知不具合と、
+macOSで1回観測したUSB再接続後のCC異常（追加20回では未再現）を含む判定・検証範囲は、
+[今回の検証記録](docs/platforms/validation-results.md#2026-10-08-v0110-release-candidate試験)を参照してください。
+
 | OS / 環境 | 対象model/profile | build-tested | tuner-hardware-verified | card-core-hardware-verified | native-card-adapter-verified | 備考 |
 |---|---|:---:|:---:|:---:|:---:|---|
 | Linux x86_64 | PX-Q3U4 | 完了 | 検証済み | 検証済み | 検証済み | 完全静的CLI + glibc/musl別IFD Handler |

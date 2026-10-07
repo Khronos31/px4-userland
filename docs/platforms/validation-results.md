@@ -6,6 +6,194 @@
 
 Stable release の検証記録は本ファイルへ日付付きで追記する。新しい records directory や template framework、汎用スクリプトは作らない。release record には候補 version/commit/CI run、9 archive（8 binary + source）と checksum/audit結果、baseline tag と各 artifact の byte-identity 判定、変更の hunk-level 影響（call-path/guard）、claim ごとの `継承` / `今回再検証` / `未認定` / `対象外`、canary/soak の選定理由（環境ID E01–E17、固定順の位置、単一OS規則による非該当を含む）、各 test の環境ID・host・device/USB ID・runtime/access path・archive SHA-256・UTC時刻・コマンド・counter・結果・ログ保存先、未実施または非該当の物理操作と理由を記録する。canonical 環境ID と手順は [`release-validation.md`](../release-validation.md) を正本とする。Android ad-hoc APK は dtv-android 所管であり本記録に含めない。
 
+## 2026-10-08 v0.1.10 release-candidate試験
+
+候補sourceは`68b896b9d99e948aa8509d6a663a5fec3a9a5971`。独立したCI run
+[`37602531584`](https://github.com/Khronos31/px4-userland/actions/runs/37602531584)（push）と
+[`37602547644`](https://github.com/Khronos31/px4-userland/actions/runs/37602547644)（dispatch）は全job成功。
+unit/offline、8 target build、static relink、license/source/archive audit、downloaded executable start、
+4 artifact smokeを含む。9 archive本体と外側`SHA256SUMS`はbyte-identical。
+外側checksumのSHA-256は`4fb81f02732fd986b4fb6915ec49844f0742283ca6546c2892a722903c10deae`。
+公開v0.1.9（source/tag commit `cf38742618bb02db41a95def619fbff50e9eb0f3`）の9 archiveとは全件byte-different。
+
+runner imageはUbuntu x86_64の`20260927.320.1` / `20261004.327.1`、Ubuntu arm64の
+`20260927.135.1` / `20261004.142.1`がjob/runにより異なる。macOS arm64は両runとも
+`20260831.0302.1`。artifact生成toolchainの観測値は両runで一致（37件のapk package versionを含む）:
+musl GCC14.2.0 / binutils2.44-r3 / musl1.2.5-r12、glibc IFD GCC10.2.1、
+AppleClang15.0.0.15000309 / Xcode15.4 (`15F31d`) / macOS SDK14.5、
+Android NDK r27d (`27.3.13750724`) / Clang18.0.4 / API24。
+offline Ubuntu testsはGCC13.3.0。runner metadataと実効build inputを区別してSPEC10.5-2の一致と判定した。
+libusb1.0.30 sourceはworkflowのpinned checksum
+`fea36f34f9156400209595e300840767ab1a385ede1dc7ee893015aea9c6dbaf`を使用。
+glibc IFDのDebian11 imageはdigest
+`6f519a81440354a85eb592c5f32109ab80605f6b892455983a6f618bf87fabe9`に固定。
+全CLIはlibusb静的リンク。
+Linux CLIはmusl完全静的（PT_INTERP/DT_NEEDEDなし）、IFDはglibc2.31またはmuslのlibc別shared object。
+macOSは標準system library/frameworkのみ、AndroidはBionicのlibc/libdl/libm、daemonのliblogに依存する。
+各archiveに`manifest.json`、`evidence/binary-audit.json`とlink inventory、license/noticeを同梱し、
+source archiveとx86_64/aarch64/macOSのrelink proofをCIで確認した。firmwareは配布に含めない。
+
+### artifact別短時間matrix
+
+以下のSHAは`px4-userland-0.1.10-<target>.tar.gz`。全試験は候補archiveをそのまま使用し、手元buildで代替していない。
+Q3U4は同一個体（base serial `00001205000960`、USB `0511:084a`のhalf `601/602`）、B-CAS、
+両RF lead、15V adapterを使用。firmwareは2169 bytes、SHA-256
+`5213a5a38872661277a2cc1b2dfdfe88faf06f41205f460f3b51857f0568b484`。
+日時は2026-10-07 UTC（JSTでは一部10-08）。raw log保存先はHAOSの`/config/.work/px4-0.1.10/`配下。
+
+| target | archive SHA-256 | 環境・日時 UTC | log |
+|---|---|---|---|
+| linux-glibc-x86_64 | `05ab1da963fffc659871a084f7d9429551c346b4fc1b6072f8e33f4a9a26f074` | E03 Latitude、AnduinOS2.0.4/glibc2.43/kernel7.0.0-34、13:20:30〜13:29:51 | `e03-matrix/` |
+| linux-musl-x86_64 | `39059a44dd6fac7b7df6f1bff9f980cec2a00c576c04a18196e96591db01d7ac` | E02 HAOS Supervisor Alpine試験addon、14:27:35〜14:34:29 | `e02-matrix/` |
+| linux-glibc-aarch64 | `bcd3ed3cfd60ea670d9d9f5f903e58bae97999055b56e3524bd9a3e3d683eb72` | E15 Switch、Fedora42/L4T4.9.140、14:44:34〜14:48:09 | `e15-glibc/` |
+| linux-musl-aarch64 | `2674555321c65db32d032941797e1ea640802b701dbd48619effa655fef0f7ab` | E15同host、native Alpine3.22.5/Podman5.8.2、14:49:04〜14:54:05 | `e15-musl/` |
+| darwin-arm64 | `793594c33c13e8bad55766e2e87a00fcf02a95f89c3843ac5aefadc59a275b2d` | E04 M2 Mac mini/Darwin25.6.0、16:38:57〜16:42:38、追加試験下記 | `e04-short-runtime/` |
+| android-aarch64 | `1507ebe574c8f468f4d908bb553353ce886b4ecb6d696c03e90998b322f8e442` | E05 Pixel9a/Android17/kernel6.1.162、15:11:07〜15:15:26 | `e05-matrix/` |
+| android-armv7a | `3dca801c98bb4e69e50ea6c1cda10100eae6d7a781e790b24ac10030d4bae2bd` | E06 Google TV Streamer/Android14/kernel5.15.180、15:35:52〜15:41:20 | `e06-matrix/`, `e06-recovery/` |
+| android-x86_64 | `380c4eb80916936f08524775ac274d233a615678e4c1a680a2b9eec4f935635d` | E07 Bliss OS/Android13/kernel6.1.112、16:05:59〜16:12:15 | `e07-matrix/`, `e07-recovery/` |
+| source | `1ea4cde0fbd9354b7de88c1efda5b5317c47c377fd3fdaf9f3327e91ca5b5f11` | corresponding source / CI audit | `run1/`, `run2/`, `ci-logs/` |
+
+コマンドは`docs/release-validation.md` §0.1の`px4d --list/--list-json`、daemon起動、
+`px4ctl status/list/card-status/card-atr/card-reset/card-apdu 90:30:00:00:00 --repeat 10`、
+8 receiver各30秒の`px4-ts`、USB切断clientと再接続後の新daemon、TERM/wait/runtime残留確認。
+Linux/macOSは既存`matrix-posix.sh <archive> <FW> <log>`、Termuxは正式`px4-termux`の2-FD経路を
+使うリポジトリ外`termux-matrix.sh`で実行した。受信はS1318000kHz slot0 / T527143kHz、
+順序0,1,4,5,2,3,6,7。通常matrixではreceiver0〜3に`--channel BS15_0/T22`を併用した
+（CLIのT22変換値は527142kHz、直接指定のTは527143kHz）。
+USB/cardの物理操作は通知後にユーザーが実施し、各応答は5分以内。
+全8 archiveで列挙/ready8、カード不在・generation更新・NO_CARD exit9、再挿入後ATR/reset/APDU10、
+USB切断のclient/daemon exit7、再列挙・新daemon受信/APDU、通常daemon exit0/runtime除去を確認した。
+receiver0〜6のTS sync/TEI/CC/queue/USBはE04の下記事象を除き全0。
+receiver7は下記の既知burstによりexit8となる。全receiverのbytes=packets×188。
+
+receiver7の各matrix 30秒区間（TEI/CC、sync/queue/USBは全0）:
+
+| target | 初回 / card再挿入後 / USB再接続後 |
+|---|---|
+| E03 glibc x86_64 | 11008/619、10945/606、10960/616 |
+| E02 musl x86_64 | 0/0、10920/620、10946/583 |
+| E15 glibc aarch64 | 10903/670、10913/622、10908/575 |
+| E15 musl aarch64 | 10902/621、10944/596、10937/589 |
+| E04 macOS | 10967/619、10966/659、10950/598 |
+| E05 aarch64 | 10938/628、10993/695、10899/644 |
+| E06 armv7a | 10929/603、10981/680、10941/586（別recovery） |
+| E07 x86_64 | 10986/639、10977/616、10936/610（別recovery） |
+
+E02は一時candidate overlayで実行し、PC/SC smokeも成功（receiver7 TEI10874/CC646）。
+終了後Dockerfile/payload/Supervisor optionsを退避とbyte照合して復元し、元contextでrebuildして停止。
+imageのbyte同一性を検証した意味ではない。E15 muslはnative aarch64、USB passthrough、
+`--network=none --cgroups=disabled`の一時containerを用い、終了後container消滅を確認した。
+E06/E07の最初のUSB再接続は新USB pathのPermission deniedで未完了。失敗を保存したうえで両pathを
+`termux-usb -r`により許可し、別recovery runで8受信/APDU/終了を完了した。
+E07はOS起動USBを残し、sysfs vendor/product/half serial照合によりQ3の2 pathだけを選択。
+E05/E06/E07では追加のSIGINT/SIGHUP試験が各130/129で有限終了、第1 real FD取得後の第2 open失敗注入が
+exit70で1秒以内に終了し、追跡した子process/endpoint/可視FD holderの残留なし。
+Androidの/proc可視範囲を超えたFD不存在は主張しない。SIGTERMは各matrixで確認した。
+
+### receiver7のfresh参照とrelease判断
+
+stream寿命変更があるためE03でfresh比較を実施。同一個体/RF/電源/FW、S1318000slot0/T527143、
+8同時受信の各30秒を比較した。候補`r7-candidate-fresh/`はTEI10915/CC563、
+`px4_drv`参照`r7-reference-public30/`はTEI10935/CC656。候補のpublic測定区間は30.002〜30.027秒、
+参照は30.002〜30.049秒、8 receiverの共通区間は各29.638秒/29.041秒。
+receiver0〜6は両者sync/TEI/CC0。参照helperのqueue/USB counterは未観測、kernel logに追加エラーなし。
+候補のqueue/USBは0。1組の観測では候補が参照以下だが、他の候補試行には参照値を上回るものもあり、
+全試行の非悪化やversion間の統計的優劣を証明した意味ではない。
+
+参照moduleはpx4_drv `7fa9f05d2cbdf1d821f479248d561f9868051b8b`と既存互換patchを使用。
+最初のloadはkernel7のUBSANが末尾`chrdev[1]`宣言を検出したためcapture前にunload。
+scratchでflexible array/struct_sizeの互換修正だけを適用（sanitizerを維持）、module SHA-256
+`116c487c2d0bebc0b6f0c6715339e4055f1455a0b69bb41fc6980aabf6ca2337`（v0.4.0、gcc15.2.0、vermagic7.0.0-34-generic）。
+helperはstartup後のpublic TSを30秒計測するよう時間処理を修正。source SHA-256
+`e4b0b0f50a2b647b3e46049a75756504de31795a878f192003e0c3deac0493c9`、binary
+`bed858ec52d85d6e87b656e4487f9a893a0b0f4a2478dd8a253cf24aa3f119e6`。
+legacy T周波数番号は72（95143+72×6000）、Sは7。先のT22指定失敗と約28.6秒public測定試行は比較から除外し保存。
+全試行後module/node消滅、候補T受信3秒/APDU10/通常終了を確認（`r7-post-unload/`）。常設installなし。
+
+2026-10-08ユーザー決定: **receiver7は[Issue #1](https://github.com/Khronos31/px4-userland/issues/1)の
+既知不具合として継続し、v0.1.10のブロッカーにはしない**。SPEC v0.29 §10.5に当該release限定の
+受入判断を記録。counter/CLI exitと元の比較結果を保持し、一般のhardware認定範囲を拡大しない。
+
+### macOSの単発CC事象と固定回数追加調査
+
+E04初回`e04-matrix/`は長い既定TMPDIRのUNIX socket pathでINVALID_ARGUMENTとなり、
+短い`TMPDIR=/tmp`で別matrixを実施した。16:42のUSB再接続後8受信ではreceiver0/1のCC各5、
+receiver2/3のCC各6を観測（TEI/sync/queue/USB0、exit8）。receiver4〜6は0。
+カード/終了は正常。原因は未解明であり、元試行は失敗記録を保持する。
+単発の追加受信、候補USB再接続1回、公開v0.1.9 USB再接続1回はreceiver0〜6全0だった。
+旧版は公開asset SHA-256 `206d4898e9e8935937a8f34a682b4bbaa1413696ece810a0b3eefeb813421871`を使用した。
+
+ユーザーと固定回数計画を決め、候補でA=USB再接続、B=USB保持・daemon TERM/再起動をABBA×5、
+各10回実施（17:08:20〜17:38:55 UTC、`e04-frequency-candidate/01-A`〜`20-A`）。
+各回は単独S受信5秒→遷移→3秒待機→新daemon ready→8 receiver各30秒、途中/終了後APDU10。
+同じMac/USB port/RF/電源/B-CASで、選局は全receiverを直接周波数指定に統一した。
+途中の正常結果で打ち切らず20回を完走した。
+
+| 条件 | 完了 | receiver0〜6の異常試行 | 同時stream8 / APDU10 / 通常終了・残留なし |
+|---|---:|---:|---|
+| A USB再接続 | 10/10 | 0/10 | 全回正常 |
+| B USB保持・daemon再起動 | 10/10 | 0/10 | 全回正常 |
+
+receiver7は別集計（A10/10、B6/10でburst）、追加試験のTEI/CCを全試行順に記録:
+10994/576、10950/586、10939/632、10977/594、10877/609、10972/643、10943/647、10982/660、
+10896/529、10934/618、0/0、10949/599、10898/634、10947/592、0/0、10956/603、
+10926/601、0/0、0/0、10971/660。全sync/queue/USB0。
+uptime/vm_statを各試行前後に保存。Aの観測USB不在は20〜69秒、readyまで1〜2秒。
+0/10は当該条件で未再現という結果であり、低頻度・不存在の証明ではない。
+元の失敗は一部`--channel`指定のため、そのCLI記法差の影響も排除したとは主張しない。
+事前計画の条件に従い、新しいreceiver0〜6異常が出なかったため旧版の追加10回は省略した。
+2026-10-08ユーザーは追加調査をここで終え、元の単発事象を保持したまま非blockingで進める判断に同意した。
+
+### 変更impact・claimと追加確認
+
+baselineはv0.1.9および本ファイルの2026-09-29/30 model別qualification、2026-10-02 artifact/adapter記録。
+累積差分はv0.1.9..68b896b。ハンクとcall pathの分類:
+
+- `q3u4_stream.cpp`のpump threadをdetachからjoinへ変更し、`join_in_progress`と終了待機のownershipを修正。
+  共通data planeを使う全profileのstream/lifetimeに影響する。全artifact matrixとfresh r7比較を追加。
+- `q3u4_tuner_backend.cpp`の切断通知をfrontend/powerへ接続し、`mark_disconnected`がreceiver/TSID状態を破棄。
+  `q3u4_frontend.cpp`の各操作のdisconnected guard、`q3u4_power.cpp`の電源状態失効はQ3系のhotplug/cleanupに影響。
+  W3系など未所持profileへQ3の結果を外挿しない。
+- `q3u4_frontend.cpp`の衛星TSID選択は残時間0でもread-backを1回行う期限処理。
+  `single_receiver_frontend.cpp`はISDB-T lock後待機と衛星slot/TSID選択を追加。
+  M1URのT/S・slot/stream-id、S1URのT、Q3 same-lease retuneで確認。
+- `px4_ts_core.cpp`は`--channel`の厳密parse/周波数・slot変換と排他検査。IPC wireは不変。
+  offline CLI testsと実機matrixの混在指定を使用。versionは0.1.10。
+- card core/IFD/IPC wire/USB discovery/packaging/LNB GPIOへの直接変更はない。
+  shared backend寿命に関わる受信中APDU/終了をfreshで確認し、native adapter固有経路の非変更部分を継承。
+
+| claim/path | 状態 | 根拠・範囲 |
+|---|---|---|
+| Q3U4、8 archiveの短時間stream/card/hotplug | 今回再検証 | 全8件実施。receiver7とMac単発事象の上記dispositionを伴う |
+| M1UR/S1UR、E01 SCS/E03 native T/S・retune・USB復旧 | 今回再検証 | `single-profile.sh`、下記4件。既存profile認定のaffected pathを再確認 |
+| M1UR/S1UR、既存native PC/SC adapter固有経路 | 継承 | IFD/IPC契約・card実装非変更。既存qualificationとnative adapter記録。今回の4件はdirect APDUでありPC/SC再試験ではない |
+| Q3U4、native PC/SC adapter固有経路 | 継承 | 同じ非変更根拠。E02のみ今回PC/SC smokeを追加。E15 adapterは未試験 |
+| Q3U4、same-lease S retune | 今回再検証 | E03 receiver0、BS15 slot0→1→2→1→0を各10秒。TS/STREAM_END全error0、release成功、APDU10/終了正常 |
+| DTV02A-5TS-P / MLT5、既存stream hardware claim | 未認定 | 共通pump寿命変更で過去claimが失効。今回実機なし。ユーザー指定によりREADME表は保持し、release notesに当該versionの未再検証を明記 |
+| その他未所持profile / 未観測runtime・feature | 未認定 | W3/MLT8/DTV系、Android M1UR/S1UR追加認定等の実機試験なし。新claimなし |
+| Windows / FreeBSD / Android ad-hoc APK | 対象外 | SPEC scopeとdtv-android所管に従う |
+
+M1UR/S1URのexact candidate追加試験日時:
+E01 M1UR10:07:57〜10:14:26（`e01-m1ur/`）、E01 S1UR12:45:32〜12:49:17（`e01-s1ur-2/`）、
+E03 M1UR13:07:27〜13:12:06（`e03-m1ur/`）、E03 S1UR13:12:16〜13:16:17（`e03-s1ur/`）。
+T受信/APDU併走、stop/reopen、M1URのBS slots0/1/2（TSID0x40f1/0x40f2/0x48f3）、stream-id16626、
+slot11 timeout5、S1URのBS拒否2、same-lease、USB抜去exit7/新daemon受信APDU/残留なしを確認。
+これら4件で物理card hotplugや新しい30分profile認定を実施した意味ではない。
+retune helper source SHA-256 `36d6cdfeed6163eccfc5423889e22955218ac3b97a3c090efdeb1735968152b1`、
+既定binary `a9b4b74d1e0167b3699a81500b862710143a81278c1e3b764ca0b16f482404c0`、
+T_ONLY `c811e517b9497b94c212eeaef4f8199882c3552d4b0ade77b29b2fb69fafd298`、
+S_ONLY `960d32c0778c9d56b86ab48425b4f2223565285130ac48e009076ec8efa66863`。
+既存helperを候補core/ipcへrelink、Debian clang19.1.7。Q3の結果は`q3-same-lease/`。
+
+soakは変更影響を提示したうえでユーザーが「実施しない」と決定。固定20回は各30秒でありsoakを代替したとは扱わない。
+失敗・未完了試行: E01抜去判定の誤り2件、S1UR中断1件、E03 M1UR物理応答5分超過1件、
+参照module/helper/周波数/測定時間の先行試行、E15 containerネットワーク準備失敗、E06/E07 permission失敗、
+E04長いruntime path失敗と単発CC事象をそれぞれ別logに保持。
+受信中の列挙でinvalid_serialになる既存事象は[Issue #48](https://github.com/Khronos31/px4-userland/issues/48)、
+MLT5系切断通知の未対応は[Issue #47](https://github.com/Khronos31/px4-userland/issues/47)で継続。
+
+本節は候補実機試験と受入判断の記録。結果commitへのtag付け、最終CI、配布payload比較と公開asset確認は別工程。
+
 ## 2026-10-02 v0.1.9 release-candidate試験（必須matrix完了）
 
 候補source commit `0353fba362c4a64331738c2fb246cd9576bdfdf8`（`docs: codify release validation procedure`）に対し、release-candidate workflow run [`36878304743`](https://github.com/Khronos31/px4-userland/actions/runs/36878304743) と独立run [`36879005809`](https://github.com/Khronos31/px4-userland/actions/runs/36879005809) を実行した。両runは全job success。各候補で8 binary archiveとsource archiveのchecksumを照合し、9 archive本体と外側`SHA256SUMS`は2 run間で全てbyte-identicalだった。`SHA256SUMS`のSHA-256は`e38cb6638e87d169e7228cde9855ac3ebfbbc68fd75aef6a5ec404b01f76c895`。v0.1.8 Stable（tag commit `817d9c6952d71b1c85c815e71c25f6170554da18`）との比較では、8 binary archiveとsource archiveの全9件がbyte-different。今回のLinux glibc x86_64 archiveは`1ada505e9b0ca7071226ce32821862cdd131d5f4f7dc5d68d4f38d24ed9af80b`。

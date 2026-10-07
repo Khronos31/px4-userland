@@ -371,6 +371,10 @@ opt-inなし・ありの各runでログ名を分ける。15V拒否時に電圧�
 
 ## 5. 結果の記録と公開可否
 
+v0.1.10のreceiver 7 burstとmacOSの単発CC異常には、SPEC v0.29 §10.5に記録したユーザー決定の
+release限定dispositionを適用する。原試行と追加試験を別々に保存し、参照比較の全試行合格や
+原因解明、一般的な異常免除を意味する表示に置き換えない。
+
 ハードウェア試験は [`platforms/validation-results.md`](platforms/validation-results.md) に日付付きで追記する。新しい records directory や template framework、汎用スクリプトは作らない。Stable release recordには少なくとも次を残す。
 
 - version、source commit、candidate workflow run、9 archiveと外側checksumの確認結果、toolchain/build input、static/dynamic link inventory、relink結果、license/corresponding-source条件

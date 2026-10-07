@@ -1,9 +1,17 @@
 # px4-userland 仕様
 
-Status: Frozen v0.28 (2026-10-07)
+Status: Frozen v0.29 (2026-10-08)
 
 本書の`MUST`、`MUST NOT`、`SHOULD`は規範要件を示す。実機観測で前提の誤りが判明した場合も暗黙に
 実装だけを変えず、本書のversionと変更理由を更新してから実装する。
+
+### v0.29 change record (2026-10-08)
+
+- 10.5節: v0.1.10の実機観測とユーザー決定に基づく、当該release限定の受入判断を明記する。
+  receiver 7の参照比較は全試行で参照以下を証明した扱いにせず、既知不具合を継続する。
+  macOSのreceiver 0〜3の単発CC異常は原記録と未解明の原因を保持し、追加の固定20回で
+  receiver 0〜6の異常が再現しなかった結果とともに非blockingとして受け入れる。
+  TS integrity計数、CLI exit、実装、将来releaseの一般受入条件は変更しない。
 
 ### v0.28 change record (2026-10-07)
 
@@ -1155,6 +1163,17 @@ evidenceを継承したかを明記する。exact-current-artifactで未試験�
 archive auditとnative CI buildを必須とするが、実機未検証を既知の非ブロッカーとして公開時に明記する。
 
 ### 10.5 Stable release gate
+
+v0.1.10に限る受入判断（2026-10-08、ユーザー決定）: 必須8 artifact matrixを全件実施したうえで、
+receiver 7のTEI/continuity burstを既知不具合として継続し、ブロッカーから除く。
+10.2.6aのfresh参照比較は実施結果を残すが、全試行の非悪化を証明したと表示しない。
+macOSのUSB再接続後にreceiver 0〜3で観測したCC `5/5/6/6` は原因未解明の単発事象として残し、
+追加の固定ABBA×5（USB再接続10回、USB保持・daemon再起動10回）でreceiver 0〜6の異常が
+各条件0/10だった結果を基に非blockingとして受け入れる。追加試験は直接周波数指定であり、
+元試行の混在した`--channel`指定との差、および低頻度・不存在を証明していない点を明記する。
+これは当該releaseのリスク受入であり、原失敗を合格へ書き換えたり、hardware claimの範囲を広げたり、
+今後のreleaseで同様の異常を自動免除する規則ではない。詳細は
+[`validation-results.md`](docs/platforms/validation-results.md)のv0.1.10記録を参照する。
 
 Stable公開前に、次の条件をすべて満たすこと。
 
