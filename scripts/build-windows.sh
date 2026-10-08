@@ -159,10 +159,10 @@ tar -xjf "$libusb_archive_path" -C "$work/libusb" --strip-components=1
 libusb_include="$work/libusb-prefix/include/libusb-1.0"
 libusb_dll="$work/libusb-prefix/bin/libusb-1.0.dll"
 libusb_implib="$work/libusb-prefix/lib/libusb-1.0.dll.a"
-[ -f "$libusb_dll" ] && [ -f "$libusb_implib" ] && [ -f "$libusb_include/libusb.h" ] || {
+if [ ! -f "$libusb_dll" ] || [ ! -f "$libusb_implib" ] || [ ! -f "$libusb_include/libusb.h" ]; then
     printf '%s\n' 'shared libusb DLL/import library was not produced' >&2
     exit 1
-}
+fi
 
 configure_build() {
     build_dir=$1
