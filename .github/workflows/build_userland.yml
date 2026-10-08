@@ -804,6 +804,85 @@ jobs:
               Write-Host "probe cleanup error=$($_.Exception.Message)"
             }
           }
+      # The Server 2022 runner's default LOCALAPPDATA is owned by
+      # BUILTIN\Administrators (measured: owner=BUILTIN Administrators,
+      # protected=False, inherited SYSTEM/Administrators/Users ACEs). The product's
+      # verify_runtime_parent requires the exact current-user owner, so worker startup
+      # fails there. This step points the offline suites and archive smoke only at a
+      # fresh test-only directory owned by the current user with a protected
+      # current-user-only FullControl DACL, satisfying the same policy without
+      # weakening it or changing the runner image.
+      - name: Prepare isolated owned LOCALAPPDATA for the offline suites
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $runnerTemp = [System.Environment]::GetEnvironmentVariable('RUNNER_TEMP')
+          if (-not $runnerTemp) { throw 'RUNNER_TEMP is not set' }
+          $fixture = $null
+          for ($attempt = 0; $attempt -lt 8; $attempt++) {
+            $candidate = Join-Path $runnerTemp ('px4rt-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+            if (-not (Test-Path -LiteralPath $candidate)) { $fixture = $candidate; break }
+          }
+          if (-not $fixture) { throw 'could not allocate a fresh CI runtime fixture' }
+          if (Test-Path -LiteralPath $fixture) { throw "CI runtime fixture already exists: $fixture" }
+          $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+          $security = New-Object System.Security.AccessControl.DirectorySecurity
+          $security.SetOwner($currentUser)
+          $security.SetAccessRuleProtection($true, $false)
+          $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $currentUser,
+            [System.Security.AccessControl.FileSystemRights]::FullControl,
+            ([System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+             [System.Security.AccessControl.InheritanceFlags]::ObjectInherit),
+            [System.Security.AccessControl.PropagationFlags]::None,
+            [System.Security.AccessControl.AccessControlType]::Allow)
+          $security.AddAccessRule($rule)
+          $created = $false
+          try {
+            New-Item -ItemType Directory -Path $fixture | Out-Null
+            $created = $true
+            Set-Acl -LiteralPath $fixture -AclObject $security
+            $item = Get-Item -LiteralPath $fixture -Force
+            if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+              throw "CI runtime fixture is a reparse point: $fixture"
+            }
+            $acl = Get-Acl -LiteralPath $fixture
+            if (-not $acl.AreAccessRulesProtected) {
+              throw "CI runtime fixture DACL is not protected: $fixture"
+            }
+            $ownerSid = $acl.GetOwner([System.Security.Principal.SecurityIdentifier])
+            if (-not $ownerSid -or $ownerSid.Value -ne $currentUser.Value) {
+              throw "CI runtime fixture owner is not the current user: $fixture"
+            }
+            foreach ($ace in $acl.Access) {
+              $aceSid = $ace.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier])
+              if ($ace.IsInherited -or
+                  $ace.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow -or
+                  $aceSid.Value -ne $currentUser.Value) {
+                throw "CI runtime fixture has an unexpected ACE: $($ace.IdentityReference)"
+              }
+            }
+            $fixtureFull = $item.FullName
+            $worstWorkerSocket = $fixtureFull.Length + '\px4-wake-'.Length + 32 + '\w.sock'.Length
+            Write-Host "ciRuntimeFixture=$fixtureFull length=$($fixtureFull.Length) worstWorkerSocketPathBytes=$worstWorkerSocket"
+            if ($worstWorkerSocket -ge 108) {
+              throw "CI runtime fixture path is too long for the worker socket: $worstWorkerSocket UTF-8 bytes"
+            }
+            Add-Content -Path $env:GITHUB_ENV -Value "LOCALAPPDATA=$fixtureFull"
+            Add-Content -Path $env:GITHUB_ENV -Value "PX4_CI_RUNTIME_FIXTURE=$fixtureFull"
+            Write-Host "LOCALAPPDATA for the offline suites and archive smoke is now $fixtureFull"
+          } catch {
+            if ($created -and (Test-Path -LiteralPath $fixture)) {
+              try {
+                if (-not (Get-ChildItem -Force -LiteralPath $fixture)) {
+                  Remove-Item -LiteralPath $fixture -Force
+                }
+              } catch {
+                Write-Host "partial fixture cleanup error=$($_.Exception.Message)"
+              }
+            }
+            throw
+          }
       - name: Run the cross-built Windows offline test suites
         shell: pwsh
         run: |
@@ -835,3 +914,46 @@ jobs:
           }
           & (Join-Path $extract 'px4d.exe') --list
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Clean up isolated owned LOCALAPPDATA (always)
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $fixture = [System.Environment]::GetEnvironmentVariable('PX4_CI_RUNTIME_FIXTURE')
+          $runnerTemp = [System.Environment]::GetEnvironmentVariable('RUNNER_TEMP')
+          if (-not $fixture) { Write-Host 'no isolated CI runtime fixture was created'; exit 0 }
+          if (-not $runnerTemp) { throw 'RUNNER_TEMP is not set during cleanup' }
+          if (-not (Test-Path -LiteralPath $fixture)) {
+            Write-Host "isolated fixture already gone: $fixture"
+            exit 0
+          }
+          $item = Get-Item -LiteralPath $fixture -Force
+          $fixtureFull = $item.FullName
+          $runnerTempFull = (Get-Item -LiteralPath $runnerTemp -Force).FullName.TrimEnd('\')
+          if (-not $fixtureFull.StartsWith($runnerTempFull + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "refusing to clean a fixture outside RUNNER_TEMP: $fixtureFull"
+          }
+          if (-not (Split-Path -Leaf $fixtureFull).StartsWith('px4rt-')) {
+            throw "refusing to clean an unexpected fixture name: $fixtureFull"
+          }
+          if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "refusing to clean a reparse-point fixture: $fixtureFull"
+          }
+          $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+          $acl = Get-Acl -LiteralPath $fixtureFull
+          $ownerSid = $acl.GetOwner([System.Security.Principal.SecurityIdentifier])
+          if (-not $ownerSid -or $ownerSid.Value -ne $currentUser.Value) {
+            throw "fixture owner changed; preserving for inspection: $fixtureFull"
+          }
+          $residual = @(Get-ChildItem -Force -LiteralPath $fixtureFull)
+          if ($residual.Count -ne 0) {
+            foreach ($entry in $residual) {
+              Write-Host "residual fixture entry: $($entry.FullName) attributes=$($entry.Attributes)"
+            }
+            throw "product left residual endpoint/worker entries in $fixtureFull; not deleting them"
+          }
+          Remove-Item -LiteralPath $fixtureFull -Force
+          if (Test-Path -LiteralPath $fixtureFull) {
+            throw "failed to remove the empty isolated fixture: $fixtureFull"
+          }
+          Write-Host "removed empty isolated fixture: $fixtureFull"
