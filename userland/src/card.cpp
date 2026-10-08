@@ -8,6 +8,9 @@
 // Source snapshot maintained by tsukumijima.
 // SPDX-License-Identifier: GPL-2.0-only
 #include "px4/card.h"
+#if defined(_WIN32)
+#include "px4/platform_sleep.h"
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -114,7 +117,11 @@ std::uint64_t SystemCardTime::monotonic_ms() noexcept
 
 void SystemCardTime::sleep_ms(std::uint32_t milliseconds) noexcept
 {
+#if defined(_WIN32)
+    (void)platform::sleep_milliseconds(milliseconds);
+#else
     std::this_thread::sleep_for(std::chrono::milliseconds(milliseconds));
+#endif
 }
 
 Result<bool> It930xCardHardware::detect_card() noexcept

@@ -56,7 +56,9 @@ bool run_it930x_card_tests();
 bool run_ipc_tests();
 bool run_ipc_state_tests();
 bool run_px4d_args_tests();
+#if !defined(_WIN32)
 bool run_px4d_signal_tests();
+#endif
 #if PX4_ENABLE_POSIX_IPC
 bool run_control_integration_tests();
 bool run_posix_ipc_tests();
@@ -3558,7 +3560,9 @@ int main(int argc, char** argv)
         {"ipc_wire_codec", run_ipc_tests},
         {"ipc_connection_state", run_ipc_state_tests},
         {"px4d_arguments", run_px4d_args_tests},
+#if !defined(_WIN32)
         {"px4d_signals", run_px4d_signal_tests},
+#endif
 #if PX4_ENABLE_POSIX_IPC
         {"control_integration", run_control_integration_tests},
         {"posix_ipc_transport", run_posix_ipc_tests},

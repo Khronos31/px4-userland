@@ -12,9 +12,11 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import shutil
+import stat
 import sys
 import tarfile
 import tempfile
+import zipfile
 
 _audit_spec = importlib.util.spec_from_file_location(
     "px4_audit_artifact", Path(__file__).with_name("audit-artifact.py")
@@ -29,6 +31,11 @@ LIBUSB_COPYING_SHA256 = _audit.LIBUSB_COPYING_SHA256
 PLATFORMS = _audit.PLATFORMS
 PROGRAMS = _audit.PROGRAMS
 TERMUX_LAUNCHER = _audit.TERMUX_LAUNCHER
+WINDOWS_DLL = _audit.WINDOWS_DLL
+WINDOWS_PLATFORM = _audit.WINDOWS_PLATFORM
+WINDOWS_TOOLCHAIN_LICENSE_SHA256 = _audit.WINDOWS_TOOLCHAIN_LICENSE_SHA256
+WINDOWS_TOOLCHAIN_LICENSE_NOTICE = _audit.WINDOWS_TOOLCHAIN_LICENSE_NOTICE
+synthetic_pe = _audit.synthetic_pe
 VERSION_RE = _audit.VERSION_RE
 audit_binaries = _audit.audit_binaries
 audit_binary_archive = _audit.audit_binary_archive
@@ -127,6 +134,22 @@ def deterministic_tar(source: Path, destination: Path) -> None:
                         stream.addfile(info, handle)
 
 
+def deterministic_zip(source: Path, destination: Path) -> None:
+    """Write a byte-reproducible zip with fixed metadata and sorted entries."""
+    with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED) as handle:
+        for path in sorted(source.rglob("*")):
+            if path.is_symlink():
+                fail(f"symlink reached archive writer: {path}")
+            if not path.is_file():
+                continue
+            relative = path.relative_to(source).as_posix()
+            info = zipfile.ZipInfo(relative, date_time=(1980, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.create_system = 3
+            info.external_attr = ((path.stat().st_mode & 0o777) | stat.S_IFREG) << 16
+            handle.writestr(info, path.read_bytes())
+
+
 def write_checksums(stage: Path) -> None:
     rows = []
     for path in sorted(stage.rglob("*")):
@@ -194,6 +217,18 @@ def copy_libusb_license(repo_root: Path, stage: Path) -> None:
     staged_copying.chmod(0o644)
 
 
+def copy_windows_toolchain_licenses(repo_root: Path, stage: Path) -> None:
+    source_root = repo_root / "packaging" / "windows-toolchain" / "licenses"
+    for name, expected in WINDOWS_TOOLCHAIN_LICENSE_SHA256.items():
+        source = source_root / name[len("toolchain/"):]
+        if source.is_symlink() or not source.is_file() or sha256(source) != expected:
+            fail("packaging/windows-toolchain/licenses is missing or differs from the pinned "
+                 f"llvm-mingw toolchain license: {name}")
+        destination = stage / name
+        copy_regular(source, destination)
+        destination.chmod(0o644)
+
+
 def render_dependency_notice(repo_root: Path, version: str, platform: str,
                              ndk_revision: str | None = None) -> str:
     template = repo_root / "packaging" / "DEPENDENCY-NOTICE.txt.in"
@@ -225,6 +260,21 @@ def render_dependency_notice(repo_root: Path, version: str, platform: str,
             "This Android archive statically includes libusb 1.0.30 and portions of the NDK C++ runtime. "
             "See libusb/COPYING, the NDK notice materials, THIRD_PARTY_NOTICES.md, evidence/, and the "
             "corresponding-source archive.\n"
+        )
+    elif platform == "windows-x86_64":
+        dependency_text = (
+            "dependency.libusb.version=1.0.30\n"
+            "dependency.libusb.linkage=shared-dll\n"
+            "dependency.libusb.license=LGPL-2.1-or-later\n"
+            f"dependency.libusb.dll={WINDOWS_DLL}\n"
+            "dependency.toolchain=llvm-mingw-20250910-ucrt-x86_64\n"
+            f"dependency.toolchain.licenses={WINDOWS_TOOLCHAIN_LICENSE_NOTICE}\n"
+            f"corresponding-source-archive=px4-userland-{version}-source.tar.gz\n\n"
+            "The Windows executables dynamically load the same-toolchain libusb-1.0.dll shipped in this archive "
+            "under LGPL-2.1-or-later; the C++/unwinder/winpthread/MinGW-w64 runtimes are statically linked. The "
+            "exact narrow llvm-mingw toolchain license texts are included under toolchain/ (see the license paths "
+            "above). The exact libusb source and relink recipe are in "
+            f"px4-userland-{version}-source.tar.gz from the same candidate handoff.\n"
         )
     else:
         dependency_text = (
@@ -364,6 +414,184 @@ def self_test_android_notice_and_archive(repo_root: Path) -> None:
                         fail(f"Android archive self-test found an input path: {member.name}")
 
 
+def _write_bytes(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+
+
+def self_test_windows_archive(repo_root: Path) -> None:
+    """Package and audit a synthetic Windows Phase 1 archive offline."""
+    version = source_version(repo_root)
+    platform = WINDOWS_PLATFORM
+    notice = render_dependency_notice(repo_root, version, platform)
+
+    def contents() -> dict[str, bytes]:
+        files = {
+            "LICENSE": (repo_root / "LICENSE").read_bytes(),
+            "README.md": (repo_root / "README.md").read_bytes(),
+            "THIRD_PARTY_NOTICES.md": (repo_root / "THIRD_PARTY_NOTICES.md").read_bytes(),
+            "libusb/COPYING": (repo_root / "packaging" / "libusb" / "COPYING").read_bytes(),
+        }
+        for name in WINDOWS_TOOLCHAIN_LICENSE_SHA256:
+            files[name] = (repo_root / "packaging" / "windows-toolchain" / "licenses" /
+                           name[len("toolchain/"):]).read_bytes()
+        dp_imports = {"px4d.exe": ("KERNEL32.dll", WINDOWS_DLL),
+                      "px4-ts.exe": ("KERNEL32.dll",),
+                      "px4ctl.exe": ("KERNEL32.dll",)}
+        for program in PROGRAMS:
+            files[f"{program}.exe"] = synthetic_pe(imports=dp_imports[f"{program}.exe"])
+        files[WINDOWS_DLL] = synthetic_pe(imports=("KERNEL32.dll",),
+                                          exports=("libusb_init", "libusb_exit"), dll=True)
+        return files
+
+    def evidence_for(files: dict[str, bytes]) -> dict:
+        records = []
+        for name in (*sorted(f"{program}.exe" for program in PROGRAMS), WINDOWS_DLL):
+            records.append(_audit.audit_windows_pe(_stage_file(name, files[name]), name,
+                                                   is_dll=name == WINDOWS_DLL, source_root=None))
+        return {"platform": platform, "programs": records[:len(PROGRAMS)], "extra": [records[-1]]}
+
+    import atexit
+    scratch = Path(tempfile.mkdtemp(prefix="px4-windows-selftest-"))
+    atexit.register(shutil.rmtree, scratch, ignore_errors=True)
+
+    def _stage_file(name: str, payload: bytes) -> Path:
+        path = scratch / "raw" / name
+        _write_bytes(path, payload)
+        return path
+
+    def build(directory: Path, files: dict[str, bytes], evidence: dict,
+              *, manifest_files: dict | None = None, checksum_lines: list[str] | None = None,
+              zip_writer=None, notice_text: str | None = None) -> Path:
+        stage = directory / "stage"
+        stage.mkdir(parents=True)
+        for name, payload in files.items():
+            _write_bytes(stage / name, payload)
+            (stage / name).chmod(0o755 if name.endswith(".exe") else 0o644)
+        write_text(stage / "DEPENDENCY-NOTICE.txt", notice if notice_text is None else notice_text)
+        write_text(stage / "evidence" / "binary-audit.json",
+                   json.dumps(evidence, indent=2, sort_keys=True) + "\n")
+        manifest = {
+            "schema": 1, "version": version, "platform": platform, "libc": "ucrt",
+            "architecture": "x86_64", "embedded_libusb": {"version": "1.0.30", "linkage": "shared-dll"},
+            "libusb_dll": WINDOWS_DLL, "libusb_archive_sha256": LIBUSB_SHA256,
+            "source_ref": "self-test", "programs": list(PROGRAMS), "production_only": True, "files": {},
+        }
+        for path in sorted(stage.rglob("*")):
+            if path.is_file():
+                manifest["files"][path.relative_to(stage).as_posix()] = {
+                    "size": path.stat().st_size, "sha256": sha256(path)}
+        if manifest_files is not None:
+            manifest["files"] = manifest_files
+        write_text(stage / "manifest.json", json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+        if checksum_lines is None:
+            write_checksums(stage)
+        else:
+            write_text(stage / "SHA256SUMS", "\n".join(checksum_lines) + "\n")
+        archive = directory / f"px4-userland-{version}-{platform}.zip"
+        if zip_writer is None:
+            deterministic_zip(stage, archive)
+        else:
+            zip_writer(stage, archive)
+        return archive
+
+    def expect_rejected(archive: Path, description: str) -> None:
+        try:
+            audit_binary_archive(argparse.Namespace(archive=archive, platform=platform,
+                                                    repo_root=repo_root))
+        except AuditError:
+            return
+        fail(f"Windows archive self-test accepted {description}")
+
+    license_probe = scratch / "license-probe"
+    license_probe.mkdir()
+    copy_windows_toolchain_licenses(repo_root, license_probe)
+    for name, expected in WINDOWS_TOOLCHAIN_LICENSE_SHA256.items():
+        probe = license_probe / name
+        if probe.is_symlink() or not probe.is_file() or sha256(probe) != expected:
+            fail(f"copy_windows_toolchain_licenses staged a mismatched license: {name}")
+
+    valid_files = contents()
+    valid_evidence = evidence_for(valid_files)
+    valid_dir = scratch / "valid"
+    valid_dir.mkdir()
+    valid = build(valid_dir, valid_files, valid_evidence)
+    audit_binary_archive(argparse.Namespace(archive=valid, platform=platform, repo_root=repo_root))
+
+    wrong_arch = dict(valid_files)
+    wrong_arch["px4ctl.exe"] = synthetic_pe(imports=("KERNEL32.dll",), machine=0x14C)
+    wrong_dir = scratch / "wrong-arch"
+    wrong_dir.mkdir()
+    expect_rejected(build(wrong_dir, wrong_arch, valid_evidence), "wrong architecture")
+
+    bad_import = dict(valid_files)
+    bad_import["px4-ts.exe"] = synthetic_pe(imports=("KERNEL32.dll", "evil.dll"))
+    bad_import_dir = scratch / "bad-import"
+    bad_import_dir.mkdir()
+    expect_rejected(build(bad_import_dir, bad_import, valid_evidence), "unexpected import DLL")
+
+    missing_dll = dict(valid_files)
+    missing_dll.pop(WINDOWS_DLL)
+    missing_dll_dir = scratch / "missing-dll"
+    missing_dll_dir.mkdir()
+    expect_rejected(build(missing_dll_dir, missing_dll, valid_evidence), "missing libusb DLL")
+
+    missing_license = dict(valid_files)
+    missing_license.pop("toolchain/LICENSE.TXT")
+    missing_license_dir = scratch / "missing-license"
+    missing_license_dir.mkdir()
+    expect_rejected(build(missing_license_dir, missing_license, valid_evidence),
+                    "missing toolchain license")
+
+    tampered_license = dict(valid_files)
+    tampered_license["toolchain/mingw32/COPYING"] = b"tampered toolchain license\n"
+    tampered_license_dir = scratch / "tampered-license"
+    tampered_license_dir.mkdir()
+    expect_rejected(build(tampered_license_dir, tampered_license, valid_evidence),
+                    "tampered toolchain license")
+
+    tampered_notice_dir = scratch / "tampered-notice"
+    tampered_notice_dir.mkdir()
+    expect_rejected(build(tampered_notice_dir, valid_files, valid_evidence,
+                          notice_text=notice.replace(WINDOWS_TOOLCHAIN_LICENSE_NOTICE, "toolchain/")),
+                    "tampered toolchain license notice")
+
+    tampered_dir = scratch / "tampered"
+    tampered_dir.mkdir()
+    expect_rejected(build(tampered_dir, valid_files, valid_evidence,
+                          checksum_lines=["0" * 64 + "  px4d.exe"]), "tampered SHA256SUMS")
+
+    invalid_manifest_dir = scratch / "invalid-manifest"
+    invalid_manifest_dir.mkdir()
+    expect_rejected(build(invalid_manifest_dir, valid_files, valid_evidence,
+                          manifest_files={"px4d.exe": {"size": 1, "sha256": "0" * 64}}),
+                    "invalid manifest inventory")
+
+    def unsafe_zip(stage: Path, archive: Path) -> None:
+        import zipfile as _zipfile
+        with _zipfile.ZipFile(archive, "w") as handle:
+            handle.writestr("../escape", b"x")
+
+    unsafe_dir = scratch / "unsafe"
+    unsafe_dir.mkdir()
+    expect_rejected(build(unsafe_dir, valid_files, valid_evidence, zip_writer=unsafe_zip),
+                    "path traversal entry")
+
+    def duplicate_zip(stage: Path, archive: Path) -> None:
+        import warnings
+        import zipfile as _zipfile
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with _zipfile.ZipFile(archive, "w") as handle:
+                handle.writestr("px4d.exe", b"x")
+                handle.writestr("px4d.exe", b"y")
+
+    duplicate_dir = scratch / "duplicate"
+    duplicate_dir.mkdir()
+    expect_rejected(build(duplicate_dir, valid_files, valid_evidence, zip_writer=duplicate_zip),
+                    "duplicate zip entry")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--self-test", action="store_true")
@@ -421,8 +649,10 @@ def main() -> int:
             else:
                 fail("synthetic libusb archive bypassed SHA enforcement")
         self_test_android_notice_and_archive(args.repo_root.resolve())
+        self_test_windows_archive(args.repo_root.resolve())
         print("libusb packaging self-test: directory accepted, synthetic SHA mismatch rejected")
         print("Android dependency notice and archive audit self-test: PASS")
+        print("Windows Phase 1 deterministic zip and archive audit self-test: PASS")
         return 0
     for required in (args.platform, args.version, args.output_dir):
         if required is None:
@@ -441,7 +671,8 @@ def main() -> int:
         fail("--binary-suffix contains unsafe path characters")
     platform_kind = PLATFORMS[args.platform]
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    output = args.output_dir.resolve() / f"px4-userland-{args.version}-{args.platform}.tar.gz"
+    extension = "zip" if args.platform == WINDOWS_PLATFORM else "tar.gz"
+    output = args.output_dir.resolve() / f"px4-userland-{args.version}-{args.platform}.{extension}"
     if output.exists() or output.is_symlink():
         fail(f"refusing to overwrite existing archive: {output}")
     with tempfile.TemporaryDirectory(prefix="px4-package-") as temporary:
@@ -451,10 +682,18 @@ def main() -> int:
         for name in ("LICENSE", "README.md", "THIRD_PARTY_NOTICES.md"):
             copy_regular(args.repo_root / name, stage / name)
         binary_root = (args.static_build_dir if args.platform.startswith("linux-") else args.build_dir).resolve()
-        for program in ("px4d", "px4-ts", "px4ctl"):
-            source = binary_root / f"{program}{('-' + args.binary_suffix) if args.binary_suffix else ''}"
-            copy_regular(source, stage / program)
-            (stage / program).chmod(0o755)
+        if args.platform == WINDOWS_PLATFORM:
+            for program in PROGRAMS:
+                copy_regular(binary_root / f"{program}.exe", stage / f"{program}.exe")
+                (stage / f"{program}.exe").chmod(0o755)
+            copy_regular(binary_root / WINDOWS_DLL, stage / WINDOWS_DLL)
+            (stage / WINDOWS_DLL).chmod(0o644)
+            copy_windows_toolchain_licenses(args.repo_root.resolve(), stage)
+        else:
+            for program in ("px4d", "px4-ts", "px4ctl"):
+                source = binary_root / f"{program}{('-' + args.binary_suffix) if args.binary_suffix else ''}"
+                copy_regular(source, stage / program)
+                (stage / program).chmod(0o755)
         if platform_kind.startswith("linux") or platform_kind == "darwin":
             if not args.reader_template:
                 fail("--reader-template is required for native platforms")
@@ -471,6 +710,10 @@ def main() -> int:
             if not args.ifd_bundle:
                 fail("--ifd-bundle is required for macOS")
             copy_tree(args.ifd_bundle.resolve(), stage / "ifd" / "px4-userland-ifd.bundle")
+        elif args.platform == WINDOWS_PLATFORM:
+            if not args.libusb_source_archive:
+                fail("Windows Phase 1 requires --libusb-source-archive")
+            verify_pinned_libusb(args.libusb_source_archive.resolve())
         else:
             if not args.libusb_source_archive or not args.ndk_root or not args.link_map_dir:
                 fail("Android requires --libusb-source-archive, --ndk-root, and --link-map-dir")
@@ -514,21 +757,31 @@ def main() -> int:
             "platform": args.platform,
             "libc": ("glibc" if args.platform.startswith("linux-glibc-") else
                       "musl" if args.platform.startswith("linux-musl-") else
-                      "android" if args.platform.startswith("android-") else "darwin"),
+                      "android" if args.platform.startswith("android-") else
+                      "ucrt" if args.platform == WINDOWS_PLATFORM else "darwin"),
             "architecture": args.platform.rsplit("-", 1)[-1],
-            "embedded_libusb": {"version": "1.0.30", "linkage": "static"},
+            "embedded_libusb": ({"version": "1.0.30", "linkage": "shared-dll"}
+                                 if args.platform == WINDOWS_PLATFORM else
+                                 {"version": "1.0.30", "linkage": "static"}),
             "source_ref": args.source_ref,
             "programs": ["px4d", "px4-ts", "px4ctl"],
             "production_only": True,
             "files": {},
         }
+        if args.platform == WINDOWS_PLATFORM:
+            manifest["libusb_dll"] = WINDOWS_DLL
+            manifest["libusb_archive_sha256"] = LIBUSB_SHA256
         for path in sorted(stage.rglob("*")):
             if path.is_file():
                 manifest["files"][path.relative_to(stage).as_posix()] = {"size": path.stat().st_size, "sha256": sha256(path)}
         write_text(stage / "manifest.json", json.dumps(manifest, indent=2, sort_keys=True) + "\n")
         write_checksums(stage)
-        deterministic_tar(stage, output)
-    audit_binary_archive(argparse.Namespace(archive=output, platform=args.platform))
+        if args.platform == WINDOWS_PLATFORM:
+            deterministic_zip(stage, output)
+        else:
+            deterministic_tar(stage, output)
+    audit_binary_archive(argparse.Namespace(archive=output, platform=args.platform,
+                                            repo_root=args.repo_root))
     print(output)
     return 0
 

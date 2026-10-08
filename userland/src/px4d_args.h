@@ -25,6 +25,11 @@ struct Px4dArguments final {
     bool list_json = false;
     bool group = false;
     bool allow_lnb_power = false;
+#if defined(_WIN32)
+    // Windows Phase 1 cooperative parent-stop contract: exit with normal
+    // cleanup when standard input reaches EOF. Other platforms reject the flag.
+    bool exit_on_stdin_eof = false;
+#endif
     std::string device;
     std::string instance;
     std::string firmware;

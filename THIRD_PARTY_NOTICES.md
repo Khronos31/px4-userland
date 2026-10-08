@@ -2,8 +2,8 @@
 
 This document describes the dependencies and materials for the currently implemented `release-candidate` packaging
 contract. It is not, by itself, a declaration that the project is stable or ready for a general release. The release
-candidate workflow generates and audits eight platform archives plus one corresponding-source archive, then uploads them
-together with an outer `SHA256SUMS` file.
+candidate workflow generates and audits nine binary archives (eight tar archives plus the Windows ZIP) and one
+corresponding-source archive, then uploads them together with an outer `SHA256SUMS` file.
 
 ## No vendored dependency in the repository source
 
@@ -18,8 +18,8 @@ firmware, APK/add-on material, and vendor drivers.
 
 ## libusb license copy in binary archives
 
-Every Linux, macOS, and Android binary archive includes the exact libusb 1.0.30 license text at `libusb/COPYING`, verified
-against the pinned SHA-256.
+Every binary archive (Linux, macOS, Android, and Windows) includes the exact libusb 1.0.30 license text at
+`libusb/COPYING`, verified against the pinned SHA-256.
 
 Primary license text: [libusb 1.0.30 `COPYING`](https://github.com/libusb/libusb/blob/v1.0.30/COPYING).
 
@@ -86,14 +86,39 @@ route apply.
 Primary PC/SC license reference: [pcsc-lite `COPYING`](https://github.com/LudovicRousseau/PCSC/blob/master/COPYING).
 The exact host package versions remain deployment-specific system inputs and are not copied into the native archives.
 
+## Windows Phase 1 archive
+
+The Windows archive is a Phase 1 x86_64 UCRT build for `px4d.exe`, `px4-ts.exe`, `px4ctl.exe`, and `libusb-1.0.dll`.
+It is produced with the pinned, checksum-verified llvm-mingw toolchain. `px4d.exe` dynamically loads the shipped
+same-toolchain `libusb-1.0.dll` under LGPL-2.1-or-later; the archive includes the exact `libusb/COPYING`. The
+C++/unwinder (`libc++`/`libc++abi`/`libunwind`), `winpthreads`, `winstorecompat`, and MinGW-w64 runtime portions are
+statically linked into the executables.
+
+Because those runtimes are statically linked, the archive ships the exact narrow toolchain license texts under
+`toolchain/`, taken from the same pinned, checksum-verified toolchain archive and audited against fixed SHA-256 values:
+
+- `toolchain/LICENSE.TXT` (LLVM Project, Apache-2.0 WITH LLVM-exception);
+- `toolchain/mingw32/COPYING` and `toolchain/mingw32/COPYING.MinGW-w64.txt` (MinGW-w64, Zope Public License 2.1 with
+  marked exceptions);
+- `toolchain/mingw32/COPYING.MinGW-w64-runtime.txt` (MinGW-w64 runtime licensing);
+- `toolchain/mingw32/COPYING.winpthreads.txt` and `toolchain/mingw32/COPYING.winstorecompat.txt` (MIT).
+
+Only these narrow license files are shipped; no compiler binary or toolchain source bulk is vendored into the
+repository or the archive. The prominent `DEPENDENCY-NOTICE.txt` names the toolchain and the exact license paths.
+The archive does not include WinSCard DLLs, Microsoft PC/SC IFD registration, kernel drivers, or WinUSB INF files.
+The source of the statically linked runtime materials is the pinned toolchain archive recorded in the build script
+and in SPEC 7.5.
+
 ## CI and archive audit
 
 The local packaging scripts and `.github/workflows/build_userland.yml` implement the same release-candidate contract.
 They require explicit already-built platform inputs, strict `N.N.N` version matching, and the exact pinned libusb source
 where Android or source packaging needs it. They audit archive allowlists, required files, manifests, checksums, path
-traversal, symlinks/hardlinks, firmware, Windows, probe, kernel/DKMS, and vendor content.
+traversal, symlinks/hardlinks, firmware, probe, kernel/DKMS, and vendor content. Legacy `windows/`/`win32/` source or
+vendor/kernel trees remain rejected; only the Phase 1 Windows ZIP's allowlisted members (the three CLIs, the
+same-toolchain `libusb-1.0.dll`, and the narrow `toolchain/` license texts) are accepted and audited.
 
-The final CI artifact is named `release-candidate` and contains exactly these nine archives (eight binary plus one source)
+The final CI artifact is named `release-candidate` and contains exactly these ten archives (nine binary plus one source)
 and the outer `SHA256SUMS`:
 
 - `px4-userland-<version>-linux-glibc-x86_64.tar.gz`;
@@ -104,6 +129,7 @@ and the outer `SHA256SUMS`:
 - `px4-userland-<version>-android-aarch64.tar.gz`;
 - `px4-userland-<version>-android-armv7a.tar.gz`;
 - `px4-userland-<version>-android-x86_64.tar.gz`;
+- `px4-userland-<version>-windows-x86_64.zip`;
 - `px4-userland-<version>-source.tar.gz`.
 
 This artifact is a candidate handoff, not a Git tag or GitHub Release. Stable acceptance is described in [`SPEC.md`](SPEC.md):

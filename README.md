@@ -83,7 +83,7 @@ macOSで1回観測したUSB再接続後のCC異常（追加20回では未再現�
 | Android Termux（aarch64 / armv7a / x86_64） | PX-Q3U4 | 完了 | 未認定（receiver 7のfresh参照比較条件を満たす根拠なし） | 未認定（receiver 7のfresh参照比較条件を満たす根拠なし） | 該当なし（N/A） | 各ABIのv0.1.9 candidateで2-FD launcher、8 receiver受信、card hotplug/APDU、USB reconnect後の復旧を実機確認済み。receiver 7のburstを含む個別claimの判定は[検証結果](docs/platforms/validation-results.md)参照。 |
 | Android Termux（aarch64 / armv7a / x86_64） | PX-M1UR / PX-S1UR | 完了 | 未認定（一部実機試験） | 未認定（一部実機試験） | 該当なし（N/A） | 各architectureでT/S該当系統と受信中APDUを確認。card抜去/再挿入とUSB切断/再接続は未実施。APKは対象外。 |
 | Android ad-hoc APK | PX-Q3U4 | 対象外 | 対象外 | 対象外 | 該当なし（N/A） | dtv-android 所管。本リポジトリの配布物・release gate には含めません（過去の内部試験記録は検証結果参照） |
-| Windows | — | — | — | — | — | 非対応 / 対象外（out of scope） |
+| Windows 11 x64（Phase 1） | 全model/profile | 対象（cross-build確認済み） | 未検証（hardware-unverified） | 未検証（hardware-unverified） | 該当なし（N/A） | `px4d`/`px4-ts`/`px4ctl`とlocal IPC（CARD_*含む）。Windows native CIでoffline testを実行。実機evidenceが得られるまで`hardware-unverified`。WinSCard互換DLLとPC/SC IFD登録はPhase 2 |
 
 各claimは、明記したmodel/profile × runtime/access path × featureにだけ適用されます。別のmodel/profile、runtime/access path、featureへ検証結果を推論しません。表に記載のない組合せはverified claimの対象外です。
 
@@ -103,6 +103,7 @@ IT930x ファームウェアは本ソフトウェアに同梱されていませ�
 - **Linux**: `px4d`、`px4-ts`、`px4ctl` はPT_INTERPとDT_NEEDEDを持たないmusl完全静的ELFです。PC/SCリーダーとして利用する場合は、hostの`pcscd`が読み込むlibc別（glibcまたはmusl）のIFD Handlerが必要です。
 - **macOS**: libusb は実行ファイルへ静的リンク済みで、Homebrew の libusb は不要です。`px4d`、`px4-ts`、`px4ctl` は macOS 標準のライブラリとフレームワークだけに依存します。PC/SC リーダーとして利用する場合は PC/SC デーモンが必要です。
 - **Android**: libusb は実行ファイルへ静的リンク済みです。Termux 環境で `px4-termux` を利用する場合は、Termux:API アプリ、`termux-api` パッケージ（`termux-usb` を提供）、および依存関係である `util-linux`（`setsid` を提供）が必要です。Python や補助デーモンは不要です。
+- **Windows 11 x64（Phase 1）**: `px4d`/`px4-ts`/`px4ctl` は native libusb（WinUSB backend）を使用し、同一toolchainでビルドしたlibusb DLLを同梱します。kernel driverやWinUSB INFは導入しません。`px4d` はforegroundで動作し、IPC endpointは `--runtime-dir`（既定は `%LOCALAPPDATA%`）配下にsame-user private権限で作成します。cooperative shutdownのため `--exit-on-stdin-eof` を提供します。WinSCard互換DLLは提供しません（Phase 2）。
 
 ### Linux の USB アクセス権限
 
@@ -514,6 +515,17 @@ scripts/build-macos-static.sh --build-dir build-macos \
 
 固定sourceからの再buildやrelinkが必要な場合は、対応source archiveに含まれる
 `BUILD-RELINK.md`の手順と`third_party/libusb-1.0.30.tar.bz2`を使用する。
+
+Windows x64（Phase 1）のクロスビルドは、version・checksumを固定したllvm-mingw/UCRT x86_64
+toolchainを`scripts/build-windows.sh`が取得して行う。toolchain archiveとlibusb Windows
+binaryはtracked fileとして同梱しない。
+
+```sh
+scripts/build-windows.sh --output build-windows
+```
+
+Windowsはlibusbを使用し、`PX4_BUILD_PCSC_IFD` と `px4-termux` は対象外とする。WinSCard互換DLLと
+Microsoft PC/SC IFD登録はPhase 2以降の対象とする。
 
 主な CMake オプション（詳細は [`CMakeLists.txt`](CMakeLists.txt) を参照）:
 - `-DPX4_ENABLE_LIBUSB=ON|OFF`（既定値: ON）: libusb トランスポートのビルド

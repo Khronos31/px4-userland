@@ -175,6 +175,24 @@ bool test_device_and_general_rejections()
                          {"--allow-lnb-power", "--allow-lnb-power"});
     PX4D_CHECK(!parse(duplicate_lnb).valid);
 
+#if defined(_WIN32)
+    Arguments exit_on_eof = native_arguments();
+    exit_on_eof.push_back("--exit-on-stdin-eof");
+    const auto parsed_exit_on_eof = parse(exit_on_eof);
+    PX4D_CHECK(parsed_exit_on_eof.valid && parsed_exit_on_eof.exit_on_stdin_eof);
+
+    Arguments duplicate_exit_on_eof = native_arguments();
+    duplicate_exit_on_eof.insert(duplicate_exit_on_eof.end(),
+                                 {"--exit-on-stdin-eof", "--exit-on-stdin-eof"});
+    PX4D_CHECK(!parse(duplicate_exit_on_eof).valid);
+#else
+    // The cooperative parent-stop flag is a Windows-only contract; every other
+    // platform must reject it rather than accept a silent no-op.
+    Arguments posix_exit_on_eof = native_arguments();
+    posix_exit_on_eof.push_back("--exit-on-stdin-eof");
+    PX4D_CHECK(!parse(posix_exit_on_eof).valid);
+#endif
+
     Arguments path_without_instance = native_arguments();
     path_without_instance.insert(path_without_instance.end(), {"--usb-path", "1-2"});
     PX4D_CHECK(!parse(path_without_instance).valid);

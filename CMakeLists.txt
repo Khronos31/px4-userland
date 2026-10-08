@@ -29,6 +29,17 @@ set(PX4_ANDROID_NDK_ROOT_MAP "" CACHE PATH
 set(PX4_ANDROID_LINK_MAP_DIR "" CACHE PATH
     "Optional output directory for Android production executable link maps")
 
+if(WIN32)
+    # Statically link the C++ runtime, unwinder, and winpthreads so release PEs
+    # do not depend on toolchain runtime DLLs, and map machine-specific source
+    # and build roots out of embedded strings. Applies to every target below.
+    add_link_options(-static "-Wl,--no-insert-timestamp")
+    add_compile_options(
+        "-ffile-prefix-map=${CMAKE_SOURCE_DIR}=."
+        "-ffile-prefix-map=${CMAKE_BINARY_DIR}=."
+    )
+endif()
+
 if(ANDROID)
     # Release ELFs must not retain the machine-specific source, build, or NDK
     # roots emitted by Clang's DWARF and macro expansion.  Keep the mapped
@@ -252,6 +263,245 @@ if(UNIX)
     endif()
 endif()
 
+# Windows Phase 1 platform adapter and IPC engine. The POSIX files above are
+# left untouched; Windows-specific primitives, the AF_UNIX IPC adapter, and the
+# shared control server/worker wiring live in userland/src/windows/ and the
+# shared sources, selected only for Windows hosts.
+if(WIN32)
+    add_library(px4_userland_windows_platform STATIC
+        userland/src/windows/windows_sleep.cpp
+        userland/tools/px4d_signals.cpp
+    )
+    target_include_directories(px4_userland_windows_platform
+        PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/userland/tools
+    )
+    target_compile_features(px4_userland_windows_platform PUBLIC cxx_std_17)
+    target_link_libraries(px4_userland_windows_platform PUBLIC px4_userland_core)
+    px4_enable_project_warnings(px4_userland_windows_platform)
+
+    add_library(px4_userland_windows_ipc STATIC
+        userland/src/control_client.cpp
+        userland/src/control_server.cpp
+        userland/src/control_workers.cpp
+        userland/src/windows/windows_ipc.cpp
+        userland/src/windows/windows_tuner_nonce.cpp
+    )
+    target_include_directories(px4_userland_windows_ipc
+        PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
+    )
+    target_compile_features(px4_userland_windows_ipc PUBLIC cxx_std_17)
+    target_link_libraries(px4_userland_windows_ipc PUBLIC
+        px4_userland_core
+        px4_userland_windows_platform
+        advapi32
+        bcrypt
+        ws2_32
+    )
+    px4_enable_project_warnings(px4_userland_windows_ipc)
+
+    add_executable(px4ctl
+        userland/tools/px4ctl.cpp
+        userland/tools/px4ctl_format.cpp
+    )
+    target_link_libraries(px4ctl PRIVATE px4_userland_windows_ipc shell32)
+    target_include_directories(px4ctl PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/tools
+    )
+    target_compile_features(px4ctl PRIVATE cxx_std_17)
+    px4_enable_project_warnings(px4ctl)
+
+    add_executable(px4-ts
+        userland/tools/px4_ts_windows.cpp
+        userland/tools/px4_ts_windows_output.cpp
+        userland/tools/px4_ts_core.cpp
+    )
+    target_link_libraries(px4-ts PRIVATE px4_userland_windows_ipc shell32)
+    target_include_directories(px4-ts PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/tools
+    )
+    target_compile_features(px4-ts PRIVATE cxx_std_17)
+    px4_enable_project_warnings(px4-ts)
+
+    if(PX4_ENABLE_LIBUSB)
+        add_executable(px4d
+            userland/tools/px4d.cpp
+            userland/tools/px4d_list_format.cpp
+            userland/tools/px4ctl_format.cpp
+            userland/tools/px4d_windows_stdin.cpp
+            userland/src/px4d_args.cpp
+        )
+        target_link_libraries(px4d PRIVATE
+            px4_userland_windows_ipc
+            px4_userland_windows_platform
+            px4_userland_libusb_transport
+            shell32
+        )
+        target_include_directories(px4d PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/tools
+        )
+        target_compile_features(px4d PRIVATE cxx_std_17)
+        px4_enable_project_warnings(px4d)
+        if(PX4_BUILD_TESTS)
+            # When tests are enabled the core library omits q3u4_stream.cpp to
+            # keep the private reader barrier out of the test build; the
+            # production daemon still needs its own copy.
+            target_sources(px4d PRIVATE userland/src/q3u4_stream.cpp)
+        endif()
+    endif()
+
+    if(PX4_BUILD_TESTS)
+        enable_testing()
+
+        # Portable test support without the libusb private-access copy, so the
+        # core suites can build on Windows with PX4_ENABLE_LIBUSB=0.
+        add_library(px4_userland_windows_test_support STATIC
+            userland/src/it930x_test_access.cpp
+            userland/src/it930x_probe_args.cpp
+            userland/src/px4d_args.cpp
+            userland/src/frontend_probe_support.cpp
+            userland/src/ts_probe_support.cpp
+            userland/src/mock_transport.cpp
+        )
+        target_include_directories(px4_userland_windows_test_support
+            PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
+        )
+        target_compile_features(px4_userland_windows_test_support PUBLIC cxx_std_17)
+        px4_enable_project_warnings(px4_userland_windows_test_support)
+
+        # Reuse the original test_main aggregator and the unchanged portable
+        # suites. POSIX-only suites stay selected out through their existing
+        # PX4_ENABLE_POSIX_IPC / PX4_ENABLE_LIBUSB guards.
+        add_executable(px4_windows_tests
+            userland/tests/test_main.cpp
+            userland/tests/card_tests.cpp
+            userland/tests/card_service_tests.cpp
+            userland/tests/frontend_tests.cpp
+            userland/tests/it930x_card_tests.cpp
+            userland/tests/ipc_tests.cpp
+            userland/tests/ipc_state_tests.cpp
+            userland/tests/mlt5pe_tests.cpp
+            userland/tests/px4d_args_tests.cpp
+            userland/tests/q3u4_frontend_tests.cpp
+            userland/tests/q3u4_card_backend_tests.cpp
+            userland/tests/q3u4_power_tests.cpp
+            userland/tests/q3u4_lnb_power_tests.cpp
+            userland/tests/tuner_service_tests.cpp
+            userland/tests/frontend_probe_tests.cpp
+            userland/tests/ts_probe_tests.cpp
+            userland/tests/r850_tests.cpp
+            userland/tests/rt710_tests.cpp
+            userland/tests/tagged_ts_demux_tests.cpp
+            userland/tests/q3u4_stream_tests.cpp
+            userland/src/q3u4_stream.cpp
+        )
+        target_compile_definitions(px4_windows_tests PRIVATE
+            PX4_ENABLE_LIBUSB=0
+            PX4_ENABLE_POSIX_IPC=0
+            PX4_Q3U4_STREAM_TEST_ACCESS=1
+        )
+        target_link_libraries(px4_windows_tests PRIVATE
+            px4_userland_core
+            px4_userland_windows_platform
+            px4_userland_windows_test_support
+        )
+        target_include_directories(px4_windows_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/tools
+        )
+        target_compile_features(px4_windows_tests PRIVATE cxx_std_17)
+        px4_enable_project_warnings(px4_windows_tests)
+        add_test(NAME px4_windows_tests COMMAND px4_windows_tests)
+
+        add_executable(px4_windows_platform_tests
+            userland/tests/windows_platform_tests.cpp
+        )
+        target_link_libraries(px4_windows_platform_tests PRIVATE px4_userland_windows_ipc)
+        target_include_directories(px4_windows_platform_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
+        )
+        target_compile_features(px4_windows_platform_tests PRIVATE cxx_std_17)
+        px4_enable_project_warnings(px4_windows_platform_tests)
+        add_test(NAME px4_windows_platform_tests COMMAND px4_windows_platform_tests)
+
+        add_executable(px4_windows_workers_tests
+            userland/tests/windows_worker_tests_main.cpp
+            userland/tests/control_workers_tests.cpp
+            userland/src/control_workers.cpp
+        )
+        target_compile_definitions(px4_windows_workers_tests PRIVATE
+            PX4_CONTROL_WORKERS_TEST_ACCESS=1
+        )
+        target_link_libraries(px4_windows_workers_tests PRIVATE
+            px4_userland_core
+            px4_userland_windows_platform
+            bcrypt
+            ws2_32
+        )
+        target_include_directories(px4_windows_workers_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/tests
+        )
+        target_compile_features(px4_windows_workers_tests PRIVATE cxx_std_17)
+        px4_enable_project_warnings(px4_windows_workers_tests)
+        add_test(NAME px4_windows_workers_tests COMMAND px4_windows_workers_tests)
+
+        add_executable(px4_windows_ts_output_tests
+            userland/tests/windows_ts_output_tests.cpp
+            userland/tools/px4_ts_windows_output.cpp
+            userland/tools/px4_ts_core.cpp
+        )
+        target_link_libraries(px4_windows_ts_output_tests PRIVATE
+            px4_userland_core
+            px4_userland_windows_ipc
+        )
+        target_include_directories(px4_windows_ts_output_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/tools
+        )
+        target_compile_features(px4_windows_ts_output_tests PRIVATE cxx_std_17)
+        px4_enable_project_warnings(px4_windows_ts_output_tests)
+        add_test(NAME px4_windows_ts_output_tests COMMAND px4_windows_ts_output_tests)
+
+        add_executable(px4_windows_control_tests
+            userland/tests/windows_control_tests.cpp
+        )
+        target_link_libraries(px4_windows_control_tests PRIVATE
+            px4_userland_windows_ipc
+        )
+        target_include_directories(px4_windows_control_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
+        )
+        target_compile_features(px4_windows_control_tests PRIVATE cxx_std_17)
+        px4_enable_project_warnings(px4_windows_control_tests)
+        add_test(NAME px4_windows_control_tests COMMAND px4_windows_control_tests)
+
+        add_executable(px4_windows_stdin_tests
+            userland/tests/windows_stdin_monitor_tests.cpp
+            userland/tools/px4d_windows_stdin.cpp
+        )
+        target_include_directories(px4_windows_stdin_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/tools
+        )
+        target_compile_features(px4_windows_stdin_tests PRIVATE cxx_std_17)
+        px4_enable_project_warnings(px4_windows_stdin_tests)
+        add_test(NAME px4_windows_stdin_tests COMMAND px4_windows_stdin_tests)
+    endif()
+endif()
+
 set(PX4_PCSC_IFD_AVAILABLE OFF)
 if(PX4_REQUIRE_PCSC_IFD AND NOT PX4_BUILD_PCSC_IFD)
     message(FATAL_ERROR "PX4_REQUIRE_PCSC_IFD requires PX4_BUILD_PCSC_IFD=ON")
@@ -353,7 +603,7 @@ elseif(PX4_REQUIRE_PCSC_IFD)
     message(FATAL_ERROR "The PC/SC IFD Handler requires a non-Android POSIX host")
 endif()
 
-if(PX4_BUILD_TESTS)
+if(PX4_BUILD_TESTS AND NOT WIN32)
     enable_testing()
 
     if(TARGET px4_userland_posix_ipc)

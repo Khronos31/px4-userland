@@ -2,6 +2,10 @@
 #include "px4/control_client.h"
 #include "px4ctl_format.h"
 
+#if defined(_WIN32)
+#include "px4_windows_args.h"
+#endif
+
 #include <array>
 #include <charconv>
 #include <cstddef>
@@ -316,8 +320,18 @@ Result<void> close_card(PosixControlClient& client, std::uint64_t handle) noexce
 
 int main(int argc, char** argv)
 {
+#if defined(_WIN32)
+    const std::vector<std::string> owned_argv =
+        px4::userland::cli::windows_argv_utf8(argc, argv);
+    std::vector<const char*> argv_views;
+    argv_views.reserve(owned_argv.size());
+    for (const std::string& value : owned_argv) argv_views.push_back(value.c_str());
+    const Arguments arguments =
+        parse_arguments(static_cast<int>(argv_views.size()), argv_views.data());
+#else
     const Arguments arguments =
         parse_arguments(argc, const_cast<const char* const*>(argv));
+#endif
     if (!arguments.valid) {
         std::fprintf(stderr, "argument error: %.*s\n",
                      static_cast<int>(arguments.error.size()), arguments.error.data());

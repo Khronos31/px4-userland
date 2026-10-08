@@ -18,11 +18,49 @@
 #include <limits>
 #include <memory>
 #include <new>
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#include <sys/types.h>
+#else
 #include <poll.h>
-#include <string>
 #include <sys/socket.h>
+#endif
+#include <string>
 #include <utility>
 #include <vector>
+
+#if defined(_WIN32)
+// Map the POSIX poll/send shapes the shared server already uses onto Winsock.
+// The helper definitions appear before the object-like macros so their bodies
+// still resolve to the real winsock calls; POSIX code below stays in #else.
+using pollfd = WSAPOLLFD;
+#ifndef POLLIN
+#define POLLIN POLLRDNORM
+#endif
+#ifndef POLLOUT
+#define POLLOUT POLLWRNORM
+#endif
+inline int socket_poll(WSAPOLLFD* descriptors, std::size_t count, int timeout) noexcept
+{
+    return ::WSAPoll(descriptors, static_cast<ULONG>(count), timeout);
+}
+inline ssize_t socket_send(std::uintptr_t handle, const void* buffer,
+                           std::size_t size, int flags) noexcept
+{
+    const int amount = size > static_cast<std::size_t>(INT_MAX) ?
+                           INT_MAX : static_cast<int>(size);
+    return static_cast<ssize_t>(::send(
+        reinterpret_cast<SOCKET>(handle), static_cast<const char*>(buffer),
+        amount, flags));
+}
+#define poll socket_poll
+#define send socket_send
+#endif
 
 namespace px4::userland::ipc::posix {
 namespace {
@@ -36,6 +74,12 @@ constexpr std::size_t kRetiredClientCapacity = 64U;
 constexpr std::size_t kMaxStreamConnections = 32U;
 constexpr std::size_t kStreamReadBytes = (65536U / 188U) * 188U;
 constexpr std::size_t kStreamWriteBudget = 65536U;
+
+const PathChar* empty_path() noexcept
+{
+    static const PathChar empty[1] = {0};
+    return empty;
+}
 
 #if defined(PX4_CONTROL_SERVER_TEST_ACCESS)
 ControlServerTestHooks* test_hooks = nullptr;
@@ -192,7 +236,7 @@ struct PosixControlServer::Impl final {
         }
 
         CardClientId id() const noexcept { return id_; }
-        int fd() const noexcept { return stream_.native_handle(); }
+        NativeHandle fd() const noexcept { return stream_.native_handle(); }
         bool closed() const noexcept
         {
             return state_.closed() || state_.poisoned() || !stream_.valid();
@@ -314,7 +358,7 @@ struct PosixControlServer::Impl final {
         Result<void> on_frame(const FrameView& frame) noexcept override;
 
         std::uint64_t id() const noexcept { return id_; }
-        int fd() const noexcept { return stream_.native_handle(); }
+        NativeHandle fd() const noexcept { return stream_.native_handle(); }
         void close() noexcept { stream_.close(); }
         bool valid() const noexcept { return stream_.valid(); }
         bool remove_requested() const noexcept { return remove_requested_; }
@@ -363,16 +407,29 @@ struct PosixControlServer::Impl final {
                 if (written == 0) {
                     return Result<bool>::failure(Error::DISCONNECTED);
                 }
+#if defined(_WIN32)
+                const int socket_error = ::WSAGetLastError();
+                if (socket_error == WSAEINTR) continue;
+                if (socket_error == WSAEWOULDBLOCK) {
+#else
                 if (errno == EINTR) continue;
                 if (errno == EAGAIN || errno == EWOULDBLOCK) {
+#endif
 #if defined(PX4_CONTROL_SERVER_TEST_ACCESS)
                     report_stream_write_blocked(id_);
 #endif
                     return Result<bool>::success(false);
                 }
+#if defined(_WIN32)
+                return Result<bool>::failure(
+                    socket_error == WSAECONNRESET || socket_error == WSAENOTCONN ||
+                            socket_error == WSAESHUTDOWN ?
+                        Error::DISCONNECTED : Error::INTERNAL);
+#else
                 return Result<bool>::failure(
                     errno == EPIPE || errno == ECONNRESET ? Error::DISCONNECTED
                                                           : Error::INTERNAL);
+#endif
             }
             if (tx_offset_ == tx_size_) {
                 tx_offset_ = 0U;
@@ -1454,8 +1511,13 @@ struct PosixControlServer::Impl final {
         const int result = ::poll(descriptors.data(), descriptors.size(),
                                   timeout_to_poll(Timeout{wait_ms}));
         if (result < 0) {
+#if defined(_WIN32)
+            return ::WSAGetLastError() == WSAEINTR ? Result<void>::success() :
+                                                      Result<void>::failure(Error::INTERNAL);
+#else
             return errno == EINTR ? Result<void>::success() :
                                     Result<void>::failure(Error::INTERNAL);
+#endif
         }
 
         // Drain completions before socket callbacks as well as after them.
@@ -1553,7 +1615,13 @@ struct PosixControlServer::Impl final {
             if (workers->live_thread_count() == 0U) break;
             pollfd descriptor{workers->wake_fd(), POLLIN, 0};
             const int result = ::poll(&descriptor, 1U, 10);
+#if defined(_WIN32)
+            if (result < 0 && ::WSAGetLastError() != WSAEINTR) {
+                record_error(Error::INTERNAL);
+            }
+#else
             if (result < 0 && errno != EINTR) record_error(Error::INTERNAL);
+#endif
         }
         const auto joined = workers->stop_and_join();
         if (!joined && cleanup_error == Error::OK) cleanup_error = joined.error();
@@ -2249,14 +2317,14 @@ Result<void> PosixControlServer::shutdown() noexcept
     return impl_->shutdown();
 }
 
-const char* PosixControlServer::endpoint_path() const noexcept
+const PathChar* PosixControlServer::endpoint_path() const noexcept
 {
-    return impl_ ? impl_->listener.endpoint_path() : "";
+    return impl_ ? impl_->listener.endpoint_path() : empty_path();
 }
 
-const char* PosixControlServer::stream_endpoint_path() const noexcept
+const PathChar* PosixControlServer::stream_endpoint_path() const noexcept
 {
-    return impl_ ? impl_->stream_listener.endpoint_path() : "";
+    return impl_ ? impl_->stream_listener.endpoint_path() : empty_path();
 }
 
 std::size_t PosixControlServer::connection_count() const noexcept

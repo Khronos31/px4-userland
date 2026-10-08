@@ -8,6 +8,9 @@
 // Source snapshot maintained by tsukumijima.
 // SPDX-License-Identifier: GPL-2.0-only
 #include "px4/it930x.h"
+#if defined(_WIN32)
+#include "px4/platform_sleep.h"
+#endif
 #include "mlt5pe_frontend.h"
 
 #include "it930x_protocol.h"
@@ -1331,7 +1334,11 @@ Result<FirmwareLoadResult> It930xController::initialize_locked(
 void It930xController::pace_after_control_transfer() const noexcept
 {
     if (pacing_.mode == CommandPacingMode::linux_reference_1ms) {
+#if defined(_WIN32)
+        (void)platform::sleep_milliseconds(1U);
+#else
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
+#endif
     }
 }
 

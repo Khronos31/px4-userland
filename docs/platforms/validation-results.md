@@ -4,7 +4,29 @@
 
 ## 記録方法
 
-Stable release の検証記録は本ファイルへ日付付きで追記する。新しい records directory や template framework、汎用スクリプトは作らない。release record には候補 version/commit/CI run、9 archive（8 binary + source）と checksum/audit結果、baseline tag と各 artifact の byte-identity 判定、変更の hunk-level 影響（call-path/guard）、claim ごとの `継承` / `今回再検証` / `未認定` / `対象外`、canary/soak の選定理由（環境ID E01–E17、固定順の位置、単一OS規則による非該当を含む）、各 test の環境ID・host・device/USB ID・runtime/access path・archive SHA-256・UTC時刻・コマンド・counter・結果・ログ保存先、未実施または非該当の物理操作と理由を記録する。canonical 環境ID と手順は [`release-validation.md`](../release-validation.md) を正本とする。Android ad-hoc APK は dtv-android 所管であり本記録に含めない。
+Stable release の検証記録は本ファイルへ日付付きで追記する。新しい records directory や template framework、汎用スクリプトは作らない。release record には候補 version/commit/CI run、10 archive（9 binary + source。binaryは8 tar archiveとWindows ZIP）と checksum/audit結果、baseline tag と各 artifact の byte-identity 判定、変更の hunk-level 影響（call-path/guard）、claim ごとの `継承` / `今回再検証` / `未認定` / `対象外`、canary/soak の選定理由（環境ID E01–E17、固定順の位置、単一OS規則による非該当を含む）、各 test の環境ID・host・device/USB ID・runtime/access path・archive SHA-256・UTC時刻・コマンド・counter・結果・ログ保存先、未実施または非該当の物理操作と理由を記録する。canonical 環境ID と手順は [`release-validation.md`](../release-validation.md) を正本とする。Android ad-hoc APK は dtv-android 所管であり本記録に含めない。
+
+## 2026-10-09 Windows Phase 1 実装状況（native offline PASS / hardware-unverified）
+
+- 状態: `未認定`（物理機能）。WindowsはSPEC v0.30でPhase 1の対象へ追加した。物理tuner/card/LNB/USBの
+  hardware evidenceはなく、`px4-userland-<version>-windows-x86_64.zip`の実機gateは未完了とする。
+- cross-build evidence: pinnedなllvm-mingw 20250910 UCRT x86_64（SHA-256
+  `f83556c9ffa4d4291fadea1a0776c1383332dacdf4d7fbdf974c2928cb32c6f7`）とpinned libusb 1.0.30 sourceで、
+  `px4d.exe`／`px4-ts.exe`／`px4ctl.exe`とlibusb-1.0.dllをクロスビルドし、PE32+ x86_64、import DLLが
+  system DLLとlibusbのみであること、source/build path非混入、deterministic zip packagingを確認した。
+- **native Windows 11 Pro x64 (build 26300、host `home-pc`、SSH経由)** でoffline/mock testを
+  実行し**全PASS (EXIT 0)**:
+  - `px4_windows_tests`（既存portable core 44 suite）
+  - `px4_windows_platform_tests`（AF_UNIX endpoint/DACL/lease/nonce/pacing）
+  - `px4_windows_workers_tests`（AF_UNIX wake、worker wake/completion/rollback）
+  - `px4_windows_control_tests`（mock CARD_CONNECT/CARD_TRANSMIT を含む control round-trip）
+  - `px4_windows_stdin_tests`（stdin EOF monitor: already-EOF/read失敗/never-closing cancel）
+  - `px4_windows_ts_output_tests`（TS binary sink: byte fidelity/broken/stalled cancellation/immediate finish）
+  - 3 CLI (`px4d`/`px4-ts`/`px4ctl`) の `--help` が exit 0。
+- 未実施: 物理USB/tuner/card/LNBの実機matrix。`hardware-unverified`を維持し、
+  `tuner-hardware-verified`／`card-core-hardware-verified`とは表示しない。
+- Windows CI jobは未実行（push時に実行予定）。
+- WinSCard互換DLLとMicrosoft PC/SC IFD登録は今回の対象外（Phase 2以降で検討）。
 
 ## 2026-10-08 v0.1.10 release-candidate試験
 

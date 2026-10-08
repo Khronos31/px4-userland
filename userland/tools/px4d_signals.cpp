@@ -4,6 +4,95 @@
 #include <csignal>
 #include <signal.h>
 
+#if defined(_WIN32)
+
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0A00
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+
+#include <atomic>
+#include <windows.h>
+
+namespace {
+
+std::atomic<bool> stop_requested_flag{false};
+std::atomic<bool> cleanup_complete_flag{false};
+
+// Manual-reset event: set once by the daemon when cooperative cleanup is
+// finished. Console control handlers that carry termination semantics block on
+// it instead of returning immediately.
+HANDLE cleanup_event = nullptr;
+
+constexpr DWORD kTerminationGraceMilliseconds = 5000U;
+
+BOOL WINAPI console_control_handler(DWORD control_type) noexcept
+{
+    switch (control_type) {
+    case CTRL_C_EVENT:
+    case CTRL_BREAK_EVENT:
+        // The console survives; only ask the main loop to stop.
+        stop_requested_flag.store(true, std::memory_order_release);
+        return TRUE;
+    case CTRL_CLOSE_EVENT:
+    case CTRL_LOGOFF_EVENT:
+    case CTRL_SHUTDOWN_EVENT:
+        // These events terminate the process once the handler returns, so wait
+        // for the daemon to report that LNB 0V and endpoint cleanup completed.
+        stop_requested_flag.store(true, std::memory_order_release);
+        if (cleanup_event != nullptr) {
+            (void)::WaitForSingleObject(cleanup_event, kTerminationGraceMilliseconds);
+        }
+        return TRUE;
+    default:
+        return FALSE;
+    }
+}
+
+}  // namespace
+
+namespace px4::userland::px4d {
+
+bool stop_requested() noexcept
+{
+    return stop_requested_flag.load(std::memory_order_acquire);
+}
+
+void request_stop() noexcept
+{
+    stop_requested_flag.store(true, std::memory_order_release);
+}
+
+void notify_cleanup_complete() noexcept
+{
+    cleanup_complete_flag.store(true, std::memory_order_release);
+    if (cleanup_event != nullptr) {
+        (void)::SetEvent(cleanup_event);
+    }
+}
+
+bool cleanup_complete() noexcept
+{
+    return cleanup_complete_flag.load(std::memory_order_acquire);
+}
+
+bool install_signal_handlers() noexcept
+{
+    if (cleanup_event == nullptr) {
+        cleanup_event = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        if (cleanup_event == nullptr) {
+            return false;
+        }
+    }
+    return ::SetConsoleCtrlHandler(console_control_handler, TRUE) != 0;
+}
+
+}  // namespace px4::userland::px4d
+
+#else
+
 namespace {
 
 volatile std::sig_atomic_t stop_requested_flag = 0;
@@ -20,6 +109,20 @@ namespace px4::userland::px4d {
 bool stop_requested() noexcept
 {
     return stop_requested_flag != 0;
+}
+
+void request_stop() noexcept
+{
+    stop_requested_flag = 1;
+}
+
+void notify_cleanup_complete() noexcept
+{
+}
+
+bool cleanup_complete() noexcept
+{
+    return false;
 }
 
 bool install_signal_handlers() noexcept
@@ -46,3 +149,5 @@ bool install_signal_handlers() noexcept
 }
 
 }  // namespace px4::userland::px4d
+
+#endif

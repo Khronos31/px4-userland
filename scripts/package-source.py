@@ -192,11 +192,12 @@ def main() -> int:
             "@DEPENDENCY_TEXT@",
             "dependency.libusb.version=1.0.30\n"
             "dependency.libusb.license=LGPL-2.1-or-later\n"
-            "dependency.libusb.linkage=static\n"
+            "dependency.libusb.linkage=static-or-shared-dll\n"
             "corresponding-source-archive=present\n\n"
             "This archive contains the exact repository source snapshot and verified libusb 1.0.30 source "
-            "needed to rebuild or relink the Linux static, macOS, and Android binaries. See BUILD-RELINK.md, THIRD_PARTY_NOTICES.md, "
-            "and third_party/libusb-1.0.30/COPYING.\n",
+            "needed to rebuild or relink the Linux static, macOS, Android, and Windows Phase 1 binaries. "
+            "The Windows Phase 1 executables link the same-toolchain libusb-1.0.dll built from this source. "
+            "See BUILD-RELINK.md, THIRD_PARTY_NOTICES.md, and third_party/libusb-1.0.30/COPYING.\n",
         )
         write_file(stage / "DEPENDENCY-NOTICE.txt", notice.encode())
         manifest = {

@@ -93,3 +93,52 @@ To relink with a modified LGPL libusb, modify a copy of
 frameworks (IOKit, CoreFoundation, Security) and `libobjc`. The IFD bundle
 does not link libusb. Firmware is neither required to compile nor present in
 this archive.
+
+## Windows x64 rebuild and LGPL DLL replacement
+
+Install CMake, Ninja (or samurai/samu), Make, a POSIX shell, Python 3, curl, `tar`, `xz`, and `sha256sum`.
+All commands below run from this archive root (the directory containing `repository/` and `third_party/`).
+
+`scripts/build-windows.sh` verifies and extracts the pinned toolchain and libusb source archives into a private
+temporary work directory that it removes on exit. Its `--cache` directory holds only the downloaded archives,
+not an extracted toolchain tree. Preseed the bundled, already-verified libusb archive so the production rebuild
+uses the corresponding source instead of downloading it, then cross-build the Phase 1 executables:
+
+```sh
+mkdir -p toolchain-cache
+cp third_party/libusb-1.0.30.tar.bz2 toolchain-cache/
+repository/scripts/build-windows.sh --output build-windows --cache "$PWD/toolchain-cache"
+```
+
+The toolchain and libusb versions and their SHA-256 values are fixed in the script. The archive ships the exact
+narrow llvm-mingw runtime license texts under `toolchain/`; no compiler binary or toolchain source bulk is
+included.
+
+`px4d.exe` dynamically loads `libusb-1.0.dll`, which remains LGPL-2.1-or-later. To replace the DLL with one
+built from a modified libusb source, verify the pinned toolchain archive, extract it into a fresh owned
+directory inside this archive root, and use the absolute compiler path from there:
+
+```sh
+echo 'f83556c9ffa4d4291fadea1a0776c1383332dacdf4d7fbdf974c2928cb32c6f7  toolchain-cache/llvm-mingw-20250910-ucrt-ubuntu-22.04-x86_64.tar.xz' | sha256sum -c -
+mkdir toolchain
+tar -xf toolchain-cache/llvm-mingw-20250910-ucrt-ubuntu-22.04-x86_64.tar.xz -C toolchain
+toolchain="$PWD/toolchain/llvm-mingw-20250910-ucrt-ubuntu-22.04-x86_64"
+
+# Modify a copy of the bundled source, then build the shared DLL with the same flags the build script uses.
+cp -R third_party/libusb-1.0.30 build-libusb
+cd build-libusb
+./configure --host=x86_64-w64-mingw32 --prefix="$PWD/../build-libusb-prefix" \
+  --enable-shared --disable-static --disable-udev \
+  --disable-examples-build --disable-tests-build \
+  CC="$toolchain/bin/x86_64-w64-mingw32-clang" \
+  AR="$toolchain/bin/llvm-ar" RANLIB="$toolchain/bin/llvm-ranlib" \
+  CFLAGS="-O2 -g0 -ffile-prefix-map=$PWD=. -fdebug-prefix-map=$PWD=. -fmacro-prefix-map=$PWD=." \
+  LDFLAGS="-Wl,-s -Wl,--no-insert-timestamp -Wl,--build-id=none"
+make
+make install
+```
+
+Replace `build-windows/libusb-1.0.dll` (or the same file inside an extracted Windows archive) with
+`build-libusb-prefix/bin/libusb-1.0.dll`, keeping the same file name and the libusb-1.0 ABI and export set.
+The production release path accepts only the pinned, checksum-verified libusb source archive; local relink
+builds do not emit release evidence. Firmware is neither required nor present in this archive.

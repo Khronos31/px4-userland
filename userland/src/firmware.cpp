@@ -12,6 +12,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <filesystem>
+#include <string>
+#include <windows.h>
+#endif
 
 namespace px4::userland {
 
@@ -183,7 +191,27 @@ Result<FirmwareImage> FirmwareProvider::load() const noexcept
         return Result<FirmwareImage>::failure(Error::INVALID_ARGUMENT);
     }
 
+#if defined(_WIN32)
+    // Windows narrow std::ifstream uses the active code page, so a UTF-8 path
+    // outside that code page would not open. Convert strictly and open by wide
+    // std::filesystem::path instead.
+    const int wide_length = ::MultiByteToWideChar(
+        CP_UTF8, MB_ERR_INVALID_CHARS, path_.c_str(),
+        static_cast<int>(path_.size()), nullptr, 0);
+    if (wide_length <= 0) {
+        return Result<FirmwareImage>::failure(Error::INVALID_ARGUMENT);
+    }
+    std::wstring wide_path(static_cast<std::size_t>(wide_length), L'\0');
+    if (::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path_.c_str(),
+                              static_cast<int>(path_.size()), wide_path.data(),
+                              wide_length) != wide_length) {
+        return Result<FirmwareImage>::failure(Error::INVALID_ARGUMENT);
+    }
+    std::ifstream file(std::filesystem::path(wide_path),
+                       std::ios::in | std::ios::binary);
+#else
     std::ifstream file(path_, std::ios::in | std::ios::binary);
+#endif
     if (!file.is_open()) {
         return Result<FirmwareImage>::failure(Error::NOT_FOUND);
     }
