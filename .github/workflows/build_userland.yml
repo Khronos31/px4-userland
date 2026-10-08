@@ -686,16 +686,141 @@ jobs:
         with:
           name: win-candidate-tests
           path: ${{ runner.temp }}/win-candidate-tests
+      - name: Diagnose the Windows native test environment (read-only)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          function Show-Acl([string]$path) {
+            try {
+              if (-not $path -or -not (Test-Path -LiteralPath $path)) {
+                Write-Host "acl target=$path exists=False"
+                return
+              }
+              $item = Get-Item -LiteralPath $path -Force
+              $acl = Get-Acl -LiteralPath $path
+              Write-Host "acl target=$path attributes=$($item.Attributes) owner=$($acl.Owner) protected=$($acl.AreAccessRulesProtected)"
+              Write-Host "  sddl=$($acl.Sddl)"
+              foreach ($ace in $acl.Access) {
+                Write-Host "  ace identity=$($ace.IdentityReference) rights=$($ace.FileSystemRights) type=$($ace.AccessControlType) inherited=$($ace.IsInherited)"
+              }
+            } catch {
+              Write-Host "acl error target=$path error=$($_.Exception.Message)"
+            }
+          }
+          Write-Host '== OS / build =='
+          try {
+            Write-Host "PSVersion=$($PSVersionTable.PSVersion) PSEdition=$($PSVersionTable.PSEdition)"
+            Write-Host "OSVersion=$([System.Environment]::OSVersion.VersionString)"
+            $os = Get-CimInstance -ClassName Win32_OperatingSystem
+            Write-Host "Caption=$($os.Caption) Version=$($os.Version) BuildNumber=$($os.BuildNumber) ProductType=$($os.ProductType)"
+            $current = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+            Write-Host "InstallationType=$($current.InstallationType) DisplayVersion=$($current.DisplayVersion) CurrentBuild=$($current.CurrentBuild)"
+          } catch {
+            Write-Host "os error=$($_.Exception.Message)"
+          }
+          Write-Host '== identity =='
+          try {
+            $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+            Write-Host "User=$($identity.Name) SID=$($identity.User.Value) OwnerSID=$($identity.Owner.Value) IsSystem=$($identity.IsSystem)"
+          } catch {
+            Write-Host "identity error=$($_.Exception.Message)"
+          }
+          Write-Host '== environment paths and ACLs =='
+          foreach ($name in @('USERPROFILE', 'LOCALAPPDATA', 'APPDATA', 'TEMP', 'TMP', 'RUNNER_TEMP')) {
+            $value = [System.Environment]::GetEnvironmentVariable($name)
+            Write-Host "$name=$value"
+            Show-Acl $value
+          }
+          Write-Host '== parent owner / ACL (SDDL) =='
+          foreach ($name in @('USERPROFILE', 'LOCALAPPDATA', 'TEMP')) {
+            $value = [System.Environment]::GetEnvironmentVariable($name)
+            if ($value) {
+              $parent = Split-Path -Parent $value
+              if ($parent) { Show-Acl $parent }
+            }
+          }
+          Write-Host '== raw System.Net.Sockets AF_UNIX probe (owned protected short temp dir, bounded, cleaned up) =='
+          $probeParent = [System.Environment]::GetEnvironmentVariable('TEMP')
+          if (-not $probeParent) { $probeParent = [System.IO.Path]::GetTempPath() }
+          Write-Host "probeParent=$probeParent"
+          $probeDir = $null
+          $probeSocket = $null
+          $listener = $null
+          $client = $null
+          $accepted = $null
+          try {
+            for ($attempt = 0; $attempt -lt 8; $attempt++) {
+              $candidate = Join-Path $probeParent ('px4u-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+              if (-not (Test-Path -LiteralPath $candidate)) { $probeDir = $candidate; break }
+            }
+            if (-not $probeDir) { throw 'could not allocate a fresh probe directory' }
+            if (Test-Path -LiteralPath $probeDir) { throw "probe target already exists: $probeDir" }
+            $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+            $security = New-Object System.Security.AccessControl.DirectorySecurity
+            $security.SetOwner($currentUser)
+            $security.SetAccessRuleProtection($true, $false)
+            $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+              $currentUser,
+              [System.Security.AccessControl.FileSystemRights]::FullControl,
+              ([System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+               [System.Security.AccessControl.InheritanceFlags]::ObjectInherit),
+              [System.Security.AccessControl.PropagationFlags]::None,
+              [System.Security.AccessControl.AccessControlType]::Allow)
+            $security.AddAccessRule($rule)
+            New-Item -ItemType Directory -Path $probeDir | Out-Null
+            Set-Acl -LiteralPath $probeDir -AclObject $security
+            $probeSocket = Join-Path $probeDir 'p.sock'
+            $probeDirFull = (Get-Item -LiteralPath $probeDir).FullName
+            $probeSocketFull = Join-Path $probeDirFull 'p.sock'
+            Write-Host "probeDir=$probeDirFull pathLength=$($probeDirFull.Length) socketPathLength=$($probeSocketFull.Length)"
+            Show-Acl $probeDirFull
+            $listener = [System.Net.Sockets.Socket]::new(
+              [System.Net.Sockets.AddressFamily]::Unix,
+              [System.Net.Sockets.SocketType]::Stream,
+              [System.Net.Sockets.ProtocolType]::Unspecified)
+            $listener.Bind([System.Net.Sockets.UnixDomainSocketEndPoint]::new($probeSocket))
+            $listener.Listen(1)
+            $client = [System.Net.Sockets.Socket]::new(
+              [System.Net.Sockets.AddressFamily]::Unix,
+              [System.Net.Sockets.SocketType]::Stream,
+              [System.Net.Sockets.ProtocolType]::Unspecified)
+            $connect = $client.BeginConnect([System.Net.Sockets.UnixDomainSocketEndPoint]::new($probeSocket), $null, $null)
+            if (-not $connect.AsyncWaitHandle.WaitOne(5000)) { throw 'AF_UNIX connect did not complete within 5000ms' }
+            $client.EndConnect($connect)
+            $accept = $listener.BeginAccept($null, $null)
+            if (-not $accept.AsyncWaitHandle.WaitOne(5000)) { throw 'AF_UNIX accept did not complete within 5000ms' }
+            $accepted = $listener.EndAccept($accept)
+            Write-Host 'AF_UNIX probe=OK'
+          } catch {
+            Write-Host "AF_UNIX probe=FAIL type=$($_.Exception.GetType().FullName) message=$($_.Exception.Message) hresult=0x$('{0:X8}' -f $_.Exception.HResult)"
+          } finally {
+            foreach ($socket in @($accepted, $client, $listener)) {
+              if ($null -ne $socket) { try { $socket.Dispose() } catch { } }
+            }
+            try {
+              if ($probeSocket -and (Test-Path -LiteralPath $probeSocket)) { Remove-Item -LiteralPath $probeSocket -Force }
+              if ($probeDir -and (Test-Path -LiteralPath $probeDir)) { Remove-Item -LiteralPath $probeDir -Force }
+            } catch {
+              Write-Host "probe cleanup error=$($_.Exception.Message)"
+            }
+          }
       - name: Run the cross-built Windows offline test suites
         shell: pwsh
         run: |
           $tests = Join-Path $env:RUNNER_TEMP 'win-candidate-tests'
           $suites = Get-ChildItem $tests -Filter '*_tests.exe' | Sort-Object Name
           if (-not $suites) { throw 'no Windows offline test executables were downloaded' }
+          $failed = @()
           foreach ($suite in $suites) {
             Write-Host "== $($suite.Name) =="
             & $suite.FullName
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "FAILED $($suite.Name) exit=$($LASTEXITCODE)"
+              $failed += "$($suite.Name)=$($LASTEXITCODE)"
+            }
+          }
+          if ($failed.Count -ne 0) {
+            throw "Windows offline test suites failed: $($failed -join ', ')"
           }
       - name: Extract and smoke the exact release archive
         shell: pwsh
