@@ -19,6 +19,11 @@ namespace px4::userland {
 
 Error map_libusb_error(int error) noexcept;
 
+// Error translation for the native device-acquisition open/claim boundary
+// (discovery open, open_and_claim, and the Q3U4 native acquire).  See the
+// definition in libusb_transport.cpp for the per-backend conflict mapping.
+Error map_acquisition_error(int error) noexcept;
+
 class LibusbApi {
 public:
     using Context = void*;

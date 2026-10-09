@@ -2510,6 +2510,55 @@ bool test_bulk_transport_and_mapping()
     return true;
 }
 
+bool test_acquisition_conflict_mapping()
+{
+    // The device-acquisition boundary translates a competing process's hold
+    // of the device into the cross-platform BUSY while every other libusb
+    // code stays identical to map_libusb_error.  On Windows the WinUSB
+    // backend reports that hold as LIBUSB_ERROR_ACCESS from libusb_open
+    // (measured on real hardware with a running daemon), so ACCESS maps to
+    // BUSY there; on POSIX ACCESS at this boundary is a genuine permission
+    // denial and keeps the generic USB_IO translation.
+#if defined(_WIN32)
+    CHECK(map_acquisition_error(LIBUSB_ERROR_ACCESS) == Error::BUSY);
+#else
+    CHECK(map_acquisition_error(LIBUSB_ERROR_ACCESS) == Error::USB_IO);
+#endif
+    const std::array<int, 8U> passthrough{0, LIBUSB_ERROR_TIMEOUT,
+                                          LIBUSB_ERROR_NO_DEVICE,
+                                          LIBUSB_ERROR_BUSY,
+                                          LIBUSB_ERROR_NOT_FOUND,
+                                          LIBUSB_ERROR_NOT_SUPPORTED,
+                                          LIBUSB_ERROR_INVALID_PARAM,
+                                          LIBUSB_ERROR_OTHER};
+    const std::array<Error, 8U> expected{Error::OK, Error::TIMEOUT,
+                                         Error::DISCONNECTED, Error::BUSY,
+                                         Error::NOT_FOUND, Error::UNSUPPORTED,
+                                         Error::INVALID_ARGUMENT,
+                                         Error::USB_IO};
+    for (std::size_t index = 0U; index < passthrough.size(); ++index) {
+        CHECK(map_acquisition_error(passthrough[index]) == expected[index]);
+        CHECK(map_libusb_error(passthrough[index]) == expected[index]);
+    }
+
+    // A second daemon on the same device must report the acquisition
+    // conflict (device open: BUSY, exit 4) instead of a generic USB error.
+    auto conflict_api = std::unique_ptr<FakeApi>(new FakeApi);
+    FakeDevice conflict_first = fake_device("00000000000077", 1U);
+    FakeDevice conflict_second = fake_device("00000000000077", 2U);
+    conflict_api->devices = {&conflict_first, &conflict_second};
+    conflict_api->open_result = LIBUSB_ERROR_ACCESS;
+    const auto conflict = RuntimeTestAccess::open_native(
+        std::move(conflict_api), "00000000000077");
+    CHECK(!conflict);
+#if defined(_WIN32)
+    CHECK(conflict.error() == Error::BUSY);
+#else
+    CHECK(conflict.error() == Error::USB_IO);
+#endif
+    return true;
+}
+
 bool test_not_found_cancel_waits_for_callback()
 {
     FakeApi api;
@@ -3586,6 +3635,7 @@ int main(int argc, char** argv)
         {"mlt5pe", run_mlt5pe_tests},
 #if PX4_ENABLE_LIBUSB
         {"bulk_transport_and_mapping", test_bulk_transport_and_mapping},
+        {"acquisition_conflict_mapping", test_acquisition_conflict_mapping},
         {"not_found_cancel_waits_for_callback", test_not_found_cancel_waits_for_callback},
         {"native_enumeration_filters_and_stream_lifecycle",
          test_native_enumeration_filters_and_stream_lifecycle},
