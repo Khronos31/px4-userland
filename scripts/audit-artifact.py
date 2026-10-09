@@ -70,19 +70,20 @@ LINUX_MDEV = {
 PROGRAMS = ("px4d", "px4-ts", "px4ctl")
 TERMUX_LAUNCHER = "px4-termux"
 
-# Windows Phase 1 PE contract: ABI, shipped dependency, permitted import
-# closure, and the exact zip member allowlist.
+# Windows Phase 1 PE contract: ABI, static libusb marker, permitted import
+# closure, and the exact zip member allowlist. libusb-1.0.dll is not shipped.
 WINDOWS_PLATFORM = "windows-x86_64"
-WINDOWS_DLL = "libusb-1.0.dll"
+WINDOWS_LIBUSB_DLL = "libusb-1.0.dll"
+WINDOWS_LIBUSB_MARKER = b"https://libusb.info"
 WINDOWS_PROGRAM_ARTIFACTS = tuple(f"{program}.exe" for program in PROGRAMS)
 IMAGE_FILE_MACHINE_AMD64 = 0x8664
 IMAGE_FILE_DLL = 0x2000
 PE32_PLUS_MAGIC = 0x20B
 IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE = 0x0040
 IMAGE_DLLCHARACTERISTICS_NX_COMPAT = 0x0100
-# Only System32 components and the one shipped, same-toolchain DLL are allowed.
-# libc++/winpthread/UCRT DLLs are rejected because they are not shipped and the
-# language and thread runtimes are statically linked.
+# Only System32 components are allowed. libusb is inside px4d.exe. libc++,
+# winpthread, and the MinGW runtime are statically linked, so their DLLs are
+# rejected. UCRT and other api-ms-win-crt imports stay dynamic.
 WINDOWS_SYSTEM_IMPORTS = {
     "advapi32.dll", "bcrypt.dll", "kernel32.dll", "ole32.dll",
     "shell32.dll", "user32.dll", "ws2_32.dll",
@@ -102,7 +103,7 @@ WINDOWS_TOOLCHAIN_LICENSE_SHA256 = {
 }
 WINDOWS_TOOLCHAIN_LICENSE_MEMBERS = frozenset(WINDOWS_TOOLCHAIN_LICENSE_SHA256)
 WINDOWS_TOOLCHAIN_LICENSE_NOTICE = ",".join(sorted(WINDOWS_TOOLCHAIN_LICENSE_MEMBERS))
-WINDOWS_ARCHIVE_MEMBERS = (set(COMMON) | {WINDOWS_DLL} | set(WINDOWS_PROGRAM_ARTIFACTS)
+WINDOWS_ARCHIVE_MEMBERS = (set(COMMON) | set(WINDOWS_PROGRAM_ARTIFACTS)
                            | set(WINDOWS_TOOLCHAIN_LICENSE_MEMBERS))
 DARWIN_IFD_ARTIFACT = "ifd/px4-userland-ifd.bundle/Contents/MacOS/libpx4-userland-ifd.dylib"
 IFD_EXPORTS = (
@@ -146,6 +147,7 @@ WINDOWS_SOURCE_ALLOWED = re.compile(
 )
 WINDOWS_SOURCE_REQUIRED = {
     "repository/scripts/build-windows.sh",
+    "repository/scripts/test-windows-static-relink.sh",
     "repository/userland/src/windows/windows_ipc.cpp",
     "repository/userland/src/windows/windows_sleep.cpp",
     "repository/userland/src/windows/windows_tuner_nonce.cpp",
@@ -344,13 +346,16 @@ def audit_windows_pe(path: Path, logical_name: str, *, is_dll: bool,
         fail(f"{logical_name} lacks ASLR/NX hardening")
     imports = sorted({name.lower() for name in pe["imports"]})
     for dll in imports:
-        if dll == WINDOWS_DLL:
-            if logical_name != "px4d.exe":
-                fail(f"{logical_name} imports the packaged libusb DLL without the contract")
-            continue
+        if dll == WINDOWS_LIBUSB_DLL:
+            fail(f"{logical_name} imports {WINDOWS_LIBUSB_DLL}; libusb is statically linked")
         if dll in WINDOWS_SYSTEM_IMPORTS or dll.startswith(WINDOWS_UCRT_IMPORT_PREFIX):
             continue
         fail(f"{logical_name} imports unexpected DLL: {dll}")
+    if logical_name == "px4d.exe":
+        if WINDOWS_LIBUSB_MARKER not in data:
+            fail(f"{logical_name} does not contain the static libusb version URL")
+    elif logical_name in WINDOWS_PROGRAM_ARTIFACTS and WINDOWS_LIBUSB_MARKER in data:
+        fail(f"{logical_name} contains the libusb version URL without linking libusb")
     if is_dll:
         exports = sorted(set(pe["exports"]))
         if not any(symbol.startswith("libusb_") for symbol in exports):
@@ -510,10 +515,10 @@ def verify_windows_manifest(archive: Path, members: dict[str, zipfile.ZipInfo], 
         fail("manifest schema/platform mismatch")
     if manifest.get("architecture") != "x86_64":
         fail("manifest architecture must be x86_64 for the Windows archive")
-    if manifest.get("embedded_libusb") != {"version": "1.0.30", "linkage": "shared-dll"}:
+    if manifest.get("embedded_libusb") != {"version": "1.0.30", "linkage": "static"}:
         fail("manifest libusb linkage metadata mismatch")
-    if manifest.get("libusb_dll") != WINDOWS_DLL:
-        fail("manifest does not name the packaged libusb DLL")
+    if "libusb_dll" in manifest:
+        fail("manifest names a packaged libusb DLL")
     if not isinstance(manifest.get("source_ref"), str) or not manifest["source_ref"]:
         fail("manifest source_ref metadata is missing")
     validate_version(str(manifest.get("version", "")))
@@ -568,9 +573,8 @@ def audit_windows_archive(args: argparse.Namespace) -> dict:
     version = match.group(1)
     required_fields = {
         "dependency.libusb.version": "1.0.30",
-        "dependency.libusb.linkage": "shared-dll",
+        "dependency.libusb.linkage": "static",
         "dependency.libusb.license": "LGPL-2.1-or-later",
-        "dependency.libusb.dll": WINDOWS_DLL,
         "dependency.toolchain": "llvm-mingw-20250910-ucrt-x86_64",
         "dependency.toolchain.licenses": WINDOWS_TOOLCHAIN_LICENSE_NOTICE,
         "corresponding-source-archive": f"px4-userland-{version}-source.tar.gz",
@@ -578,16 +582,15 @@ def audit_windows_archive(args: argparse.Namespace) -> dict:
     for key, value in required_fields.items():
         if fields.get(key) != value:
             fail(f"Windows dependency notice field mismatch: {key}={value}")
+    if "dependency.libusb.dll" in fields:
+        fail("Windows dependency notice still names a libusb DLL")
     source_root = args.repo_root.resolve() if getattr(args, "repo_root", None) else None
     records = {}
     with tempfile.TemporaryDirectory(prefix="px4-windows-audit-") as temporary:
-        for name in WINDOWS_PROGRAM_ARTIFACTS + (WINDOWS_DLL,):
+        for name in WINDOWS_PROGRAM_ARTIFACTS:
             path = Path(temporary) / name
             path.write_bytes(read_zip_file(archive, name))
-            records[name] = audit_windows_pe(path, name, is_dll=name == WINDOWS_DLL,
-                                             source_root=source_root)
-    if members[WINDOWS_DLL].external_attr >> 16 & 0o777 != 0o644:
-        fail("Windows archive libusb DLL must have mode 644")
+            records[name] = audit_windows_pe(path, name, is_dll=False, source_root=source_root)
     for name in WINDOWS_PROGRAM_ARTIFACTS:
         if members[name].external_attr >> 16 & 0o777 not in (0o755, 0o644):
             fail(f"Windows archive program has an unexpected mode: {name}")
@@ -614,10 +617,9 @@ def audit_windows_archive(args: argparse.Namespace) -> dict:
     if set(program_names) != set(WINDOWS_PROGRAM_ARTIFACTS) or len(set(program_names)) != len(PROGRAMS):
         fail("Windows binary evidence must contain each executable exactly once")
     extra = evidence.get("extra")
-    if not isinstance(extra, list) or len(extra) != 1 or \
-            not isinstance(extra[0], dict) or extra[0].get("artifact") != WINDOWS_DLL:
-        fail("Windows binary evidence must contain exactly the packaged libusb DLL")
-    for record in programs + extra:
+    if not isinstance(extra, list) or extra:
+        fail("Windows binary evidence must not contain extra artifacts")
+    for record in programs:
         name = record["artifact"]
         if record.get("sha256") != records[name]["sha256"]:
             fail(f"Windows binary evidence checksum mismatch: {name}")
@@ -1194,13 +1196,7 @@ def audit_binaries(args: argparse.Namespace) -> dict:
         evidence["sha256"] = sha256(path)
         result["programs"].append(evidence)
 
-    if args.platform == WINDOWS_PLATFORM:
-        path = build / WINDOWS_DLL
-        if not path.is_file() or path.is_symlink():
-            fail(f"missing Windows libusb DLL: {path}")
-        result["extra"].append(audit_windows_pe(path, WINDOWS_DLL, is_dll=True,
-                                                source_root=args.repo_root.resolve()))
-    elif args.platform.startswith("linux-"):
+    if args.platform.startswith("linux-"):
         if not args.ifd_library:
             fail("--ifd-library is required for Linux binary audit")
         path = args.ifd_library.resolve()

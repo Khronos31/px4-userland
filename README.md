@@ -103,7 +103,7 @@ IT930x ファームウェアは本ソフトウェアに同梱されていませ�
 - **Linux**: `px4d`、`px4-ts`、`px4ctl` はPT_INTERPとDT_NEEDEDを持たないmusl完全静的ELFです。PC/SCリーダーとして利用する場合は、hostの`pcscd`が読み込むlibc別（glibcまたはmusl）のIFD Handlerが必要です。
 - **macOS**: libusb は実行ファイルへ静的リンク済みで、Homebrew の libusb は不要です。`px4d`、`px4-ts`、`px4ctl` は macOS 標準のライブラリとフレームワークだけに依存します。PC/SC リーダーとして利用する場合は PC/SC デーモンが必要です。
 - **Android**: libusb は実行ファイルへ静的リンク済みです。Termux 環境で `px4-termux` を利用する場合は、Termux:API アプリ、`termux-api` パッケージ（`termux-usb` を提供）、および依存関係である `util-linux`（`setsid` を提供）が必要です。Python や補助デーモンは不要です。
-- **Windows 11 x64（Phase 1）**: `px4d`/`px4-ts`/`px4ctl` は native libusb（WinUSB backend）を使用し、同一toolchainでビルドしたlibusb DLLを同梱します。kernel driverやWinUSB INFは導入しません。`px4d` はforegroundで動作し、IPC endpointは `--runtime-dir`（既定は `%LOCALAPPDATA%`）配下にsame-user private権限で作成します。cooperative shutdownのため `--exit-on-stdin-eof` を提供します。WinSCard互換DLLは提供しません（Phase 2）。
+- **Windows 11 x64（Phase 1）**: `px4d` は libusb 1.0.30（WinUSB backend）を静的リンクします。`px4-ts` と `px4ctl` は libusb をリンクしません。実行時に動的ロードするのは Windows 標準の DLL（UCRT、および libusb が LoadLibrary する WinUSB 等）だけです。`libusb-1.0.dll` は同梱しません。kernel driverやWinUSB INFは導入しません。`px4d` はforegroundで動作し、IPC endpointは `--runtime-dir`（既定は `%LOCALAPPDATA%`）配下にsame-user private権限で作成します。cooperative shutdownのため `--exit-on-stdin-eof` を提供します。WinSCard互換DLLは提供しません（Phase 2）。
 
 ### Linux の USB アクセス権限
 
@@ -517,8 +517,10 @@ scripts/build-macos-static.sh --build-dir build-macos \
 `BUILD-RELINK.md`の手順と`third_party/libusb-1.0.30.tar.bz2`を使用する。
 
 Windows x64（Phase 1）のクロスビルドは、version・checksumを固定したllvm-mingw/UCRT x86_64
-toolchainを`scripts/build-windows.sh`が取得して行う。toolchain archiveとlibusb Windows
-binaryはtracked fileとして同梱しない。
+toolchainを`scripts/build-windows.sh`が取得して行う。libusb 1.0.30は同じtoolchainで静的ライブラリにし、
+`px4d.exe`へリンクする。toolchain archiveとlibusbのbinaryはtracked fileとして同梱しない。
+修正したlibusbで再リンクする場合は、対応source archiveの`BUILD-RELINK.md`にある
+`--libusb-source-dir`を使う。
 
 ```sh
 scripts/build-windows.sh --output build-windows

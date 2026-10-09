@@ -8,7 +8,7 @@ root=$(CDPATH='' cd -- "$script_dir/.." && pwd)
 test_root=$(mktemp -d /tmp/px4-windows-src.XXXXXX)
 trap 'find "$test_root" -depth -delete' EXIT
 
-shellcheck "$script_dir/build-windows.sh"
+shellcheck "$script_dir/build-windows.sh" "$script_dir/test-windows-static-relink.sh"
 python3 -m py_compile "$script_dir/audit-artifact.py" "$script_dir/package-artifact.py" "$script_dir/package-source.py"
 python3 "$script_dir/audit-artifact.py" --self-test >/dev/null
 python3 "$script_dir/package-artifact.py" --self-test >/dev/null
@@ -47,6 +47,7 @@ REQUIRED = {
 }
 WINDOWS = {
     "scripts/build-windows.sh": "#!/bin/sh\n",
+    "scripts/test-windows-static-relink.sh": "#!/bin/sh\n",
     "userland/src/windows/windows_ipc.cpp": "// ipc\n",
     "userland/src/windows/windows_sleep.cpp": "// sleep\n",
     "userland/src/windows/windows_tuner_nonce.cpp": "// nonce\n",

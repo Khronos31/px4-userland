@@ -8,17 +8,18 @@
 # package-artifact.py.
 set -eu
 
-# Fixed timestamp so the libusb DLL and PE headers are reproducible.
+# Fixed timestamp so the PE headers are reproducible.
 SOURCE_DATE_EPOCH=1700000000
 export SOURCE_DATE_EPOCH
 
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 output=
 test_output=
+libusb_source_dir=
 cache=${PX4_WINDOWS_CACHE:-"$root/.windows-toolchain"}
 skip_toolchain_download=0
 usage() {
-    printf '%s\n' "usage: $0 --output DIR [--test-output DIR] [--cache DIR] [--skip-toolchain-download]"
+    printf '%s\n' "usage: $0 --output DIR [--test-output DIR] [--cache DIR] [--skip-toolchain-download] [--libusb-source-dir DIR]"
 }
 
 while [ "$#" -gt 0 ]; do
@@ -26,12 +27,20 @@ while [ "$#" -gt 0 ]; do
     --output) [ "$#" -ge 2 ] || { usage >&2; exit 2; }; output=$2; shift 2 ;;
     --test-output) [ "$#" -ge 2 ] || { usage >&2; exit 2; }; test_output=$2; shift 2 ;;
     --cache) [ "$#" -ge 2 ] || { usage >&2; exit 2; }; cache=$2; shift 2 ;;
+    --libusb-source-dir) [ "$#" -ge 2 ] || { usage >&2; exit 2; }; libusb_source_dir=$2; shift 2 ;;
     --skip-toolchain-download) skip_toolchain_download=1; shift ;;
     --help) usage; exit 0 ;;
     *) printf '%s\n' "unknown argument: $1" >&2; usage >&2; exit 2 ;;
     esac
 done
 [ -n "$output" ] || { usage >&2; exit 2; }
+if [ -n "$libusb_source_dir" ]; then
+    libusb_source_dir=$(CDPATH='' cd -- "$libusb_source_dir" && pwd)
+    [ -x "$libusb_source_dir/configure" ] && [ -f "$libusb_source_dir/COPYING" ] || {
+        printf '%s\n' "invalid libusb source directory: $libusb_source_dir" >&2
+        exit 1
+    }
+fi
 
 # Pinned inputs. Update together with the release record.
 llvm_mingw_version=20250910
@@ -47,6 +56,7 @@ libusb_url="https://github.com/libusb/libusb/releases/download/v${libusb_version
 command -v cmake >/dev/null || { printf '%s\n' 'cmake is required' >&2; exit 1; }
 command -v sha256sum >/dev/null || { printf '%s\n' 'sha256sum is required' >&2; exit 1; }
 command -v make >/dev/null || { printf '%s\n' 'make is required' >&2; exit 1; }
+command -v strings >/dev/null || { printf '%s\n' 'strings is required' >&2; exit 1; }
 if command -v ninja >/dev/null; then make_program=$(command -v ninja)
 elif command -v samurai >/dev/null; then make_program=$(command -v samurai)
 elif command -v samu >/dev/null; then make_program=$(command -v samu)
@@ -121,33 +131,41 @@ toolchain_bin="$toolchain_dir/bin"
 PATH="$toolchain_bin:$PATH"
 export PATH
 
-# Build a shared libusb with the same pinned toolchain. A same-toolchain DLL
-# avoids static LGPL relink expansion and keeps the import table auditable.
-# The source path is pinned out of the DLL so the PE audit can reject leaks.
-libusb_archive_path="$cache/$libusb_archive"
-if [ ! -f "$libusb_archive_path" ]; then
-    [ "$skip_toolchain_download" -eq 0 ] || {
-        printf '%s\n' "libusb archive not present at $libusb_archive_path" >&2
+# Build a static libusb with the same pinned toolchain and link it into px4d.
+# libusb 1.0.30's public header declares LIBUSB_CALL without dllimport, so
+# consumers do not define LIBUSB_STATIC. Its Windows backend LoadLibrary's
+# WinUSB, SetupAPI, Cfgmgr32, AdvAPI32, and hid.dll; configure.ac adds none of
+# those to LIBS. The installed pkg-config Libs.private is passed through.
+# --libusb-source-dir is the LGPL relink path and skips the archive checksum.
+# The production path still requires the pinned archive.
+mkdir -p "$work/libusb"
+if [ -n "$libusb_source_dir" ]; then
+    cp -a "$libusb_source_dir/." "$work/libusb/"
+else
+    libusb_archive_path="$cache/$libusb_archive"
+    if [ ! -f "$libusb_archive_path" ]; then
+        [ "$skip_toolchain_download" -eq 0 ] || {
+            printf '%s\n' "libusb archive not present at $libusb_archive_path" >&2
+            exit 1
+        }
+        command -v curl >/dev/null || { printf '%s\n' 'curl is required to fetch libusb' >&2; exit 1; }
+        curl -fsSL --retry 2 -o "$libusb_archive_path" "$libusb_url"
+    fi
+    actual=$(sha256sum "$libusb_archive_path" | awk '{print $1}')
+    [ "$actual" = "$libusb_sha256" ] || {
+        printf '%s\n' "libusb checksum mismatch: $actual" >&2
         exit 1
     }
-    command -v curl >/dev/null || { printf '%s\n' 'curl is required to fetch libusb' >&2; exit 1; }
-    curl -fsSL --retry 2 -o "$libusb_archive_path" "$libusb_url"
+    tar -xjf "$libusb_archive_path" -C "$work/libusb" --strip-components=1
 fi
-actual=$(sha256sum "$libusb_archive_path" | awk '{print $1}')
-[ "$actual" = "$libusb_sha256" ] || {
-    printf '%s\n' "libusb checksum mismatch: $actual" >&2
-    exit 1
-}
-mkdir -p "$work/libusb"
-tar -xjf "$libusb_archive_path" -C "$work/libusb" --strip-components=1
 [ -x "$work/libusb/configure" ] || {
-    printf '%s\n' 'libusb release archive does not contain a configure script' >&2
+    printf '%s\n' 'libusb source does not contain a configure script' >&2
     exit 1
 }
 (
     cd "$work/libusb" &&
         ./configure --host=x86_64-w64-mingw32 --prefix="$work/libusb-prefix" \
-            --enable-shared --disable-static --disable-udev \
+            --enable-static --disable-shared --disable-udev \
             --disable-examples-build --disable-tests-build \
             CC="$toolchain_bin/x86_64-w64-mingw32-clang" \
             AR="$toolchain_bin/llvm-ar" RANLIB="$toolchain_bin/llvm-ranlib" \
@@ -157,17 +175,51 @@ tar -xjf "$libusb_archive_path" -C "$work/libusb" --strip-components=1
         make install
 )
 libusb_include="$work/libusb-prefix/include/libusb-1.0"
-libusb_dll="$work/libusb-prefix/bin/libusb-1.0.dll"
-libusb_implib="$work/libusb-prefix/lib/libusb-1.0.dll.a"
-if [ ! -f "$libusb_dll" ] || [ ! -f "$libusb_implib" ] || [ ! -f "$libusb_include/libusb.h" ]; then
-    printf '%s\n' 'shared libusb DLL/import library was not produced' >&2
+libusb_a="$work/libusb-prefix/lib/libusb-1.0.a"
+libusb_pc="$work/libusb-prefix/lib/pkgconfig/libusb-1.0.pc"
+if [ ! -f "$libusb_a" ] || [ ! -f "$libusb_include/libusb.h" ] || [ ! -f "$libusb_pc" ]; then
+    printf '%s\n' 'static libusb archive was not produced' >&2
     exit 1
 fi
+if [ -e "$work/libusb-prefix/bin/libusb-1.0.dll" ] ||
+    [ -e "$work/libusb-prefix/lib/libusb-1.0.dll" ] ||
+    [ -e "$work/libusb-prefix/lib/libusb-1.0.dll.a" ]; then
+    printf '%s\n' 'static libusb configure produced a shared DLL or import library' >&2
+    exit 1
+fi
+nm_tool="$toolchain_bin/llvm-nm"
+objdump_tool="$toolchain_bin/llvm-objdump"
+[ -x "$nm_tool" ] && [ -x "$objdump_tool" ] || {
+    printf '%s\n' "llvm-nm and llvm-objdump are required under $toolchain_bin" >&2
+    exit 1
+}
+"$nm_tool" "$libusb_a" | grep -F 'libusb_init' >/dev/null || {
+    printf '%s\n' 'static libusb archive is missing libusb_init' >&2
+    exit 1
+}
+libusb_private=$(awk '
+    $0 ~ /^Libs\.private:/ {
+        found = 1
+        sub(/^Libs\.private:[[:space:]]*/, "")
+        print
+        exit
+    }
+    END { if (!found) exit 1 }
+' "$libusb_pc") || {
+    printf '%s\n' 'libusb-1.0.pc has no Libs.private field' >&2
+    exit 1
+}
+libusb_private=$(printf '%s' "$libusb_private" | awk '{$1=$1; print}')
+printf '%s\n' "libusb Libs.private: ${libusb_private:-<empty>}"
 
 configure_build() {
     build_dir=$1
     tests=$2
     libusb=$3
+    link_arg=
+    if [ "$libusb" = ON ] && [ -n "$libusb_private" ]; then
+        link_arg="-DPX4_LIBUSB_LINK_LIBRARIES=${libusb_private}"
+    fi
     cmake -S "$root" -B "$build_dir" -G Ninja -DCMAKE_MAKE_PROGRAM="$make_program" \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_SYSTEM_PROCESSOR=x86_64 \
@@ -177,7 +229,8 @@ configure_build() {
         -DCMAKE_EXE_LINKER_FLAGS="-Wl,-s" \
         -DPX4_BUILD_TESTS="$tests" -DPX4_BUILD_PCSC_IFD=OFF -DPX4_ENABLE_LIBUSB="$libusb" \
         -DPX4_LIBUSB_INCLUDE_DIR="$libusb_include" \
-        -DPX4_LIBUSB_LIBRARY="$libusb_implib"
+        -DPX4_LIBUSB_LIBRARY="$libusb_a" \
+        ${link_arg:+"$link_arg"}
 }
 
 build="$work/build"
@@ -190,10 +243,33 @@ for program in px4d px4-ts px4ctl; do
         exit 1
     }
 done
-cp "$libusb_dll" "$output/libusb-1.0.dll"
 for program in px4d px4-ts px4ctl; do
     cp "$build/$program.exe" "$output/$program.exe"
 done
+if [ -e "$output/libusb-1.0.dll" ]; then
+    printf '%s\n' 'refusing to stage libusb-1.0.dll; libusb is statically linked' >&2
+    exit 1
+fi
+for program in px4d px4-ts px4ctl; do
+    if "$objdump_tool" -p "$output/$program.exe" | grep -F 'libusb-1.0.dll' >/dev/null; then
+        printf '%s\n' "$program.exe imports libusb-1.0.dll" >&2
+        exit 1
+    fi
+done
+# The pinned archive compiles the libusb version URL into px4d. A relink from
+# --libusb-source-dir may replace that URL, so only the production path checks it.
+if [ -z "$libusb_source_dir" ]; then
+    if ! strings "$output/px4d.exe" | grep -F 'https://libusb.info' >/dev/null; then
+        printf '%s\n' 'px4d.exe does not contain the static libusb version URL' >&2
+        exit 1
+    fi
+    for program in px4-ts px4ctl; do
+        if strings "$output/$program.exe" | grep -F 'https://libusb.info' >/dev/null; then
+            printf '%s\n' "$program.exe contains the libusb version URL" >&2
+            exit 1
+        fi
+    done
+fi
 
 if [ -n "$test_output" ]; then
     test_build="$work/build-tests"
@@ -207,7 +283,10 @@ if [ -n "$test_output" ]; then
         printf '%s\n' 'Windows test executables were not produced' >&2
         exit 1
     }
-    cp "$libusb_dll" "$test_output/libusb-1.0.dll"
+    if [ -e "$test_output/libusb-1.0.dll" ]; then
+        printf '%s\n' 'refusing to stage libusb-1.0.dll next to the tests' >&2
+        exit 1
+    fi
 fi
 
 printf '%s\n' "Windows Phase 1 build staged in $output"

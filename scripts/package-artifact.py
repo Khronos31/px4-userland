@@ -31,7 +31,8 @@ LIBUSB_COPYING_SHA256 = _audit.LIBUSB_COPYING_SHA256
 PLATFORMS = _audit.PLATFORMS
 PROGRAMS = _audit.PROGRAMS
 TERMUX_LAUNCHER = _audit.TERMUX_LAUNCHER
-WINDOWS_DLL = _audit.WINDOWS_DLL
+WINDOWS_LIBUSB_DLL = _audit.WINDOWS_LIBUSB_DLL
+WINDOWS_LIBUSB_MARKER = _audit.WINDOWS_LIBUSB_MARKER
 WINDOWS_PLATFORM = _audit.WINDOWS_PLATFORM
 WINDOWS_TOOLCHAIN_LICENSE_SHA256 = _audit.WINDOWS_TOOLCHAIN_LICENSE_SHA256
 WINDOWS_TOOLCHAIN_LICENSE_NOTICE = _audit.WINDOWS_TOOLCHAIN_LICENSE_NOTICE
@@ -264,16 +265,17 @@ def render_dependency_notice(repo_root: Path, version: str, platform: str,
     elif platform == "windows-x86_64":
         dependency_text = (
             "dependency.libusb.version=1.0.30\n"
-            "dependency.libusb.linkage=shared-dll\n"
+            "dependency.libusb.linkage=static\n"
             "dependency.libusb.license=LGPL-2.1-or-later\n"
-            f"dependency.libusb.dll={WINDOWS_DLL}\n"
             "dependency.toolchain=llvm-mingw-20250910-ucrt-x86_64\n"
             f"dependency.toolchain.licenses={WINDOWS_TOOLCHAIN_LICENSE_NOTICE}\n"
             f"corresponding-source-archive=px4-userland-{version}-source.tar.gz\n\n"
-            "The Windows executables dynamically load the same-toolchain libusb-1.0.dll shipped in this archive "
-            "under LGPL-2.1-or-later; the C++/unwinder/winpthread/MinGW-w64 runtimes are statically linked. The "
-            "exact narrow llvm-mingw toolchain license texts are included under toolchain/ (see the license paths "
-            "above). The exact libusb source and relink recipe are in "
+            "px4d statically includes libusb 1.0.30 under LGPL-2.1-or-later. px4-ts and px4ctl do not link "
+            "libusb. The executables dynamically load only Windows system libraries, including the UCRT and the "
+            "WinUSB, SetupAPI, Cfgmgr32, AdvAPI32, and hid libraries that libusb loads at runtime. The "
+            "C++/unwinder/winpthread/MinGW-w64 runtimes are statically linked. The exact narrow llvm-mingw "
+            "toolchain license texts are included under toolchain/ (see the license paths above). The exact "
+            "libusb source and relink recipe are in "
             f"px4-userland-{version}-source.tar.gz from the same candidate handoff.\n"
         )
     else:
@@ -435,21 +437,17 @@ def self_test_windows_archive(repo_root: Path) -> None:
         for name in WINDOWS_TOOLCHAIN_LICENSE_SHA256:
             files[name] = (repo_root / "packaging" / "windows-toolchain" / "licenses" /
                            name[len("toolchain/"):]).read_bytes()
-        dp_imports = {"px4d.exe": ("KERNEL32.dll", WINDOWS_DLL),
-                      "px4-ts.exe": ("KERNEL32.dll",),
-                      "px4ctl.exe": ("KERNEL32.dll",)}
         for program in PROGRAMS:
-            files[f"{program}.exe"] = synthetic_pe(imports=dp_imports[f"{program}.exe"])
-        files[WINDOWS_DLL] = synthetic_pe(imports=("KERNEL32.dll",),
-                                          exports=("libusb_init", "libusb_exit"), dll=True)
+            poison = WINDOWS_LIBUSB_MARKER if program == "px4d" else b""
+            files[f"{program}.exe"] = synthetic_pe(imports=("KERNEL32.dll",), poison=poison)
         return files
 
     def evidence_for(files: dict[str, bytes]) -> dict:
         records = []
-        for name in (*sorted(f"{program}.exe" for program in PROGRAMS), WINDOWS_DLL):
+        for name in sorted(f"{program}.exe" for program in PROGRAMS):
             records.append(_audit.audit_windows_pe(_stage_file(name, files[name]), name,
-                                                   is_dll=name == WINDOWS_DLL, source_root=None))
-        return {"platform": platform, "programs": records[:len(PROGRAMS)], "extra": [records[-1]]}
+                                                   is_dll=False, source_root=None))
+        return {"platform": platform, "programs": records, "extra": []}
 
     import atexit
     scratch = Path(tempfile.mkdtemp(prefix="px4-windows-selftest-"))
@@ -473,8 +471,8 @@ def self_test_windows_archive(repo_root: Path) -> None:
                    json.dumps(evidence, indent=2, sort_keys=True) + "\n")
         manifest = {
             "schema": 1, "version": version, "platform": platform, "libc": "ucrt",
-            "architecture": "x86_64", "embedded_libusb": {"version": "1.0.30", "linkage": "shared-dll"},
-            "libusb_dll": WINDOWS_DLL, "libusb_archive_sha256": LIBUSB_SHA256,
+            "architecture": "x86_64", "embedded_libusb": {"version": "1.0.30", "linkage": "static"},
+            "libusb_archive_sha256": LIBUSB_SHA256,
             "source_ref": "self-test", "programs": list(PROGRAMS), "production_only": True, "files": {},
         }
         for path in sorted(stage.rglob("*")):
@@ -495,11 +493,13 @@ def self_test_windows_archive(repo_root: Path) -> None:
             zip_writer(stage, archive)
         return archive
 
-    def expect_rejected(archive: Path, description: str) -> None:
+    def expect_rejected(archive: Path, description: str, reason: str | None = None) -> None:
         try:
             audit_binary_archive(argparse.Namespace(archive=archive, platform=platform,
                                                     repo_root=repo_root))
-        except AuditError:
+        except AuditError as error:
+            if reason is not None and reason not in str(error):
+                fail(f"Windows archive self-test rejected {description} for {error}, expected {reason}")
             return
         fail(f"Windows archive self-test accepted {description}")
 
@@ -530,11 +530,35 @@ def self_test_windows_archive(repo_root: Path) -> None:
     bad_import_dir.mkdir()
     expect_rejected(build(bad_import_dir, bad_import, valid_evidence), "unexpected import DLL")
 
-    missing_dll = dict(valid_files)
-    missing_dll.pop(WINDOWS_DLL)
-    missing_dll_dir = scratch / "missing-dll"
-    missing_dll_dir.mkdir()
-    expect_rejected(build(missing_dll_dir, missing_dll, valid_evidence), "missing libusb DLL")
+    shipped_dll = dict(valid_files)
+    shipped_dll[WINDOWS_LIBUSB_DLL] = synthetic_pe(imports=("KERNEL32.dll",),
+                                                   exports=("libusb_init", "libusb_exit"), dll=True)
+    shipped_dll_dir = scratch / "shipped-dll"
+    shipped_dll_dir.mkdir()
+    expect_rejected(build(shipped_dll_dir, shipped_dll, valid_evidence), "shipped libusb DLL",
+                    WINDOWS_LIBUSB_DLL)
+
+    imported_dll = dict(valid_files)
+    imported_dll["px4d.exe"] = synthetic_pe(imports=("KERNEL32.dll", WINDOWS_LIBUSB_DLL),
+                                            poison=WINDOWS_LIBUSB_MARKER)
+    imported_dll_dir = scratch / "imported-dll"
+    imported_dll_dir.mkdir()
+    expect_rejected(build(imported_dll_dir, imported_dll, valid_evidence), "px4d imports libusb DLL",
+                    "statically linked")
+
+    missing_marker = dict(valid_files)
+    missing_marker["px4d.exe"] = synthetic_pe(imports=("KERNEL32.dll",))
+    missing_marker_dir = scratch / "missing-marker"
+    missing_marker_dir.mkdir()
+    expect_rejected(build(missing_marker_dir, missing_marker, valid_evidence),
+                    "px4d missing static libusb marker", "static libusb version URL")
+
+    leaked_marker = dict(valid_files)
+    leaked_marker["px4-ts.exe"] = synthetic_pe(imports=("KERNEL32.dll",), poison=WINDOWS_LIBUSB_MARKER)
+    leaked_marker_dir = scratch / "leaked-marker"
+    leaked_marker_dir.mkdir()
+    expect_rejected(build(leaked_marker_dir, leaked_marker, valid_evidence),
+                    "libusb marker in px4-ts", "without linking libusb")
 
     missing_license = dict(valid_files)
     missing_license.pop("toolchain/LICENSE.TXT")
@@ -686,8 +710,8 @@ def main() -> int:
             for program in PROGRAMS:
                 copy_regular(binary_root / f"{program}.exe", stage / f"{program}.exe")
                 (stage / f"{program}.exe").chmod(0o755)
-            copy_regular(binary_root / WINDOWS_DLL, stage / WINDOWS_DLL)
-            (stage / WINDOWS_DLL).chmod(0o644)
+            if (binary_root / WINDOWS_LIBUSB_DLL).exists():
+                fail(f"Windows build directory still contains {WINDOWS_LIBUSB_DLL}")
             copy_windows_toolchain_licenses(args.repo_root.resolve(), stage)
         else:
             for program in ("px4d", "px4-ts", "px4ctl"):
@@ -760,16 +784,13 @@ def main() -> int:
                       "android" if args.platform.startswith("android-") else
                       "ucrt" if args.platform == WINDOWS_PLATFORM else "darwin"),
             "architecture": args.platform.rsplit("-", 1)[-1],
-            "embedded_libusb": ({"version": "1.0.30", "linkage": "shared-dll"}
-                                 if args.platform == WINDOWS_PLATFORM else
-                                 {"version": "1.0.30", "linkage": "static"}),
+            "embedded_libusb": {"version": "1.0.30", "linkage": "static"},
             "source_ref": args.source_ref,
             "programs": ["px4d", "px4-ts", "px4ctl"],
             "production_only": True,
             "files": {},
         }
         if args.platform == WINDOWS_PLATFORM:
-            manifest["libusb_dll"] = WINDOWS_DLL
             manifest["libusb_archive_sha256"] = LIBUSB_SHA256
         for path in sorted(stage.rglob("*")):
             if path.is_file():

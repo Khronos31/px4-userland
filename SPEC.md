@@ -1,9 +1,17 @@
 # px4-userland 仕様
 
-Status: Frozen v0.30 (2026-10-09)
+Status: Frozen v0.31 (2026-10-09)
 
 本書の`MUST`、`MUST NOT`、`SHOULD`は規範要件を示す。実機観測で前提の誤りが判明した場合も暗黙に
 実装だけを変えず、本書のversionと変更理由を更新してから実装する。
+
+### v0.31 change record (2026-10-09)
+
+- 3.3、7.5、10.4節: Windows Phase 1のlibusbは、ピンした1.0.30 sourceを同一toolchainで静的ライブラリにし、
+  `px4d.exe`へリンクする。`libusb-1.0.dll`は生成も同梱もしない。`px4-ts.exe`と`px4ctl.exe`はlibusbを
+  リンクしない。UCRTと、libusbが実行時にLoadLibraryするWinUSB等のOS標準DLLは動的のままとする。
+  LGPL-2.1 §6のexact sourceとrelink手順はLinux/macOS/Androidと同じ対応source archiveで提供する。
+  libusbをLGPL §3によりGPL化したとは主張しない。
 
 ### v0.30 change record (2026-10-09)
 
@@ -353,7 +361,8 @@ portable coreからOS vendor固有header、Linux kernel header、glibc内部API�
 - Androidのruntime targetはAPI 24以上、`armv7a-linux-androideabi`、`aarch64-linux-android`、
   `x86_64-linux-android`とする。3つのABIを同一の配布・監査対象とし、各archiveへ同じ`px4-termux`を収録する。
 - Windows targetはx86_64のみとし、llvm-mingw/UCRTでクロスビルドする。toolchainとlibusbのversion・
-  SHA-256をbuild scriptへ固定し、PE architecture、import DLL、build path leak、legacy artifactを監査する。
+  SHA-256をbuild scriptへ固定する。libusb 1.0.30は`px4d.exe`へ静的リンクし、`libusb-1.0.dll`は同梱しない。
+  PE architecture、import DLL、静的libusbの版文字列、build path leak、legacy artifactを監査する。
 
 ## 4. Device contract
 
@@ -929,8 +938,10 @@ queue overflow、sync/TEI/drop検出を0にしない。stdoutはTSだけ、全�
 
 ### 7.5 Windows (Phase 1)
 
-- 正規toolchainはllvm-mingwのUCRT x86_64とし、toolchain archiveとlibusb Windows binaryの
-  version・SHA-256をbuild scriptへ固定する。compiler/dependency binaryをtracked fileとして同梱しない。
+- 正規toolchainはllvm-mingwのUCRT x86_64とし、toolchain archiveとlibusb 1.0.30 sourceの
+  version・SHA-256をbuild scriptへ固定する。libusbは静的ライブラリとしてビルドし`px4d.exe`へリンクする。
+  `libusb-1.0.dll`は生成も同梱もしない。compiler/dependency binaryをtracked fileとして同梱しない。
+  OS標準DLLは動的のままとする。
 - portable coreはC++17、例外・RTTI不使用を維持する。Windows固有処理は`userland/src/windows/`の
   platform adapterへ隔離し、既存POSIX codeは`#else`側で挙動を変えない。
 - endpointは`--runtime-dir`／`--instance`をサポートし、既定は`%LOCALAPPDATA%`配下とする。
@@ -1175,10 +1186,12 @@ Linux/Android/macOSのstable配布物のplatform/architectureは次の8つのbin
 | `px4-userland-<version>-android-armv7a.tar.gz` | Android API 24+、Bionic armv7a、Termux/Google TV用 |
 | `px4-userland-<version>-android-x86_64.tar.gz` | Android API 24+、Bionic x86_64、Termux/Bliss OS用 |
 
-Windows Phase 1はx86_64の`px4-userland-<version>-windows-x86_64.zip`を追加配布物とする。同一toolchainで
-ビルドしたlibusb DLL、`px4d.exe`／`px4-ts.exe`／`px4ctl.exe`、LICENSE、第三者notice、exact source coverageを
-含み、PE architecture、import DLL、build path leak、legacy artifactを監査し、deterministic zipと最終archiveからの
-smokeを要する。Windows archiveのgateは、Windows IPC adapterとCLIの実装と10.3の`build-tested` evidenceに加え、
+Windows Phase 1はx86_64の`px4-userland-<version>-windows-x86_64.zip`を追加配布物とする。`px4d.exe`は
+同一toolchainでビルドしたlibusb 1.0.30を静的リンクする。`px4-ts.exe`と`px4ctl.exe`はlibusbをリンクしない。
+ZIPは3つの実行ファイル、LICENSE、第三者notice、exact source coverageを含み、`libusb-1.0.dll`は同梱しない。
+PE architecture、import DLL、静的libusbの版文字列、build path leak、legacy artifactを監査し、deterministic zipと
+最終archiveからのsmokeを要する。OS標準DLL（UCRT、およびlibusbが実行時にLoadLibraryするWinUSB等）は動的のままとする。
+Windows archiveのgateは、Windows IPC adapterとCLIの実装と10.3の`build-tested` evidenceに加え、
 10.5の必須短時間実機matrixのWindows行（exact candidate archiveを使用）が完了するまで未完了とする。実機確認が
 得られるまでは`hardware-unverified`と表示し、`build-tested`だけでは当該gateを完了としない。WinSCard互換DLLと
 Microsoft PC/SC IFD登録はPhase 2以降であり本gateの対象外とする。既存8 archiveの判定条件と順序は変更しない。
@@ -1210,9 +1223,10 @@ source archiveは `__pycache__/`、`.pyc`、`.pyo`、`.pyd` などのPythonバ�
 5. Linux production executableは`readelf -l`でPT_INTERPなし、`readelf -d`でDT_NEEDEDなしを検証する。Linux IFDは
    archive名に対応するglibc 2.31またはmuslのshared objectとして監査し、macOS binaryは`otool -L`でlibusb dylibと
    macOS system以外のdependencyがないことを検証する。
-6. Linux/macOS static libusbのexact source、license text、notice、build/relink instructionsは対応source archiveへ含める。
-   Linux/macOS binary archiveの`DEPENDENCY-NOTICE.txt`はstatic libusb 1.0.30、LGPL-2.1-or-later、対応source archive名を
+6. Linux/macOS/Windows static libusbのexact source、license text、notice、build/relink instructionsは対応source archiveへ含める。
+   Linux/macOS/Windows binary archiveの`DEPENDENCY-NOTICE.txt`はstatic libusb 1.0.30、LGPL-2.1-or-later、対応source archive名を
    明示し、全platformのbinary archiveで`libusb/COPYING`が検証済みexact license textと一致することを監査する。
+   Windowsの実行ファイルはOS標準DLLを動的ロードしてよい。libusbをLGPL §3によりGPL化したとは主張しない。
 
 このgateの包装・manifest・checksum・binary/source archive auditは、local packaging scriptsと
 `.github/workflows/build_userland.yml`の`release-candidate` workflowとして実装済みである。workflowはtagや

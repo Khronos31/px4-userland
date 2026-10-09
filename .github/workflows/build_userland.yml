@@ -658,6 +658,14 @@ jobs:
           printf 'windows zip sha256: %s\n' "$first"
           scripts/audit-artifact.sh --platform windows-x86_64 \
             --archive "$RUNNER_TEMP/win/zip-1/px4-userland-$version-windows-x86_64.zip"
+      - name: Corresponding-source Windows static relink proof
+        env:
+          LIBUSB_ARCHIVE: ${{ runner.temp }}/libusb-1.0.30.tar.bz2
+        run: |
+          scripts/test-windows-static-relink.sh \
+            --libusb-source-archive "$LIBUSB_ARCHIVE" \
+            --baseline-px4d "$RUNNER_TEMP/win/bin-1/px4d.exe" \
+            --cache "$RUNNER_TEMP/px4-windows-toolchain"
       - name: Upload Windows candidate archive
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
