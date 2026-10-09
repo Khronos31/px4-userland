@@ -1,0 +1,5 @@
+px4d device: PX-Q3U4
+px4d ready: device=<BASE_SERIAL> endpoint=C:\px4e17\L\rd1-d4ecb8\px4-userland\<BASE_SERIAL>\control.sock
+shutdown cleanup: USB_IO
+px4d stopped: USB_IO
+

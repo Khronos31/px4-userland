@@ -1,0 +1,5 @@
+px4-ts: PROTOCOL_ERROR
+written packets=479578 bytes=90160664
+STOP_STREAM packets=479578 bytes=90160664 sync-errors=0 tei=0 continuity-errors=4 queue-drops=0 usb-errors=0 empty-intervals=5111
+STREAM_END packets=479578 bytes=90160664 sync-errors=0 tei=0 continuity-errors=4 queue-drops=0 usb-errors=0 empty-intervals=5111
+STREAM_END error=0

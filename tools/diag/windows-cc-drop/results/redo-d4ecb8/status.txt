@@ -1,0 +1,33 @@
+2026-10-09T19:32:47Z START runid=d4ecb8
+2026-10-09T19:32:48Z inner SHA256SUMS entries=16 badcount=0 zip-entry-compare files=17 mismatch=0
+2026-10-09T19:32:48Z list rc=0 list-json rc=0
+2026-10-09T19:32:48Z no stray processes
+2026-10-09T19:32:49Z daemon1 ready pid=29368
+2026-10-09T19:32:52Z card-before card-status=0 card-atr=0 card-reset=0 apdu10=0
+2026-10-09T19:32:52Z gen1-1 8 receivers launched
+2026-10-09T19:33:27Z gen1-1: streaming=8 apdu-mid-rc=0 r0:rc=0,cc=0,tei=0,sync/q/usb=0,pk=479578 r1:rc=0,cc=0,tei=0,sync/q/usb=0,pk=479722 r2:rc=0,cc=0,tei=0,sync/q/usb=0,pk=346104 r3:rc=0,cc=0,tei=0,sync/q/usb=0,pk=345700 r4:rc=0,cc=0,tei=0,sync/q/usb=0,pk=479572 r5:rc=0,cc=0,tei=0,sync/q/usb=0,pk=479714 r6:rc=0,cc=0,tei=0,sync/q/usb=0,pk=345691 r7:rc=8,cc=560,tei=10900,sync/q/usb=0,pk=342096
+2026-10-09T19:33:27Z GEN1 VERDICT PASS(r0-6 clean) attempts=1
+2026-10-09T19:33:29Z card-after-gen1 card-status=0 card-atr=0 card-reset=0 apdu10=0
+2026-10-09T19:33:29Z GATE waiting go-card.txt / abort.txt (daemon1 alive, max 6h)
+2026-10-09T19:34:57Z GATE go
+2026-10-09T19:34:57Z WAITING card-remove (max 300s)
+2026-10-09T19:35:12Z observed card-remove
+2026-10-09T19:35:12Z card-removed status=present=no initialized=no reader-generation=2 atr-rc=9 apdu-rc=9
+2026-10-09T19:35:12Z WAITING card-insert (max 300s)
+2026-10-09T19:35:37Z observed card-insert
+2026-10-09T19:35:41Z card-reinserted card-status=0 card-atr=0 card-reset=0 apdu10=0
+2026-10-09T19:35:41Z gen2 8 receivers launched
+2026-10-09T19:36:15Z gen2: streaming=8 apdu-mid-rc=0 r0:rc=0,cc=0,tei=0,sync/q/usb=0,pk=478605 r1:rc=0,cc=0,tei=0,sync/q/usb=0,pk=478775 r2:rc=0,cc=0,tei=0,sync/q/usb=0,pk=346012 r3:rc=0,cc=0,tei=0,sync/q/usb=0,pk=345070 r4:rc=0,cc=0,tei=0,sync/q/usb=0,pk=478722 r5:rc=0,cc=0,tei=0,sync/q/usb=0,pk=479003 r6:rc=0,cc=0,tei=0,sync/q/usb=0,pk=346275 r7:rc=8,cc=624,tei=10899,sync/q/usb=0,pk=342303
+2026-10-09T19:36:15Z WAITING usb-unplug (max 300s)
+2026-10-09T19:37:09Z observed usb-unplug
+2026-10-09T19:37:09Z usb-unplug client=exit7 daemon=exit7 rt1Left=[] stray px4d=0 px4-ts=0
+2026-10-09T19:37:09Z WAITING usb-insert (max 300s)
+2026-10-09T19:37:55Z observed usb-insert
+2026-10-09T19:37:59Z daemon2 ready pid=38580
+2026-10-09T19:38:02Z card-reconnected card-status=0 card-atr=0 card-reset=0 apdu10=0
+2026-10-09T19:38:02Z gen3 8 receivers launched
+2026-10-09T19:38:36Z gen3: streaming=8 apdu-mid-rc=0 r0:rc=0,cc=0,tei=0,sync/q/usb=0,pk=478771 r1:rc=0,cc=0,tei=0,sync/q/usb=0,pk=478869 r2:rc=0,cc=0,tei=0,sync/q/usb=0,pk=345036 r3:rc=0,cc=0,tei=0,sync/q/usb=0,pk=345691 r4:rc=8,cc=8,tei=0,sync/q/usb=0,pk=478767 r5:rc=8,cc=8,tei=0,sync/q/usb=0,pk=477817 r6:rc=8,cc=7,tei=0,sync/q/usb=0,pk=345146 r7:rc=8,cc=649,tei=10933,sync/q/usb=0,pk=341038
+2026-10-09T19:38:36Z d2 exit=0
+2026-10-09T19:38:36Z stop: rt2Left=[] stray px4d=0 px4-ts=0
+2026-10-09T19:38:36Z DONE errorcount=0
+2026-10-09T19:38:36Z final stray px4d=0 px4-ts=0

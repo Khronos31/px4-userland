@@ -1,0 +1,24 @@
+px4d.exe : argument error: unknown argument
+発生場所 C:\px4-e17\redo-matrix.ps1:167 文字:4
++   (& (Join-Path $D 'px4d.exe') --version 2>&1 | Out-String) | Out-Fil ...
++    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (argument error: unknown argument:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+usage:
+  px4d --device BASE_SERIAL --firmware PATH [--usb-path BUS:ADDRESS|BUS-PORT ...] [--instance TOKEN] [--runtime-dir PATH] [--group] [--allow-lnb-power]
+  px4d --fd FD [--fd FD] [--device BASE_SERIAL] --firmware PATH [--instance TOKEN] [--runtime-dir PATH] [--group] [--allow-lnb-power]
+  px4d --list
+  px4d --list-json
+
+  BASE_SERIAL is the 14-digit serial base for paired devices or the
+  15-digit USB serial for single-device models.  Pass one --fd per
+  USB device: two for paired models, one for single-device models.
+
+  --allow-lnb-power  permit explicit ISDB-S 15 V requests; default off
+  --exit-on-stdin-eof  exit with cleanup when stdin reaches EOF (Windows
+                     cooperative parent stop)
+  --list             print connected supported enclosures and exit;
+  --list-json        print the same data as compact JSON and exit;
+                     read-only, needs neither firmware nor a daemon
+

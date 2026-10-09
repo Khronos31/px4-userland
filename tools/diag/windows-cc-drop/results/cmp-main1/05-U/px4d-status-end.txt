@@ -1,0 +1,10 @@
+generation=43 ready=yes usb-present-mask=0x03 card-present=yes card-initialized=no usb-errors=0 protocol-errors=0
+receiver=0 state=free
+receiver=1 state=free
+receiver=2 state=free
+receiver=3 state=free
+receiver=4 state=free
+receiver=5 state=free
+receiver=6 state=free
+receiver=7 state=free
+

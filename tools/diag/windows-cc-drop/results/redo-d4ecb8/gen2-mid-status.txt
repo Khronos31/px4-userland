@@ -1,0 +1,10 @@
+generation=67 ready=yes usb-present-mask=0x03 card-present=yes card-initialized=no usb-errors=0 protocol-errors=0
+receiver=0 state=streaming
+receiver=1 state=streaming
+receiver=2 state=streaming
+receiver=3 state=streaming
+receiver=4 state=streaming
+receiver=5 state=streaming
+receiver=6 state=streaming
+receiver=7 state=streaming
+

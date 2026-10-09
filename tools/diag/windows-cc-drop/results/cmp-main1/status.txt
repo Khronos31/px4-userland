@@ -1,0 +1,79 @@
+2026-10-10T05:06:07 START tag=main1 plan=U,D0,U,D0,U,D0,U,D0,U,D0,U,D0,U,D0,U,D0,U,D0,U,D0,U,D0,U,D0,D1,D1,D1,D1,D1,D1,D1,D1
+2026-10-10T05:06:07 STEP 1 U
+2026-10-10T05:06:13   px4d ready pid=40332
+2026-10-10T05:06:49   U probe rc=0 px4d rc=0 runtime-left=0 stray=0
+2026-10-10T05:06:49 STEP 2 D0
+2026-10-10T05:07:34   D(b2) probe rc=0 drvhost=[42644:C:\px4-e17\px4drv-cmp\b2\DriverHost_PX4.exe] exit-after=11s gone=True
+2026-10-10T05:07:40 STEP 3 U
+2026-10-10T05:07:46   px4d ready pid=29916
+2026-10-10T05:08:20   U probe rc=0 px4d rc=0 runtime-left=0 stray=0
+2026-10-10T05:08:20 STEP 4 D0
+2026-10-10T05:09:06   D(b2) probe rc=0 drvhost=[7684:C:\px4-e17\px4drv-cmp\b2\DriverHost_PX4.exe] exit-after=11s gone=True
+2026-10-10T05:09:11 STEP 5 U
+2026-10-10T05:09:17   px4d ready pid=3816
+2026-10-10T05:09:51   U probe rc=0 px4d rc=0 runtime-left=0 stray=0
+2026-10-10T05:09:51 STEP 6 D0
+2026-10-10T05:10:37   D(b2) probe rc=0 drvhost=[12696:C:\px4-e17\px4drv-cmp\b2\DriverHost_PX4.exe] exit-after=11s gone=True
+2026-10-10T05:10:42 STEP 7 U
+2026-10-10T05:10:48   px4d ready pid=28916
+2026-10-10T05:11:23   U probe rc=0 px4d rc=0 runtime-left=0 stray=0
+2026-10-10T05:11:23 STEP 8 D0
+2026-10-10T05:12:09   D(b2) probe rc=0 drvhost=[42596:C:\px4-e17\px4drv-cmp\b2\DriverHost_PX4.exe] exit-after=11s gone=True
+2026-10-10T05:12:14 STEP 9 U
+2026-10-10T05:12:20   px4d ready pid=15404
+2026-10-10T05:12:55   U probe rc=0 px4d rc=0 runtime-left=0 stray=0
+2026-10-10T05:12:55 STEP 10 D0
+2026-10-10T05:13:40   D(b2) probe rc=0 drvhost=[12916:C:\px4-e17\px4drv-cmp\b2\DriverHost_PX4.exe] exit-after=11s gone=True
+2026-10-10T05:13:45 STEP 11 U
+2026-10-10T05:13:51   px4d ready pid=7124
+2026-10-10T05:14:27   U probe rc=0 px4d rc=0 runtime-left=0 stray=0
+2026-10-10T05:14:27 STEP 12 D0
+2026-10-10T05:15:12   D(b2) probe rc=0 drvhost=[41248:C:\px4-e17\px4drv-cmp\b2\DriverHost_PX4.exe] exit-after=11s gone=True
+2026-10-10T05:15:17 STEP 13 U
+2026-10-10T05:15:24   px4d ready pid=30916
+2026-10-10T05:15:58   U probe rc=0 px4d rc=0 runtime-left=0 stray=0
+2026-10-10T05:15:58 STEP 14 D0
+2026-10-10T05:16:44   D(b2) probe rc=0 drvhost=[4720:C:\px4-e17\px4drv-cmp\b2\DriverHost_PX4.exe] exit-after=11s gone=True
+2026-10-10T05:16:49 STEP 15 U
+2026-10-10T05:16:55   px4d ready pid=39132
+2026-10-10T05:17:29   U probe rc=0 px4d rc=0 runtime-left=0 stray=0
+2026-10-10T05:17:29 STEP 16 D0
+2026-10-10T05:18:15   D(b2) probe rc=0 drvhost=[41264:C:\px4-e17\px4drv-cmp\b2\DriverHost_PX4.exe] exit-after=11s gone=True
+2026-10-10T05:18:20 STEP 17 U
+2026-10-10T05:18:26   px4d ready pid=35516
+2026-10-10T05:19:00   U probe rc=0 px4d rc=0 runtime-left=0 stray=0
+2026-10-10T05:19:00 STEP 18 D0
+2026-10-10T05:19:45   D(b2) probe rc=0 drvhost=[16008:C:\px4-e17\px4drv-cmp\b2\DriverHost_PX4.exe] exit-after=11s gone=True
+2026-10-10T05:19:50 STEP 19 U
+2026-10-10T05:19:57   px4d ready pid=35496
+2026-10-10T05:20:32   U probe rc=0 px4d rc=0 runtime-left=0 stray=0
+2026-10-10T05:20:32 STEP 20 D0
+2026-10-10T05:21:17   D(b2) probe rc=0 drvhost=[42804:C:\px4-e17\px4drv-cmp\b2\DriverHost_PX4.exe] exit-after=11s gone=True
+2026-10-10T05:21:22 STEP 21 U
+2026-10-10T05:21:29   px4d ready pid=28700
+2026-10-10T05:22:03   U probe rc=0 px4d rc=0 runtime-left=0 stray=0
+2026-10-10T05:22:03 STEP 22 D0
+2026-10-10T05:22:48   D(b2) probe rc=0 drvhost=[6512:C:\px4-e17\px4drv-cmp\b2\DriverHost_PX4.exe] exit-after=11s gone=True
+2026-10-10T05:22:53 STEP 23 U
+2026-10-10T05:22:59   px4d ready pid=38712
+2026-10-10T05:23:34   U probe rc=0 px4d rc=0 runtime-left=0 stray=0
+2026-10-10T05:23:34 STEP 24 D0
+2026-10-10T05:24:19   D(b2) probe rc=0 drvhost=[41696:C:\px4-e17\px4drv-cmp\b2\DriverHost_PX4.exe] exit-after=11s gone=True
+2026-10-10T05:24:24 STEP 25 D1
+2026-10-10T05:25:10   D(b1) probe rc=0 drvhost=[29768:C:\px4-e17\px4drv-cmp\b1\DriverHost_PX4.exe] exit-after=11s gone=True
+2026-10-10T05:25:15 STEP 26 D1
+2026-10-10T05:26:01   D(b1) probe rc=0 drvhost=[19792:C:\px4-e17\px4drv-cmp\b1\DriverHost_PX4.exe] exit-after=11s gone=True
+2026-10-10T05:26:06 STEP 27 D1
+2026-10-10T05:26:52   D(b1) probe rc=0 drvhost=[32220:C:\px4-e17\px4drv-cmp\b1\DriverHost_PX4.exe] exit-after=11s gone=True
+2026-10-10T05:26:57 STEP 28 D1
+2026-10-10T05:27:42   D(b1) probe rc=0 drvhost=[18244:C:\px4-e17\px4drv-cmp\b1\DriverHost_PX4.exe] exit-after=11s gone=True
+2026-10-10T05:27:47 STEP 29 D1
+2026-10-10T05:28:33   D(b1) probe rc=0 drvhost=[40588:C:\px4-e17\px4drv-cmp\b1\DriverHost_PX4.exe] exit-after=11s gone=True
+2026-10-10T05:28:38 STEP 30 D1
+2026-10-10T05:29:24   D(b1) probe rc=0 drvhost=[41560:C:\px4-e17\px4drv-cmp\b1\DriverHost_PX4.exe] exit-after=11s gone=True
+2026-10-10T05:29:29 STEP 31 D1
+2026-10-10T05:30:14   D(b1) probe rc=0 drvhost=[4156:C:\px4-e17\px4drv-cmp\b1\DriverHost_PX4.exe] exit-after=11s gone=True
+2026-10-10T05:30:19 STEP 32 D1
+2026-10-10T05:31:05   D(b1) probe rc=0 drvhost=[14492:C:\px4-e17\px4drv-cmp\b1\DriverHost_PX4.exe] exit-after=11s gone=True
+2026-10-10T05:31:10 DONE
+2026-10-10T05:31:10 final stray px4d/px4-ts=0 DriverHost=0 probe=0

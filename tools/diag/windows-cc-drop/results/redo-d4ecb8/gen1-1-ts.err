@@ -1,0 +1,20 @@
+stream packets=479578 bytes=90160664 sync-errors=0 tei=0 continuity-errors=0 queue-drops=0 usb-errors=0 empty-intervals=6091
+
+stream packets=479722 bytes=90187736 sync-errors=0 tei=0 continuity-errors=0 queue-drops=0 usb-errors=0 empty-intervals=6095
+
+stream packets=346104 bytes=65067552 sync-errors=0 tei=0 continuity-errors=0 queue-drops=0 usb-errors=0 empty-intervals=6183
+
+stream packets=345700 bytes=64991600 sync-errors=0 tei=0 continuity-errors=0 queue-drops=0 usb-errors=0 empty-intervals=6173
+
+stream packets=479572 bytes=90159536 sync-errors=0 tei=0 continuity-errors=0 queue-drops=0 usb-errors=0 empty-intervals=12331
+
+stream packets=479714 bytes=90186232 sync-errors=0 tei=0 continuity-errors=0 queue-drops=0 usb-errors=0 empty-intervals=12335
+
+stream packets=345691 bytes=64989908 sync-errors=0 tei=0 continuity-errors=0 queue-drops=0 usb-errors=0 empty-intervals=12445
+
+px4-ts: PROTOCOL_ERROR
+written packets=342096 bytes=64314048
+STOP_STREAM packets=342096 bytes=64314048 sync-errors=0 tei=10900 continuity-errors=560 queue-drops=0 usb-errors=0 empty-intervals=12417
+STREAM_END packets=342096 bytes=64314048 sync-errors=0 tei=10900 continuity-errors=560 queue-drops=0 usb-errors=0 empty-intervals=12417
+STREAM_END error=0
+

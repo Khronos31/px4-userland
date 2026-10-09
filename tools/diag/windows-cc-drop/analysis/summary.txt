@@ -1,0 +1,17 @@
+== U: runs=12 invalid=0 drop-runs(non-burst)=6 cc-errors=385 est-lost-pk=1148 rx={'r0': 5, 'r1': 5, 'r2': 5, 'r3': 5, 'r4': 5, 'r5': 5, 'r6': 5, 'r7': 5} burst-runs=1 burst-rx={'r7': 1} nonburst tei=0 sync=0 delivered=37662367
+    05-U: 8.17s[r0+r1+r2+r3+r4+r5+r6+r7]
+    07-U: 21.60s[r0+r1+r2+r3+r4+r5+r6+r7]
+    15-U: 15.38s[r0+r1+r2+r3]
+    17-U: 23.08s[r0+r1+r2+r3+r4+r5+r6+r7]
+    19-U: 6.15s[r0+r1+r2+r3+r4+r5+r6+r7] 13.58s[r0+r1+r2+r3+r4+r5+r6+r7] 15.93s[r0+r1+r2+r3+r4+r5+r6+r7]
+    21-U: 28.86s[r4+r5] 33.51s[r4+r5+r6+r7]
+== D0: runs=12 invalid=0 drop-runs(non-burst)=2 cc-errors=2 est-lost-pk=14 rx={'T3': 1, 'S3': 1} burst-runs=0 burst-rx={} nonburst tei=0 sync=0 delivered=37969823
+    14-D0: 5.81s[T3]
+    20-D0: 2.87s[S3]
+== D1: runs=8 invalid=0 drop-runs(non-burst)=6 cc-errors=6 est-lost-pk=37 rx={'T2': 2, 'T3': 4} burst-runs=0 burst-rx={} nonburst tei=0 sync=0 delivered=22241308
+    25-D1: 5.81s[T2]
+    26-D1: 6.02s[T3]
+    27-D1: 8.33s[T3]
+    29-D1: 5.69s[T2]
+    30-D1: 5.83s[T3]
+    31-D1: 6.14s[T3]
