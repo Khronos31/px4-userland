@@ -325,6 +325,14 @@ if(WIN32)
     )
     target_compile_features(px4-ts PRIVATE cxx_std_17)
     px4_enable_project_warnings(px4-ts)
+    # Px4TsRunner::run() frames a full TS frame buffer
+    # (kFrameHeaderSize + kMaxTsDataPayload = 1,048,616 bytes) plus an 8 KiB
+    # read buffer as entry locals.  That exceeds the default 1 MiB PE stack
+    # reserve, so px4-ts.exe faults at function entry (0xC00000FD,
+    # STATUS_STACK_OVERFLOW) before any IPC connection.  Reserve 8 MiB for
+    # the Windows executable only; POSIX/macOS/Android keep their default
+    # stack reservations and byte-identical artifacts.
+    target_link_options(px4-ts PRIVATE "LINKER:--stack,8388608")
 
     if(PX4_ENABLE_LIBUSB)
         add_executable(px4d
