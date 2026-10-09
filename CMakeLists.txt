@@ -214,6 +214,10 @@ if(PX4_ENABLE_LIBUSB)
     add_library(px4_userland_libusb_transport STATIC
         userland/src/libusb_transport.cpp
     )
+    if(WIN32 OR PX4_BUILD_TESTS)
+        target_sources(px4_userland_libusb_transport PRIVATE
+            userland/src/windows/libusb_stream_policy.cpp)
+    endif()
     target_include_directories(px4_userland_libusb_transport
         PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
@@ -227,6 +231,18 @@ if(PX4_ENABLE_LIBUSB)
         target_link_libraries(px4_userland_libusb_transport PUBLIC log)
     endif()
     px4_enable_project_warnings(px4_userland_libusb_transport)
+    if(PX4_BUILD_TESTS)
+        enable_testing()
+        add_executable(px4_windows_libusb_stream_policy_tests
+            userland/tests/windows_libusb_stream_policy_tests.cpp)
+        target_include_directories(px4_windows_libusb_stream_policy_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/src)
+        target_link_libraries(px4_windows_libusb_stream_policy_tests PRIVATE
+            px4_userland_libusb_transport)
+        px4_enable_project_warnings(px4_windows_libusb_stream_policy_tests)
+        add_test(NAME px4_windows_libusb_stream_policy_tests
+            COMMAND px4_windows_libusb_stream_policy_tests)
+    endif()
 endif()
 
 # Filesystem AF_UNIX is a POSIX adapter, including Android API 24.  Keep its
@@ -775,6 +791,8 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
     add_test(NAME px4_userland_q3u4_disconnect_tests
              COMMAND px4_userland_q3u4_disconnect_tests)
     if(PX4_ENABLE_LIBUSB)
+        add_test(NAME px4_userland_stream_policy_lifecycle_tests
+            COMMAND px4_userland_tests --stream-policy)
         add_test(NAME px4_userland_fail_safe_abandonment
             COMMAND px4_userland_tests --fail-safe-abandonment)
         set_tests_properties(px4_userland_fail_safe_abandonment PROPERTIES

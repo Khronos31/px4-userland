@@ -813,6 +813,7 @@ struct LibusbTransport::StreamState final {
     std::uint64_t deferred_error_order = 0U;
     bool resubmit_failed = false;
     bool stopping = false;
+    bool raw_io_enabled = false;
 };
 
 LibusbTransport::RetainedFd::~RetainedFd() noexcept
@@ -999,6 +1000,7 @@ Result<std::size_t> LibusbTransport::bulk_read(std::uint8_t endpoint, MutableByt
     }
     ApiGateLock lock(runtime_state_);
     if (abandoned_.load() ||
+        (endpoint == kTsInEndpoint && stream_policy_failed_.load()) ||
         (runtime_state_ != nullptr && runtime_state_->abandoned.load())) {
         return failure(Error::USB_IO);
     }
@@ -1069,7 +1071,7 @@ Result<void> LibusbTransport::start_stream(const StreamConfig& config) noexcept
         return Result<void>::failure(Error::INVALID_ARGUMENT);
     }
     std::unique_lock<std::recursive_mutex> lock(stream_gate_);
-    if (abandoned_.load() ||
+    if (abandoned_.load() || stream_policy_failed_.load() ||
         (runtime_state_ != nullptr && runtime_state_->abandoned.load())) {
         return Result<void>::failure(Error::USB_IO);
     }
@@ -1096,9 +1098,18 @@ Result<void> LibusbTransport::start_stream(const StreamConfig& config) noexcept
     stream_ = std::move(state);
     stream_active_ = true;
 
+    const int prepare_result = api_->prepare_stream(
+        handle_, config.endpoint, &stream_->transfer_size, &stream_->raw_io_enabled);
+    if (prepare_result != 0 || stream_->transfer_size == 0U ||
+        stream_->transfer_size > kMaxStreamTransfer) {
+        (void)cancel_and_drain_locked(lock);
+        return Result<void>::failure(prepare_result != 0
+            ? map_libusb_error(prepare_result) : Error::INTERNAL);
+    }
+
     for (std::size_t index = 0U; index < config.transfer_count; ++index) {
         stream_->ready[index].buffer.reset(
-            new (std::nothrow) std::uint8_t[config.transfer_size]);
+            new (std::nothrow) std::uint8_t[stream_->transfer_size]);
         if (!stream_->ready[index].buffer) {
             (void)cancel_and_drain_locked(lock);
             return Result<void>::failure(Error::INTERNAL);
@@ -1108,14 +1119,14 @@ Result<void> LibusbTransport::start_stream(const StreamConfig& config) noexcept
     for (std::size_t index = 0U; index < config.transfer_count; ++index) {
         StreamState::Slot& slot = stream_->slots[index];
         slot.state = stream_.get();
-        slot.buffer.reset(new (std::nothrow) std::uint8_t[config.transfer_size]);
+        slot.buffer.reset(new (std::nothrow) std::uint8_t[stream_->transfer_size]);
         slot.transfer = api_->alloc_transfer();
         if (!slot.buffer || slot.transfer == nullptr) {
             (void)cancel_and_drain_locked(lock);
             return Result<void>::failure(Error::INTERNAL);
         }
         api_->fill_bulk_transfer(slot.transfer, handle_, config.endpoint, slot.buffer.get(),
-                                 static_cast<int>(config.transfer_size), on_transfer, &slot, 0U);
+                                 static_cast<int>(stream_->transfer_size), on_transfer, &slot, 0U);
         // Publish the slot before submit: a fake or real libusb backend may dispatch
         // completion synchronously from submit_transfer.
         slot.status = StreamState::SlotStatus::submitted;
@@ -1324,6 +1335,16 @@ Result<void> LibusbTransport::cancel_and_drain_locked(
             first_error = Error::USB_IO;
         }
         return Result<void>::failure(first_error);
+    }
+    if (stream_->raw_io_enabled) {
+        const int result = api_->finish_stream(handle_, stream_->endpoint);
+        if (result != 0) {
+            // Callback lifetime is safe, so ordinary destruction may close
+            // the handle. Do not allow another purge/start using a pipe whose
+            // policy could not be restored.
+            stream_policy_failed_.store(true);
+            if (first_error == Error::OK) first_error = map_libusb_error(result);
+        }
     }
     destroy_stream_locked();
     stream_active_ = false;
