@@ -273,7 +273,9 @@ fi
 
 if [ -n "$test_output" ]; then
     test_build="$work/build-tests"
-    configure_build "$test_build" ON OFF
+    # Include the hardware-free RAW_IO policy suite against the same pinned
+    # libusb as production. No test opens a physical USB device.
+    configure_build "$test_build" ON ON
     cmake --build "$test_build"
     for test_program in "$test_build"/*_tests.exe; do
         [ -f "$test_program" ] || continue
@@ -281,6 +283,10 @@ if [ -n "$test_output" ]; then
     done
     [ -f "$test_output/px4_windows_tests.exe" ] || {
         printf '%s\n' 'Windows test executables were not produced' >&2
+        exit 1
+    }
+    [ -f "$test_output/px4_windows_libusb_stream_policy_tests.exe" ] || {
+        printf '%s\n' 'Windows libusb stream policy tests were not produced' >&2
         exit 1
     }
     if [ -e "$test_output/libusb-1.0.dll" ]; then
