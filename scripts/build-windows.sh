@@ -36,10 +36,10 @@ done
 [ -n "$output" ] || { usage >&2; exit 2; }
 if [ -n "$libusb_source_dir" ]; then
     libusb_source_dir=$(CDPATH='' cd -- "$libusb_source_dir" && pwd)
-    [ -x "$libusb_source_dir/configure" ] && [ -f "$libusb_source_dir/COPYING" ] || {
+    if [ ! -x "$libusb_source_dir/configure" ] || [ ! -f "$libusb_source_dir/COPYING" ]; then
         printf '%s\n' "invalid libusb source directory: $libusb_source_dir" >&2
         exit 1
-    }
+    fi
 fi
 
 # Pinned inputs. Update together with the release record.
@@ -189,10 +189,10 @@ if [ -e "$work/libusb-prefix/bin/libusb-1.0.dll" ] ||
 fi
 nm_tool="$toolchain_bin/llvm-nm"
 objdump_tool="$toolchain_bin/llvm-objdump"
-[ -x "$nm_tool" ] && [ -x "$objdump_tool" ] || {
+if [ ! -x "$nm_tool" ] || [ ! -x "$objdump_tool" ]; then
     printf '%s\n' "llvm-nm and llvm-objdump are required under $toolchain_bin" >&2
     exit 1
-}
+fi
 "$nm_tool" "$libusb_a" | grep -F 'libusb_init' >/dev/null || {
     printf '%s\n' 'static libusb archive is missing libusb_init' >&2
     exit 1
