@@ -337,6 +337,69 @@ void test_lease_rename_delete_protection()
     CHECK(deleted_after != 0 || ::GetLastError() == ERROR_FILE_NOT_FOUND);
 }
 
+// The Windows lease close() mirrors the POSIX last-holder cleanup: the
+// final holder's close removes the lock file, so a cleanly stopped daemon
+// leaves an empty runtime directory; while another (shared custom-instance)
+// holder still holds the lease, the lock file must remain for that holder's
+// own close.
+void test_serial_lease_last_holder_cleanup()
+{
+    TempRoot root("leaselast");
+    CHECK(root.valid());
+    const std::string runtime = root.utf8();
+    constexpr std::string_view serial = "000000000000001";
+    const std::wstring lock_path =
+        std::filesystem::path(root.wide()).wstring() + L"\\.px4-userland-" +
+        std::wstring(serial.begin(), serial.end()) + L".lock";
+
+    // Single exclusive holder: an explicit close() removes the lock file.
+    {
+        const EndpointConfig config{runtime.c_str(), serial.data(),
+                                    kControlEndpointName,
+                                    EndpointAccess::private_user};
+        auto lease = SerialEndpointLease::acquire(config, serial);
+        if (!lease) {
+            std::fprintf(stderr, "stage leaselast single error=%d runtime=%s\n",
+                         static_cast<int>(lease.error()), runtime.c_str());
+        }
+        CHECK(lease);
+        if (lease) {
+            CHECK(::GetFileAttributesW(lock_path.c_str()) !=
+                  INVALID_FILE_ATTRIBUTES);
+            lease.value().close();
+            CHECK(::GetFileAttributesW(lock_path.c_str()) ==
+                  INVALID_FILE_ATTRIBUTES);
+        }
+    }
+
+    // Two shared custom-instance holders: the first close keeps the lock
+    // file for the still-active holder; the last close (via the destructor)
+    // removes it.
+    const EndpointConfig custom_a{runtime.c_str(), "insta", kControlEndpointName,
+                                  EndpointAccess::private_user};
+    const EndpointConfig custom_b{runtime.c_str(), "instb", kControlEndpointName,
+                                  EndpointAccess::private_user};
+    {
+        auto first = SerialEndpointLease::acquire(custom_a, serial);
+        auto second = SerialEndpointLease::acquire(custom_b, serial);
+        if (!first || !second) {
+            std::fprintf(stderr, "stage leaselast shared errors=%d/%d runtime=%s\n",
+                         static_cast<int>(first.error()),
+                         static_cast<int>(second.error()), runtime.c_str());
+        }
+        CHECK(first);
+        CHECK(second);
+        if (first && second) {
+            first.value().close();
+            CHECK(::GetFileAttributesW(lock_path.c_str()) !=
+                  INVALID_FILE_ATTRIBUTES);
+        }
+    }
+    // `second` is released by its destructor here; it is the last holder.
+    CHECK(::GetFileAttributesW(lock_path.c_str()) ==
+          INVALID_FILE_ATTRIBUTES);
+}
+
 // A NULL DACL (which grants everyone full access) must fail closed.
 void test_null_dacl_rejected()
 {
@@ -443,6 +506,7 @@ int main()
     test_serial_lease_exclusivity();
     test_protected_broad_dacl_rejected();
     test_lease_rename_delete_protection();
+    test_serial_lease_last_holder_cleanup();
     test_null_dacl_rejected();
     test_identity_cleanup_protects_replacement();
     test_windows_unicode_firmware_path();

@@ -601,6 +601,66 @@ bool identity_matches_path(std::uint64_t device, std::uint64_t index,
            current.value().index == index;
 }
 
+// POSIX-equivalent last-holder cleanup of the serial lease lock file.
+// posix_ipc.cpp's SerialEndpointLease::close() upgrades its flock to
+// exclusive and unlinks the lock file when the closing holder is the last
+// one, so a cleanly stopped daemon leaves no lock file behind.  Windows
+// byte-range locks cannot upgrade in place: re-issuing LockFileEx
+// exclusively on the handle that already holds the range fails with
+// ERROR_LOCK_VIOLATION even when no other holder exists (measured on
+// Windows 11 real hardware), so the last-holder test happens on a fresh
+// probe handle after this lease fully releases its own lock and handle:
+//   * the path must still resolve to the exact inode this lease held, so a
+//     lock file replaced by another process is never deleted;
+//   * the probe handle's exclusive LockFileEx succeeds only when no other
+//     holder still locks the range; those holders keep the lock file and
+//     their own close performs the cleanup, exactly like a failed flock
+//     upgrade on POSIX;
+//   * DeleteFileW can only succeed while no other process holds the file
+//     open (lock handles deliberately omit FILE_SHARE_DELETE), and a
+//     failure is reported on stderr instead of being silently swallowed;
+//     ERROR_SHARING_VIOLATION here is the rare takeover race with a
+//     starting daemon, which then owns the lock file and its own cleanup.
+void remove_lock_if_last_holder(
+    const FileIdentity& identity,
+    const std::array<wchar_t, kStoredPathCapacity>& path) noexcept
+{
+    if (path[0] == L'\0' || !identity.valid) return;
+    if (!identity_matches_path(identity.device, identity.index, path,
+                               FILE_FLAG_OPEN_REPARSE_POINT)) {
+        return;
+    }
+    const HANDLE probe = ::CreateFileW(
+        path.data(), GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (probe == INVALID_HANDLE_VALUE) {
+        const DWORD error = ::GetLastError();
+        if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) {
+            std::fprintf(stderr, "px4 windows ipc: lease lock probe error=%lu\n",
+                         static_cast<unsigned long>(error));
+        }
+        return;
+    }
+    OVERLAPPED overlapped{};
+    if (::LockFileEx(probe, LOCKFILE_FAIL_IMMEDIATELY | LOCKFILE_EXCLUSIVE_LOCK,
+                     0, 1UL, 0UL, &overlapped) == 0) {
+        // Another holder still locks the range; its own close removes it.
+        (void)::CloseHandle(probe);
+        return;
+    }
+    OVERLAPPED unlock{};
+    (void)::UnlockFileEx(probe, 0, 1UL, 0UL, &unlock);
+    (void)::CloseHandle(probe);
+    if (::DeleteFileW(path.data()) == 0) {
+        const DWORD error = ::GetLastError();
+        if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) {
+            std::fprintf(stderr, "px4 windows ipc: lease lock cleanup error=%lu\n",
+                         static_cast<unsigned long>(error));
+        }
+    }
+}
+
 bool is_current_user_owner(const std::array<wchar_t, kStoredPathCapacity>& path) noexcept
 {
     HANDLE token = nullptr;
@@ -831,10 +891,11 @@ SerialEndpointLease::~SerialEndpointLease() noexcept
 
 SerialEndpointLease::SerialEndpointLease(SerialEndpointLease&& other) noexcept
     : directory_fd_(other.directory_fd_), lock_fd_(other.lock_fd_),
-      filename_(other.filename_)
+      filename_(other.filename_), lock_path_(other.lock_path_)
 {
     other.directory_fd_ = kInvalidHandle;
     other.lock_fd_ = kInvalidHandle;
+    other.lock_path_.fill(L'\0');
 }
 
 SerialEndpointLease& SerialEndpointLease::operator=(SerialEndpointLease&& other) noexcept
@@ -844,8 +905,10 @@ SerialEndpointLease& SerialEndpointLease::operator=(SerialEndpointLease&& other)
         directory_fd_ = other.directory_fd_;
         lock_fd_ = other.lock_fd_;
         filename_ = other.filename_;
+        lock_path_ = other.lock_path_;
         other.directory_fd_ = kInvalidHandle;
         other.lock_fd_ = kInvalidHandle;
+        other.lock_path_.fill(L'\0');
     }
     return *this;
 }
@@ -972,17 +1035,27 @@ Result<SerialEndpointLease> SerialEndpointLease::acquire(
     }
     lease.lock_fd_ = reinterpret_cast<NativeHandle>(file);
     lease.directory_fd_ = kInvalidHandle;
+    lease.lock_path_ = lock_path;
     return Result<SerialEndpointLease>::success(std::move(lease));
 }
 
 void SerialEndpointLease::close() noexcept
 {
     if (lock_fd_ != kInvalidHandle) {
+        // Capture the identity of the inode this lease holds before the
+        // release, so the last-holder cleanup below can never delete a
+        // lock file that another process replaced after this release.
+        const HANDLE file = reinterpret_cast<HANDLE>(lock_fd_);
+        BY_HANDLE_FILE_INFORMATION info{};
+        const BOOL identity_ok = ::GetFileInformationByHandle(file, &info);
         OVERLAPPED overlapped{};
-        (void)::UnlockFileEx(reinterpret_cast<HANDLE>(lock_fd_), 0, 1UL, 0UL,
-                             &overlapped);
+        (void)::UnlockFileEx(file, 0, 1UL, 0UL, &overlapped);
         close_handle(lock_fd_);
         lock_fd_ = kInvalidHandle;
+        if (identity_ok != 0 && valid_file_identity(info)) {
+            remove_lock_if_last_holder(identity_of(info), lock_path_);
+        }
+        lock_path_.fill(L'\0');
     }
     directory_fd_ = kInvalidHandle;
 }

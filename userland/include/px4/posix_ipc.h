@@ -69,6 +69,12 @@ private:
     NativeHandle directory_fd_ = kInvalidHandle;
     NativeHandle lock_fd_ = kInvalidHandle;
     std::array<char, 64U> filename_{};
+#if defined(_WIN32)
+    // Full lock path captured at acquire time. The Windows close() performs
+    // the POSIX-equivalent last-holder lock-file cleanup and needs the path;
+    // the POSIX build derives it from directory_fd_ + filename_ instead.
+    std::array<PathChar, kStoredPathCapacity> lock_path_{};
+#endif
 };
 
 class SocketListener;
