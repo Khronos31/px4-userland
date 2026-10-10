@@ -122,6 +122,32 @@ E07はOS起動USB等を接続したまま、sysfs vendor/product/half serial照�
   短いruntime dir（`$PREFIX/tmp/e05r2`、endpoint path 102 bytes）で新規展開して再実施した上表のrunを記録する。
 - E05の2回のTermux preflightで`termux-info`を実行し、Androidのclipboardを上書きした。E06/E07ではこれを除いた。
 
+### 結果commit・tag CIと公開asset確認
+
+PR [#53](https://github.com/Khronos31/px4-userland/pull/53)（`64987d9`）と[#54](https://github.com/Khronos31/px4-userland/pull/54)で
+main merge commit `dcd663cc47a29bf274d5e6059d441e46c6d7cfdb`とし、annotated tag `v0.2.0`を付けた。
+`8c40d49..dcd663c`の差分は`README.md`、`SPEC.md`、`docs/platforms/validation-results.md`、`docs/release-validation.md`の4 fileのみ。
+tag push run [`38075954452`](https://github.com/Khronos31/px4-userland/actions/runs/38075954452)と
+main push run [`38075840034`](https://github.com/Khronos31/px4-userland/actions/runs/38075840034)は同じ結果commitに対する独立runで、
+両方20 jobすべて成功。10 archive本体と外側`SHA256SUMS`は全件byte-identical、外側checksumのSHA-256は
+`8092be5f7c8cd94f0b3a3de9d87ff076b756fef3d85514d749668ca6e863ec38`。runner imageは両runとも元候補と同じversion集合
+（Ubuntu x86_64 `20261004.327.1`、Ubuntu arm64 `20261004.142.1`、macOS arm64 `20260831.0302.1`、Windows Server 2022 `20261004.326.1`）。
+
+tag CIの9 binary archiveを元の実機候補run `37996888969`と展開比較し、全file inventory、type、mode、link先が一致。
+file payloadの差はREADME、manifest、内側checksumの3 fileのみ。manifestは項目別に照合し、差を`source_ref`
+（`8c40d49…`→`dcd663c…`）とREADME file entryのhash/sizeだけに限定できた。実行ファイル、Termux launcher、IFD、
+その他全payload（Windows ZIPのEXE/DLLを含む）はbyte-identical。source archiveは`repository/`の上記4 doc file、
+top-level `README.md`、`BUILD-RELINK.md`（記録commit/treeの2行）、`source-manifest.json`（repository commit/treeと該当fileのhash/size）、
+内側`SHA256SUMS`だけが異なり、4 doc fileはtag `v0.2.0`のsnapshotと一致した。実機試験を結果commit後に繰り返した意味ではない。
+
+v0.2.0 Releaseは2026-10-10T18:35:02Z（JST10-11 03:35:02）に、実機候補run `37996888969`の11 assetで公開した
+（Latest、draft=false、prerelease=false）。その後ユーザー指示により、上記照合を経て2026-10-10T19:07:40〜19:07:58Z
+（JST04:07〜04:08）に同名11 assetをtag CI run `38075954452`のfileへ置き換えた。置換後に全11 assetを再downloadし、
+tag CI artifactとのbyte一致と`sha256sum -c SHA256SUMS`10件OKを確認した。公開hashの正本はreleaseの
+[`SHA256SUMS`](https://github.com/Khronos31/px4-userland/releases/download/v0.2.0/SHA256SUMS)。
+ローカルの照合証拠はHAOS `/config/.work/px4-0.2.0/publish/`（`candidate-37996888969/`、`tag-38075954452/`、
+`main-38075840034/`、`x2/`、`verify-replaced/`、`ci-logs/`）。この公開後記録はmainへ追記し、既に公開したtagとassetは固定する。
+
 ## 2026-10-10 v0.2.0 candidate E17 Windows 11 x64 実機試験（Q3U4必須matrix PASS / soak注記付き受入）
 
 - candidate: version `0.2.0`、source commit `8c40d495850c332312cd4293489f400c8fb842d4`（`feat/windows-phase1`、
