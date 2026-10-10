@@ -1,9 +1,15 @@
 # px4-userland 仕様
 
-Status: Frozen v0.32 (2026-10-10)
+Status: Frozen v0.33 (2026-10-11)
 
 本書の`MUST`、`MUST NOT`、`SHOULD`は規範要件を示す。実機観測で前提の誤りが判明した場合も暗黙に
 実装だけを変えず、本書のversionと変更理由を更新してから実装する。
+
+### v0.33 change record (2026-10-11)
+
+- 10.5節: 0.2.0のreceiver 7について、E03でのSPEC 10.2.6a fresh比較（候補/`px4_drv`交互5組）の結果と、
+  参照並みとして既知制限に含めるユーザー決定を0.2.0限定の受入判断へ追記する。10.2.6aの規則、原記録、
+  hardware claimの範囲は変更しない。
 
 ### v0.32 change record (2026-10-10)
 
@@ -1269,6 +1275,9 @@ host/USB側の一時停止による環境由来の同時欠落として非blocki
 件数の並びからの推定であり、計数規則も参照toolと同一ではない。receiver 7のTEI/continuity burst
 （E17短時間matrix、soak、全局確認で観測）は既知不具合として継続し、ブロッカーから除く。同じhost上の
 参照px4_drvでも1 tunerに同形のburstが出たが、10.2.6aの全試行非悪化を証明したとは表示しない。
+E03 `linux-glibc-x86_64`での10.2.6a fresh比較（同条件の候補/`px4_drv`交互5組、各8同時受信30秒）では、
+receiver 7のTEI/continuityはpair1で候補だけに、pair2で候補と参照の両方に同等のburstが出て、pair3〜5は両者0だった。
+2026-10-11のユーザー決定により、このburstを参照並みとして10.2.6aの既知制限に含め、0.2.0のブロッカーにしない。
 また、非ASCII文字（U+00FFを超える文字）を含むendpoint pathでは、px4dのready行（stderr）がその文字以降と改行を
 欠く（[Issue #52](https://github.com/Khronos31/px4-userland/issues/52)）。daemonの動作、endpoint作成、後続の診断出力には
 影響せず、ready判定は`px4ctl status`で行えるため、0.2.0の既知の制限として扱い0.2.xで修正する。

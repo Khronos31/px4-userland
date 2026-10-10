@@ -57,7 +57,52 @@ receiver7の各matrix 30秒区間（TEI/CC、sync/queue/USBは全0。0/0の区�
 | E06 armv7a | 0/0、10959/635、10952/594 |
 | E07 x86_64 | 10966/582、11037/634、11020/674 |
 
-本節の範囲ではSPEC 10.2.6aのfresh参照比較（`px4_drv`、§0.3 X-R7REF）を実施していない。SPEC §10.5の0.2.0に限る受入判断の対象はE17である。
+### receiver7のfresh参照比較（E03、SPEC 10.2.6a / §0.3 X-R7REF）
+
+E03 Latitude（AnduinOS2.0.4、kernel `7.0.0-34-generic`）で、上表の`linux-glibc-x86_64` archive（SHA-256
+`578d67a159b35b85b8a1b30362d0f288454d90aef12dafa3a443d433ed5a2390`）を新規展開して`tsukumijima/px4_drv`と比較した。
+同一Q3U4個体・B-CAS・アンテナ/電源・firmware（SHA-256 `5213a5a3…`）、S1318000kHz slot0（receiver0/1/4/5）/T527143kHz
+（receiver2/3/6/7、参照helperはT番号72・S番号7）、8同時受信の各30秒、LNB0V。候補は`px4-ts --output /dev/null
+--duration-seconds 30`（strace sendto/recvfrom付き）、受信開始15秒後に`px4ctl status`と`card-apdu … --repeat 10`。
+参照は各runで`insmod`→8 receiver helper（strace ioctl付き、sudo）→`rmmod`。
+参照moduleはpx4_drv `7fa9f05d2cbdf1d821f479248d561f9868051b8b`（v0.4.0）に互換修正（作業差分は`driver/ptx_chrdev.c`・
+`ptx_chrdev.h`）を適用して2026-10-11に再build（gcc15.2.0、vermagic`7.0.0-34-generic`、SHA-256
+`028ac332a2145d8b889dea89c718ee12386b7e03bb11abeafac68ff9a9caf069`）。helperはv0.1.10と同じsource（SHA-256
+`e4b0b0f50a2b647b3e46049a75756504de31795a878f192003e0c3deac0493c9`）から再build（binary
+`171efc2fcb016c09141fb6aa2a5e973451a46f00f9d14f2b1dee7a50d4038433`）。
+
+pair1の結果（候補r7がTEI/CCとも参照を上回った）の後、ユーザー決定により追加4組を同条件で実施した。組数と順序は
+追加run開始前に`pairs-2to5/pairs/summary.txt`へ記録した: 計5組、pair1 候補→参照、pair2 参照→候補、pair3 候補→参照、
+pair4 参照→候補、pair5 候補→参照。結果を見ての追加・打切りはしていない。
+日時はpair1が2026-10-10 17:51:13〜17:52:33 UTC、pair2〜5が18:00:40〜18:05:35 UTC（JST 10-11 02:51〜03:05）。
+
+| pair | 順序 | 候補r7 TEI / CC / packets（exit） | 参照r7 TEI / CC / packets（exit） | 候補r7が参照以下（TEI・CC） |
+|---|---|---|---|---|
+| 1 | 候補→参照 | 10917 / 558 / 341343（8） | 0 / 0 / 344026（0） | 満たさない |
+| 2 | 参照→候補 | 10944 / 602 / 341452（8） | 11002 / 615 / 340633（0） | 満たす |
+| 3 | 候補→参照 | 0 / 0 / 345005（0） | 0 / 0 / 344538（0） | 満たす |
+| 4 | 参照→候補 | 0 / 0 / 344662（0） | 0 / 0 / 343770（0） | 満たす |
+| 5 | 候補→参照 | 0 / 0 / 344821（0） | 0 / 0 / 344282（0） | 満たす |
+
+- 候補のexit8はr7の`STOP_STREAM`（burst区間）。候補receiver0〜6は全10 runでexit0、sync/TEI/CC/queue/USB 0。
+  候補の全receiverでqueue-drops 0・usb-errors 0。各runのdaemonはready（usb-errors=0、protocol-errors=0）、
+  受信中statusはstreaming8、APDU rc0、daemon exit0、runtime残留0。
+- 参照receiver0〜6はTEI/sync 0、CCはpair2のreceiver2/3/6が各16、他は0。参照helperのqueue/USB counterは未観測。
+  全参照runでinsmod/rmmod rc0、device node 8→0、kernel logにUBSAN/BUG/Oops/error/fail/warnなし。
+- 全組の後（module unload後）に候補でreceiver6を3秒受信（exit0、全counter 0）、APDU10 rc0、daemon exit0、
+  runtime残留0。終了時process残留0、Q3U4 2 device、px4_drv未load。常設installなし。
+- v0.1.10 E03比較との条件差: Q3U4のUSB接続位置（v0.1.10 `1-3.1.1`/`1-3.1.2`、今回`1-3.1`/`1-3.2`）、参照module
+  binary（v0.1.10 SHA-256 `116c487c…`、今回`028ac332…`）、helper binary（同source・再build）。RF経路（アンテナ線・
+  分配器構成）がv0.1.10時と同一であることは記録していない（本release cycle中にユーザーが分配器・アンテナ線を変更）。
+  候補・参照の比較は同一session内の同一条件。
+- log: HAOS `/config/.work/px4-0.2.0/e03-r7ref-020/`（pair1は`cand-fresh/`・`ref-public30/`・`post-unload/`・
+  `summary.txt`、pair2〜5と最後のunload後確認は`pairs-2to5/pairs/`、script `r7cmp-020.sh`・`pairs-2to5/r7pairs-020.sh`）。
+  Latitudeの`/tmp/px4-r7-020/`にも同一logを保持。
+
+2026-10-11ユーザー決定: pair2で`px4_drv`参照にも同等のburst（TEI 11002、CC 615）が出たことから、
+**0.2.0のreceiver7は参照並みとしてSPEC 10.2.6aにより既知制限（[Issue #1](https://github.com/Khronos31/px4-userland/issues/1)）として扱い、
+releaseへ進む**（SPEC v0.33 §10.5の0.2.0限定受入判断へ追記）。pair1の結果、各counterとCLI exitは書き換えない。本比較はE03 `linux-glibc-x86_64`での比較であり、
+他archive・他runtimeのhardware claimの範囲を広げない。
 
 E02は試験addonのDockerfile・candidates・config.yaml・Supervisor optionsを`/config/.work/px4-0.2.0/e02-backup/`へ退避し、
 candidate musl archiveを`candidates/`へstage、bashとoverlay entrypointを追加した一時Dockerfileでrebuildして実行した。
@@ -81,7 +126,8 @@ E07はOS起動USB等を接続したまま、sysfs vendor/product/half serial照�
 
 - candidate: version `0.2.0`、source commit `8c40d495850c332312cd4293489f400c8fb842d4`（`feat/windows-phase1`、
   PR [#51](https://github.com/Khronos31/px4-userland/pull/51) のmerge commit）。tag・main merge・release公開はしていない。
-  本節はE17（`windows-x86_64`行）だけの記録であり、他8 binary archiveの短時間matrix（E02–E07、E15）は未実施。
+  本節はE17（`windows-x86_64`行）だけの記録であり、記録時点で他8 binary archiveの短時間matrix（E02–E07、E15）は未実施
+  （2026-10-11に実施、上記8 binary archive節）。
 - 結果概要: Q3U4は必須matrix・全局確認・残り4項目がPASS、2時間soakは注記付き受入。PX-M1UR/PX-S1URは同日に
   Windows profile試験（30分soak、card/USB抜差し）を実施しPASS（same-lease retuneは未確認）。ready行の非ASCII切断は
   既知の制限（[Issue #52](https://github.com/Khronos31/px4-userland/issues/52)）。
@@ -109,14 +155,14 @@ E07はOS起動USB等を接続したまま、sysfs vendor/product/half serial照�
 | archive | SHA-256 | 本節での実機status |
 |---|---|---|
 | `px4-userland-0.2.0-windows-x86_64.zip`（882833 bytes） | `c409edea022bc0c5613bf168248f55efbd408603f044f4bc1980b0605122bdc3` | E17で今回再検証（下記） |
-| `px4-userland-0.2.0-linux-glibc-x86_64.tar.gz` | `578d67a159b35b85b8a1b30362d0f288454d90aef12dafa3a443d433ed5a2390` | 未実施 |
-| `px4-userland-0.2.0-linux-musl-x86_64.tar.gz` | `5219760847ba1f0ff40e54057b21b5992a8ee5ba26cf468f82763ff8692e2bbb` | 未実施 |
-| `px4-userland-0.2.0-linux-glibc-aarch64.tar.gz` | `5a7a1b38a77aba48745a9ac7ff0fcc096121f668d867a45a7c83715c9fa9ac0a` | 未実施 |
-| `px4-userland-0.2.0-linux-musl-aarch64.tar.gz` | `6d7f7e691c3ed4aeb2b618fc56c09fe4b23c41c5764e265bf808d3d14ac75f18` | 未実施 |
-| `px4-userland-0.2.0-darwin-arm64.tar.gz` | `869e598ca55f0060973aaeff736f8d477ffd0f3a801b582c960dc504dd25e1c4` | 未実施 |
-| `px4-userland-0.2.0-android-aarch64.tar.gz` | `449da5c91c5995d4eac52704359e949b8bb0432136efb99efa9deaafd8a14ac6` | 未実施 |
-| `px4-userland-0.2.0-android-armv7a.tar.gz` | `f3445e80b4408f08892eae9c4c30c5a6dd577cd2c035fead2c5870ddd736f07c` | 未実施 |
-| `px4-userland-0.2.0-android-x86_64.tar.gz` | `75e095ecff2ae7c09a743c1d9bc37581d0ed7d30a9837112799e2248e7aec0ac` | 未実施 |
+| `px4-userland-0.2.0-linux-glibc-x86_64.tar.gz` | `578d67a159b35b85b8a1b30362d0f288454d90aef12dafa3a443d433ed5a2390` | 今回再検証（上記8 binary archive節） |
+| `px4-userland-0.2.0-linux-musl-x86_64.tar.gz` | `5219760847ba1f0ff40e54057b21b5992a8ee5ba26cf468f82763ff8692e2bbb` | 今回再検証（上記8 binary archive節） |
+| `px4-userland-0.2.0-linux-glibc-aarch64.tar.gz` | `5a7a1b38a77aba48745a9ac7ff0fcc096121f668d867a45a7c83715c9fa9ac0a` | 今回再検証（上記8 binary archive節） |
+| `px4-userland-0.2.0-linux-musl-aarch64.tar.gz` | `6d7f7e691c3ed4aeb2b618fc56c09fe4b23c41c5764e265bf808d3d14ac75f18` | 今回再検証（上記8 binary archive節） |
+| `px4-userland-0.2.0-darwin-arm64.tar.gz` | `869e598ca55f0060973aaeff736f8d477ffd0f3a801b582c960dc504dd25e1c4` | 今回再検証（上記8 binary archive節） |
+| `px4-userland-0.2.0-android-aarch64.tar.gz` | `449da5c91c5995d4eac52704359e949b8bb0432136efb99efa9deaafd8a14ac6` | 今回再検証（上記8 binary archive節） |
+| `px4-userland-0.2.0-android-armv7a.tar.gz` | `f3445e80b4408f08892eae9c4c30c5a6dd577cd2c035fead2c5870ddd736f07c` | 今回再検証（上記8 binary archive節） |
+| `px4-userland-0.2.0-android-x86_64.tar.gz` | `75e095ecff2ae7c09a743c1d9bc37581d0ed7d30a9837112799e2248e7aec0ac` | 今回再検証（上記8 binary archive節） |
 | `px4-userland-0.2.0-source.tar.gz` | `b4c699ad85e73655bf9931c4260bbd64098d3509b7a418311ab33666d4832865` | corresponding source |
 
 - RAW_IO修正の経緯: 先行candidate（`9e2fa3e`、Windows ZIP SHA-256
