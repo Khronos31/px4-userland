@@ -43,7 +43,8 @@ USB/cardの物理操作は通知後にユーザーが実施した。
 残留processなしを確認した。旧daemonのstop理由はE15 musl・E04で`USB_IO`、他は`DISCONNECTED`（exit7は共通）。
 receiver0〜6のTS sync/TEI/CC/queue/USBは全8 archive・全3 captureで0、全receiverのbytes=packets×188。
 
-receiver7の各matrix 30秒区間（TEI/CC、sync/queue/USBは全0。非0の区間はexit8、0/0の区間はexit0）:
+receiver7は既知burst（[Issue #1](https://github.com/Khronos31/px4-userland/issues/1)）を記録し、burstのある区間はexit8となる。
+receiver7の各matrix 30秒区間（TEI/CC、sync/queue/USBは全0。0/0の区間はexit0）:
 
 | target | 初回 / card再挿入後 / USB再接続後 |
 |---|---|
@@ -56,7 +57,7 @@ receiver7の各matrix 30秒区間（TEI/CC、sync/queue/USBは全0。非0の区�
 | E06 armv7a | 0/0、10959/635、10952/594 |
 | E07 x86_64 | 10966/582、11037/634、11020/674 |
 
-本節ではreceiver7の10.2.6a参照比較を実施していない。0.2.0に限るSPEC §10.5の受入判断はE17を対象とし、本節には適用しない。
+本節の範囲ではSPEC 10.2.6aのfresh参照比較（`px4_drv`、§0.3 X-R7REF）を実施していない。SPEC §10.5の0.2.0に限る受入判断の対象はE17である。
 
 E02は試験addonのDockerfile・candidates・config.yaml・Supervisor optionsを`/config/.work/px4-0.2.0/e02-backup/`へ退避し、
 candidate musl archiveを`candidates/`へstage、bashとoverlay entrypointを追加した一時Dockerfileでrebuildして実行した。
@@ -92,6 +93,17 @@ E07はOS起動USB等を接続したまま、sysfs vendor/product/half serial照�
   `38c816b9dcd1dc08dbcc047861ff797fcf6fb8a4bcbdff6b1d0c2e68ad427dd8`）。9 binaryのmanifestはversion `0.2.0`、
   `source_ref`はcandidate commit。両runのrunner image・実効toolchain inventoryの突合は本節では行っておらず、
   SPEC 10.5-2のinput一致判定は未完了（pending）。
+- SPEC 10.5-2 input突合（2026-10-11、両runのjob log）: 20 jobのrunner imageは両runで同一（Ubuntu x86_64
+  `20261004.327.1`、Ubuntu arm64 `20261004.142.1`、macOS arm64 `20260831.0302.1`、Windows Server 2022
+  `20261004.326.1`）。artifact生成toolchainの観測値も両runで一致: musl GCC14.2.0-r6 / binutils2.44-r3 / musl-dev1.2.5-r12
+  （Linux x86_64/aarch64 static jobの48件のapk package versionが両runで同一）、glibc IFD GCC10.2.1（Debian11 image digest
+  `6f519a81440354a85eb592c5f32109ab80605f6b892455983a6f618bf87fabe9`）、Alpine image digest
+  `5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8`、AppleClang15.0.0.15000309 / Xcode15.4（`15F31d`）/
+  macOS SDK14.5 / ld-1053.12、Android NDK r27d / Clang18.0.4 / API24、Windows llvm-mingw `20250910`（UCRT）/ Clang21.1.1。
+  offline Ubuntu testsはGCC13.3.0。libusb1.0.30 sourceはpinned checksum
+  `fea36f34f9156400209595e300840767ab1a385ede1dc7ee893015aea9c6dbaf`で照合OK（両run）。時刻・所要時間・一時path・run/artifact ID・
+  build並列順・artifact zip digest・region/worker IDを除いた両runのjob logに、上記以外の差分はなかった
+  （Docker layer検証行の出現jobのみ異なる）。runner imageと実効build inputが一致し、SPEC 10.5-2の一致と判定した。
 - archive（両run共通）:
 
 | archive | SHA-256 | 本節での実機status |
@@ -418,7 +430,7 @@ ready行の非ASCII切断（[Issue #52](https://github.com/Khronos31/px4-userlan
 - E17手順のrunnable setupは`$RT`を事前作成しないが、px4dは存在しない`--runtime-dir`を`NOT_FOUND`で拒否する。
   また同setupはWindows PowerShell 5.1前提（PowerShell 7では`CreateDirectory(path, acl)`が使えない）。手順へ反映した。
 - 非ASCII `--runtime-dir`でのpx4d ready行stderr切断（上記、[Issue #52](https://github.com/Khronos31/px4-userland/issues/52)）は0.2.0の既知の制限。0.2.xで修正予定。
-- SPEC 10.5-2の再現性確認のうち、両runのrunner image・実効toolchain/build inputの突合は未完了。
+- SPEC 10.5-2の再現性確認のうち、両runのrunner image・実効toolchain/build inputの突合は本節の時点で未完了。2026-10-11に実施し一致（上記CI項）。
 - 他8 binary archiveの必須短時間matrixは本節の時点で未実施。2026-10-11に実施した（上の2026-10-11節）。
 - soakの欠落時刻（px4-userland側）は未取得。#50はopen（RAW_IO以前の大量欠落は解消、2時間1回程度の同時欠落は
   px4_drvでも再現）。M1UR B1のdaemon not-readyは原因未解明。
