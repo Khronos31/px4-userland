@@ -6,6 +6,525 @@
 
 Stable release の検証記録は本ファイルへ日付付きで追記する。新しい records directory や template framework、汎用スクリプトは作らない。release record には候補 version/commit/CI run、10 archive（9 binary + source。binaryは8 tar archiveとWindows ZIP）と checksum/audit結果、baseline tag と各 artifact の byte-identity 判定、変更の hunk-level 影響（call-path/guard）、claim ごとの `継承` / `今回再検証` / `未認定` / `対象外`、canary/soak の選定理由（環境ID E01–E17、固定順の位置、単一OS規則による非該当を含む）、各 test の環境ID・host・device/USB ID・runtime/access path・archive SHA-256・UTC時刻・コマンド・counter・結果・ログ保存先、未実施または非該当の物理操作と理由を記録する。canonical 環境ID と手順は [`release-validation.md`](../release-validation.md) を正本とする。Android ad-hoc APK は dtv-android 所管であり本記録に含めない。
 
+## 2026-10-11 v0.2.0 candidate 8 binary archive短時間matrix（E02–E07、E15）
+
+candidate・CI run・archive SHA-256は下記E17節と同一（source commit `8c40d495850c332312cd4293489f400c8fb842d4`、
+run `37996888969`の`release-candidate`）。外側`SHA256SUMS`で10件OKを確認した後、各archiveを試験hostへ転送し、
+各runで新規展開して内側`SHA256SUMS`とmanifest（version `0.2.0`、`source_ref`はcandidate commit、platformは対象target）を確認した。
+手元buildで代替していない。Q3U4は同一個体（base serial `00001205000960`、half `601/602`）、B-CAS、両RF lead、
+15V adapterを使用。firmwareは2169 bytes、SHA-256 `5213a5a38872661277a2cc1b2dfdfe88faf06f41205f460f3b51857f0568b484`。
+LNBは0V（`--allow-lnb-power`なし）。日時は2026-10-10 UTC（JSTでは10-11 00:10〜01:55）。
+raw log保存先はHAOSの`/config/.work/px4-0.2.0/`配下（各dirの`log/`）。ユーザー決定によりsoakとPX-M1UR/PX-S1URの追加試験は行っていない。
+
+| target | archive SHA-256 | 環境・日時 UTC | log |
+|---|---|---|---|
+| linux-glibc-x86_64 | `578d67a159b35b85b8a1b30362d0f288454d90aef12dafa3a443d433ed5a2390` | E03 Latitude、AnduinOS2.0.4/kernel7.0.0-34、一般user（uid1000、`video`/`plugdev`所属）、15:10:42〜15:18:23 | `e03-09ed0d/` |
+| linux-musl-x86_64 | `5219760847ba1f0ff40e54057b21b5992a8ee5ba26cf468f82763ff8692e2bbb` | E02 HAOS18.3/kernel6.18.52 Supervisor Alpine試験addon（container root）、PC/SC smoke 15:22:59〜、matrix 15:24:07〜15:28:54 | `e02-09ed0d/` |
+| linux-glibc-aarch64 | `5a7a1b38a77aba48745a9ac7ff0fcc096121f668d867a45a7c83715c9fa9ac0a` | E15 Switch、Fedora42/L4T4.9.140、一般user、15:31:59〜15:43:12 | `e15g-5ce4df/` |
+| linux-musl-aarch64 | `6d7f7e691c3ed4aeb2b618fc56c09fe4b23c41c5764e265bf808d3d14ac75f18` | E15同host、native Alpine3.22.5 rootful Podman container（uid0）、15:45:59〜15:51:17 | `e15m-5ce4df/` |
+| darwin-arm64 | `869e598ca55f0060973aaeff736f8d477ffd0f3a801b582c960dc504dd25e1c4` | E04 M2 Mac mini/macOS26.6.2/Darwin25.6.0、16:50:14〜16:55:19 | `e04-f42ef8/` |
+| android-aarch64 | `449da5c91c5995d4eac52704359e949b8bb0432136efb99efa9deaafd8a14ac6` | E05 Pixel9a/Android17/kernel6.1.162、Termux0.118.3/Termux:API0.53.0、15:56:04〜16:04:04 | `e05-88b80b/` |
+| android-armv7a | `f3445e80b4408f08892eae9c4c30c5a6dd577cd2c035fead2c5870ddd736f07c` | E06 Google TV Streamer/Android14/kernel5.15.180、Termux0.119.0-beta.3、16:25:06〜16:31:01 | `e06-78174a/` |
+| android-x86_64 | `75e095ecff2ae7c09a743c1d9bc37581d0ed7d30a9837112799e2248e7aec0ac` | E07 Bliss OS/Android13/kernel6.1.112、Termux0.118.3、16:39:47〜16:46:22 | `e07-95aea8/` |
+
+コマンドと受信条件はv0.1.10節と同じ（§0.1の列挙、daemon起動、`px4ctl status/list/card-*`と
+`card-apdu 90:30:00:00:00 --repeat 10`、8 receiver各30秒、USB切断clientと再接続後の新daemon、TERM/wait/runtime残留確認。
+S1318000kHz slot0 / T527143kHz、receiver0〜3は`--channel BS15_0/T22`を併用）。Linux/macOSはv0.1.10の
+`matrix-posix.sh`、Termuxは`termux-matrix.sh`（正式`px4-termux`の2-FD経路）をリポジトリ外で次の点だけ変更して使用した:
+物理操作の検知待ちを各900秒に延長、USB抜去/再接続の判定をclaim中も消えないUSB実在数（Linux: sysfsの`0511:084a`数、
+macOS: `ioreg -p IOUSB`、Termux: `termux-usb -l`、E07はsysfs照合でQ3の2 pathのみ）で行う、Termuxでは各launcher起動前に
+両pathへ`termux-usb -r`を実行する、`--list-json`のkey・型・値（enclosure/devices/receiver system・LNB capability）照合を追加（Linux/macOS）。
+USB/cardの物理操作は通知後にユーザーが実施した。
+
+全8 archiveで列挙/ready8（Linux/macOSは`--list-json`照合OK、Termuxは`termux-usb -l`と`px4ctl list`）、
+カード抜去で`present=no`・reader-generation 1→2・ATR/APDU exit9（`NO_CARD`）、再挿入でgeneration3・ATR/reset/APDU10成功、
+各8 receiver captureの中間時点でstreaming8・APDU10成功、USB切断でclient exit7（`DISCONNECTED`）・旧daemon/launcher自己終了exit7、
+再列挙後の新daemon ready・8 receiver受信・APDU10、通常停止（Linux/macOSはdaemon exit0、Termuxはrunnerの`daemon stop clean`判定）、runtime dir除去、
+残留processなしを確認した。旧daemonのstop理由はE15 musl・E04で`USB_IO`、他は`DISCONNECTED`（exit7は共通）。
+receiver0〜6のTS sync/TEI/CC/queue/USBは全8 archive・全3 captureで0、全receiverのbytes=packets×188。
+
+receiver7は既知burst（[Issue #1](https://github.com/Khronos31/px4-userland/issues/1)）を記録し、burstのある区間はexit8となる。
+receiver7の各matrix 30秒区間（TEI/CC、sync/queue/USBは全0。0/0の区間はexit0）:
+
+| target | 初回 / card再挿入後 / USB再接続後 |
+|---|---|
+| E03 glibc x86_64 | 10980/577、11029/710、10941/605 |
+| E02 musl x86_64 | 0/0、10853/567、11047/611 |
+| E15 glibc aarch64 | 11075/619、10983/690、11042/593 |
+| E15 musl aarch64 | 10962/576、10979/631、10980/608 |
+| E04 macOS | 10981/620、11027/644、10962/558 |
+| E05 aarch64 | 10918/540、11028/609、10986/611 |
+| E06 armv7a | 0/0、10959/635、10952/594 |
+| E07 x86_64 | 10966/582、11037/634、11020/674 |
+
+### receiver7のfresh参照比較（E03、SPEC 10.2.6a / §0.3 X-R7REF）
+
+E03 Latitude（AnduinOS2.0.4、kernel `7.0.0-34-generic`）で、上表の`linux-glibc-x86_64` archive（SHA-256
+`578d67a159b35b85b8a1b30362d0f288454d90aef12dafa3a443d433ed5a2390`）を新規展開して`tsukumijima/px4_drv`と比較した。
+同一Q3U4個体・B-CAS・アンテナ/電源・firmware（SHA-256 `5213a5a3…`）、S1318000kHz slot0（receiver0/1/4/5）/T527143kHz
+（receiver2/3/6/7、参照helperはT番号72・S番号7）、8同時受信の各30秒、LNB0V。候補は`px4-ts --output /dev/null
+--duration-seconds 30`（strace sendto/recvfrom付き）、受信開始15秒後に`px4ctl status`と`card-apdu … --repeat 10`。
+参照は各runで`insmod`→8 receiver helper（strace ioctl付き、sudo）→`rmmod`。
+参照moduleはpx4_drv `7fa9f05d2cbdf1d821f479248d561f9868051b8b`（v0.4.0）に互換修正（作業差分は`driver/ptx_chrdev.c`・
+`ptx_chrdev.h`）を適用して2026-10-11に再build（gcc15.2.0、vermagic`7.0.0-34-generic`、SHA-256
+`028ac332a2145d8b889dea89c718ee12386b7e03bb11abeafac68ff9a9caf069`）。helperはv0.1.10と同じsource（SHA-256
+`e4b0b0f50a2b647b3e46049a75756504de31795a878f192003e0c3deac0493c9`）から再build（binary
+`171efc2fcb016c09141fb6aa2a5e973451a46f00f9d14f2b1dee7a50d4038433`）。
+
+pair1の結果（候補r7がTEI/CCとも参照を上回った）の後、ユーザー決定により追加4組を同条件で実施した。組数と順序は
+追加run開始前に`pairs-2to5/pairs/summary.txt`へ記録した: 計5組、pair1 候補→参照、pair2 参照→候補、pair3 候補→参照、
+pair4 参照→候補、pair5 候補→参照。結果を見ての追加・打切りはしていない。
+日時はpair1が2026-10-10 17:51:13〜17:52:33 UTC、pair2〜5が18:00:40〜18:05:35 UTC（JST 10-11 02:51〜03:05）。
+
+| pair | 順序 | 候補r7 TEI / CC / packets（exit） | 参照r7 TEI / CC / packets（exit） | 候補r7が参照以下（TEI・CC） |
+|---|---|---|---|---|
+| 1 | 候補→参照 | 10917 / 558 / 341343（8） | 0 / 0 / 344026（0） | 満たさない |
+| 2 | 参照→候補 | 10944 / 602 / 341452（8） | 11002 / 615 / 340633（0） | 満たす |
+| 3 | 候補→参照 | 0 / 0 / 345005（0） | 0 / 0 / 344538（0） | 満たす |
+| 4 | 参照→候補 | 0 / 0 / 344662（0） | 0 / 0 / 343770（0） | 満たす |
+| 5 | 候補→参照 | 0 / 0 / 344821（0） | 0 / 0 / 344282（0） | 満たす |
+
+- 候補のexit8はr7の`STOP_STREAM`（burst区間）。候補receiver0〜6は全10 runでexit0、sync/TEI/CC/queue/USB 0。
+  候補の全receiverでqueue-drops 0・usb-errors 0。各runのdaemonはready（usb-errors=0、protocol-errors=0）、
+  受信中statusはstreaming8、APDU rc0、daemon exit0、runtime残留0。
+- 参照receiver0〜6はTEI/sync 0、CCはpair2のreceiver2/3/6が各16、他は0。参照helperのqueue/USB counterは未観測。
+  全参照runでinsmod/rmmod rc0、device node 8→0、kernel logにUBSAN/BUG/Oops/error/fail/warnなし。
+- 全組の後（module unload後）に候補でreceiver6を3秒受信（exit0、全counter 0）、APDU10 rc0、daemon exit0、
+  runtime残留0。終了時process残留0、Q3U4 2 device、px4_drv未load。常設installなし。
+- v0.1.10 E03比較との条件差: Q3U4のUSB接続位置（v0.1.10 `1-3.1.1`/`1-3.1.2`、今回`1-3.1`/`1-3.2`）、参照module
+  binary（v0.1.10 SHA-256 `116c487c…`、今回`028ac332…`）、helper binary（同source・再build）。RF経路（アンテナ線・
+  分配器構成）がv0.1.10時と同一であることは記録していない（本release cycle中にユーザーが分配器・アンテナ線を変更）。
+  候補・参照の比較は同一session内の同一条件。
+- log: HAOS `/config/.work/px4-0.2.0/e03-r7ref-020/`（pair1は`cand-fresh/`・`ref-public30/`・`post-unload/`・
+  `summary.txt`、pair2〜5と最後のunload後確認は`pairs-2to5/pairs/`、script `r7cmp-020.sh`・`pairs-2to5/r7pairs-020.sh`）。
+  Latitudeの`/tmp/px4-r7-020/`にも同一logを保持。
+
+2026-10-11ユーザー決定: pair2で`px4_drv`参照にも同等のburst（TEI 11002、CC 615）が出たことから、
+**0.2.0のreceiver7は参照並みとしてSPEC 10.2.6aにより既知制限（[Issue #1](https://github.com/Khronos31/px4-userland/issues/1)）として扱い、
+releaseへ進む**（SPEC v0.33 §10.5の0.2.0限定受入判断へ追記）。pair1の結果、各counterとCLI exitは書き換えない。本比較はE03 `linux-glibc-x86_64`での比較であり、
+他archive・他runtimeのhardware claimの範囲を広げない。
+
+E02は試験addonのDockerfile・candidates・config.yaml・Supervisor optionsを`/config/.work/px4-0.2.0/e02-backup/`へ退避し、
+candidate musl archiveを`candidates/`へstage、bashとoverlay entrypointを追加した一時Dockerfileでrebuildして実行した。
+entrypointはarchive/firmware SHA-256照合後、既存`userland-stable-run`のPC/SC smoke（q3u4、serial `00001205000960`、30秒、siano0、LNB0）を実行し
+（status passed、daemon/pcsc/card exit0、PC/SC reader確認、receiver0〜6 exit0・receiver7 exit8）、続けてmatrixを実行した。終了後addonはstopped。
+ユーザー指示によりaddonの元設定への復元は行っていない（退避は保持）。
+E15 muslはv0.1.10試験image `localhost/px4-010-matrix:alpine322`へ`apk add jq`だけを加えたimage
+`localhost/px4-020-matrix:alpine322`（ID `1d728e15af20`）の`--rm`一時containerで実行し、終了後container消滅を確認した。
+E05/E06/E07のUSB permissionは各launcher起動前の`termux-usb -r`で取得した。E06の再接続後（新path `/001/105`、`/001/106`）は
+第1 pathの要求がTermux:API側で`Permission request timeout`を返した後、両pathでlauncherがready8となった。
+E07はOS起動USB等を接続したまま、sysfs vendor/product/half serial照合でQ3の2 pathだけを選択した。
+
+試行の逸脱:
+
+- E05の初回試行（`e05-88b80b/attempt1-invalid-longpath/`）は試験用runtime dirを長い作業dir配下に置いたrunで、px4dが
+  `serial endpoint: INVALID_ARGUMENT`を出してready前に終了した（GATE-INCOMPLETE、物理操作前）。runner側の設定不備として無効とし、
+  短いruntime dir（`$PREFIX/tmp/e05r2`、endpoint path 102 bytes）で新規展開して再実施した上表のrunを記録する。
+- E05の2回のTermux preflightで`termux-info`を実行し、Androidのclipboardを上書きした。E06/E07ではこれを除いた。
+
+## 2026-10-10 v0.2.0 candidate E17 Windows 11 x64 実機試験（Q3U4必須matrix PASS / soak注記付き受入）
+
+- candidate: version `0.2.0`、source commit `8c40d495850c332312cd4293489f400c8fb842d4`（`feat/windows-phase1`、
+  PR [#51](https://github.com/Khronos31/px4-userland/pull/51) のmerge commit）。tag・main merge・release公開はしていない。
+  本節はE17（`windows-x86_64`行）だけの記録であり、記録時点で他8 binary archiveの短時間matrix（E02–E07、E15）は未実施
+  （2026-10-11に実施、上記8 binary archive節）。
+- 結果概要: Q3U4は必須matrix・全局確認・残り4項目がPASS、2時間soakは注記付き受入。PX-M1UR/PX-S1URは同日に
+  Windows profile試験（30分soak、card/USB抜差し）を実施しPASS（same-lease retuneは未確認）。ready行の非ASCII切断は
+  既知の制限（[Issue #52](https://github.com/Khronos31/px4-userland/issues/52)）。
+- CI: push run [`37996888969`](https://github.com/Khronos31/px4-userland/actions/runs/37996888969) と
+  dispatch run [`37996927928`](https://github.com/Khronos31/px4-userland/actions/runs/37996927928) は両方20 jobすべてSUCCESS
+  （Windows cross-build/PE audit/packaging、Windows Server 2022 offline testとrelease archive CLI smokeを含む）。
+  両runの`release-candidate`を別の空ディレクトリへ取得し、各`sha256sum -c SHA256SUMS`が10件OK、10 archiveを個別`cmp`で
+  byte-identical、外側`SHA256SUMS`もbyte-identical（SHA-256
+  `38c816b9dcd1dc08dbcc047861ff797fcf6fb8a4bcbdff6b1d0c2e68ad427dd8`）。9 binaryのmanifestはversion `0.2.0`、
+  `source_ref`はcandidate commit。両runのrunner image・実効toolchain inventoryの突合は本節では行っておらず、
+  SPEC 10.5-2のinput一致判定は未完了（pending）。
+- SPEC 10.5-2 input突合（2026-10-11、両runのjob log）: 20 jobのrunner imageは両runで同一（Ubuntu x86_64
+  `20261004.327.1`、Ubuntu arm64 `20261004.142.1`、macOS arm64 `20260831.0302.1`、Windows Server 2022
+  `20261004.326.1`）。artifact生成toolchainの観測値も両runで一致: musl GCC14.2.0-r6 / binutils2.44-r3 / musl-dev1.2.5-r12
+  （Linux x86_64/aarch64 static jobの48件のapk package versionが両runで同一）、glibc IFD GCC10.2.1（Debian11 image digest
+  `6f519a81440354a85eb592c5f32109ab80605f6b892455983a6f618bf87fabe9`）、Alpine image digest
+  `5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8`、AppleClang15.0.0.15000309 / Xcode15.4（`15F31d`）/
+  macOS SDK14.5 / ld-1053.12、Android NDK r27d / Clang18.0.4 / API24、Windows llvm-mingw `20250910`（UCRT）/ Clang21.1.1。
+  offline Ubuntu testsはGCC13.3.0。libusb1.0.30 sourceはpinned checksum
+  `fea36f34f9156400209595e300840767ab1a385ede1dc7ee893015aea9c6dbaf`で照合OK（両run）。時刻・所要時間・一時path・run/artifact ID・
+  build並列順・artifact zip digest・region/worker IDを除いた両runのjob logに、上記以外の差分はなかった
+  （Docker layer検証行の出現jobのみ異なる）。runner imageと実効build inputが一致し、SPEC 10.5-2の一致と判定した。
+- archive（両run共通）:
+
+| archive | SHA-256 | 本節での実機status |
+|---|---|---|
+| `px4-userland-0.2.0-windows-x86_64.zip`（882833 bytes） | `c409edea022bc0c5613bf168248f55efbd408603f044f4bc1980b0605122bdc3` | E17で今回再検証（下記） |
+| `px4-userland-0.2.0-linux-glibc-x86_64.tar.gz` | `578d67a159b35b85b8a1b30362d0f288454d90aef12dafa3a443d433ed5a2390` | 今回再検証（上記8 binary archive節） |
+| `px4-userland-0.2.0-linux-musl-x86_64.tar.gz` | `5219760847ba1f0ff40e54057b21b5992a8ee5ba26cf468f82763ff8692e2bbb` | 今回再検証（上記8 binary archive節） |
+| `px4-userland-0.2.0-linux-glibc-aarch64.tar.gz` | `5a7a1b38a77aba48745a9ac7ff0fcc096121f668d867a45a7c83715c9fa9ac0a` | 今回再検証（上記8 binary archive節） |
+| `px4-userland-0.2.0-linux-musl-aarch64.tar.gz` | `6d7f7e691c3ed4aeb2b618fc56c09fe4b23c41c5764e265bf808d3d14ac75f18` | 今回再検証（上記8 binary archive節） |
+| `px4-userland-0.2.0-darwin-arm64.tar.gz` | `869e598ca55f0060973aaeff736f8d477ffd0f3a801b582c960dc504dd25e1c4` | 今回再検証（上記8 binary archive節） |
+| `px4-userland-0.2.0-android-aarch64.tar.gz` | `449da5c91c5995d4eac52704359e949b8bb0432136efb99efa9deaafd8a14ac6` | 今回再検証（上記8 binary archive節） |
+| `px4-userland-0.2.0-android-armv7a.tar.gz` | `f3445e80b4408f08892eae9c4c30c5a6dd577cd2c035fead2c5870ddd736f07c` | 今回再検証（上記8 binary archive節） |
+| `px4-userland-0.2.0-android-x86_64.tar.gz` | `75e095ecff2ae7c09a743c1d9bc37581d0ed7d30a9837112799e2248e7aec0ac` | 今回再検証（上記8 binary archive節） |
+| `px4-userland-0.2.0-source.tar.gz` | `b4c699ad85e73655bf9931c4260bbd64098d3509b7a418311ab33666d4832865` | corresponding source |
+
+- RAW_IO修正の経緯: 先行candidate（`9e2fa3e`、Windows ZIP SHA-256
+  `fdeb53924de621bdce0918621a8ac7c584519a7ac7949fb8d3123fd32e7ba575`）のE17 8受信同時captureで、bridge単位の
+  一斉CC欠落を観測した（[Issue #50](https://github.com/Khronos31/px4-userland/issues/50)）。`72155a4`はWindows
+  backendのTS endpoint 0x84でWinUSB RAW_IOを有効化し、packet-aligned転送（153600 bytes）にする。PR #51の
+  交互比較（各8受信30秒）では`9e2fa3e`が24回中11回で欠落、PR #51 buildは12回中0回（記録は#51 comment、
+  HOME-PC `C:\px4-e17\runs\cmp-rawio1\`）。先行candidateでのE17試行は採用せず、本節はすべて`8c40d49`の
+  exact ZIPで再実施した。`8180783`以後の変更にはPOSIX buildへ入るhunk（`libusb_transport.cpp`、
+  `libusb_transport_internal.h`、`posix_ipc.h`）を含むため、他artifactの影響判定は8環境回帰で別途記録する。
+
+### 環境・共通条件
+
+- 環境: E17、host `HOME-PC`、Windows 11 Pro x64 build 26300.9457（DisplayVersion 26H2。registryの
+  ProductNameは`Windows 10 Pro`を返す）。`chcp`既定code page 932、ACP/OEMCP 932（`e17rest-f83190`で記録）。
+  `e17rest-f83190`はWindows PowerShell 5.1.26100.9444（Desktop）で実行した。それ以前のrunのPowerShell versionは
+  記録していない（同hostの既定shellはPowerShell 7.6.6）。
+- 機器: PX-Q3U4（base serial `00001205000960`、USB `0511:084a` half `…9601`/`…9602`、bus 5 port `5-1.2.1`/`5-1.2.2`）、
+  PX-M1UR（`0511:0854`、serial `000000000000001`）、PX-S1UR（`0511:0855`、serial `000000000000001`）。
+  いずれもユーザーが事前にWinUSBへbindingし、`Get-PnpDevice`で`Status OK`/service `WinUSB`を確認した
+  （agentはdriver/INFを変更していない）。B-CASのATRは3機種とも`3b:f0:12:00:ff:91:81:b1:7c:45:1f:03:99`。
+- firmware: 利用者提供 `C:\px4-e17\fw\it930x-firmware.bin`（2169 bytes、SHA-256
+  `5213a5a38872661277a2cc1b2dfdfe88faf06f41205f460f3b51857f0568b484`）。
+- archive検証: `e17r2-fef601`と`e17soak-e2c170`はそれぞれ新しい展開先へ展開し、ZIP SHA-256一致、内側`SHA256SUMS`
+  16件bad 0、ZIP entry 17件の照合mismatch 0、`manifest.json`のversion/source_refを確認した。以後のrun（multi、M1UR、
+  S1UR、電圧、全局確認）はrunごとの再展開をせず、soakの展開先`e17soak-e2c170\extract`を再使用した
+  （multi開始時に内側`SHA256SUMS`を再照合しbad 0）。`e17rest-f83190`は非ASCII path（下記）へ新規展開して同じ照合を行った。
+  `px4d.exe` SHA-256
+  `006de9210ee910fc230342b5429213bf76bd81b4aed6e0f44a6cbb0163d244eb`、`px4-ts.exe`
+  `5f400a777d3dd19ec9fc27fdfca5327b3cdf25a95d2a437a9d2eed551c5ffa97`、`px4ctl.exe`
+  `d4f20434c6ba139257277f9bb812438914d91fd92d3292e26b489ffc19351c07`。
+- runtime: タスク専用の親`C:\px4e17\L`（owner=現在user SID `S-1-5-21-…-1004`、protected DACL、ACEは現在userの
+  FullControlだけ）をowned process（px4d/px4-ts）だけへprocess-scopedの`LOCALAPPDATA`として渡し、その下に
+  run別の`--runtime-dir`を置いた。profile ACL・global env・driverは変更していない。daemonは毎回
+  `--exit-on-stdin-eof`で起動し、停止はstdin closeによるcooperative shutdownだけを使った（force killなし）。
+- 受信条件（Q3U4 8受信）: receiver 0/1/4/5 = ISDB-S `--frequency-khz 1318000 --slot 0`（BS15/TS0）、
+  2/3/6/7 = ISDB-T `--frequency-khz 527143`、`--output NUL`。CARDは`px4ctl card-status/card-atr/card-reset/
+  card-apdu 90:30:00:00:00 --repeat 10`。
+- raw log: HOME-PC `C:\px4-e17\runs\<run>\`（HAOSへは未転送）。時刻はUTC、括弧内はJST。
+
+### 必須短時間matrix（`e17r2-fef601`、2026-10-09 22:13:14〜22:19:24 UTC／10-10 07:13〜07:19 JST）
+
+- preflight: stray processなし、Q3U4 2 half WinUSB OK、`px4d --list`/`--list-json` rc 0。Q3U4はready、8 receiver、
+  `serial_unique=true`、ISDB-S receiver（0/1/4/5）は`lnb_15v_supported=true`、ISDB-T receiver（2/3/6/7）はfalse。
+  JSONのcapability値はboolean。
+- RAW_IO確認（正式runとは別daemon、`LIBUSB_DEBUG=4`、r2/r6 ISDB-T 5秒）: 両bridgeの別threadで
+  `enabled RAW_IO for endpoint 84`、停止時に`disabled`各2件、153600 bytes readが198回・他サイズ0、daemon exit 0、残留なし。
+- 手順と結果（release-validation §3の1–7。各物理操作はユーザーが実施、通知から5分以内）:
+
+| 段階 | 結果 |
+|---|---|
+| daemon1 ready後CARD | card-status/atr/reset rc 0、APDU 10/10 rc 0（応答61 bytes、SW `90 00`） |
+| gen1 8受信同時30秒 | 8 stream、capture中APDU rc 0。receiver 0–6はrc 0、sync/TEI/CC/queue/USB 0 |
+| B-CAS抜去 | `present=no initialized=no reader-generation=2`、card-atr/card-apduとも`NO_CARD`（exit 9） |
+| B-CAS再挿入 | generation 3、ATR/reset/APDU 10回 rc 0 |
+| gen2 8受信同時30秒 | receiver 0–6 全counter 0 |
+| USB切断（1 receiver client稼働中） | client `DISCONNECTED` exit 7（packets 1111365）、daemon `px4d stopped: USB_IO` exit 7、runtime残留なし、stray 0 |
+| USB再接続 | `--list`で同一serial・8 receiver readyを再列挙。旧daemonは終了済みのため、新daemon2を同じcandidateから起動 |
+| daemon2 ready後CARD・gen3 8受信同時30秒 | ATR/reset/APDU rc 0、receiver 0–6 全counter 0 |
+| cooperative stop | daemon2 exit 0、runtime残留なし、stray px4d/px4-ts 0 |
+
+receiver別packet数（30秒、bytes=packets×188）: S受信は約47.7万〜48.0万、T受信は約34.5万〜34.6万。
+receiver 7は3世代ともexit 8（`PROTOCOL_ERROR`）で、sync/queue/USB 0:
+
+| 世代 | receiver 7 TEI / CC / packets |
+|---|---|
+| gen1（初回） | 10953 / 638 / 341866 |
+| gen2（card再挿入後） | 10965 / 576 / 341768 |
+| gen3（USB再接続後） | 10985 / 558 / 342241 |
+
+判定: release-validation §3のE17必須項目はPASS。receiver 7は下記「receiver 7」の扱いによる。
+
+### E17手順の残り4項目（`e17rest-f83190`、2026-10-10 10:46:22〜10:47:04 UTC／19:46〜19:47 JST）
+
+Q3U4のみ接続、アンテナ接続、daemonはopt-inなし、物理操作なし。release-validation E17節のrunnable setup
+（タスク専用の保護された親を`TEMP`配下に作りprocess-scopedの`LOCALAPPDATA`として渡す）に従った。
+
+- 環境記録: Windows PowerShell 5.1.26100.9444（Desktop、`powershell.exe`）、`OSVersion` 10.0.26300.0、`chcp` 932、
+  ACP 932、OEMCP 932、`[Console]::OutputEncoding` 932。既定`LOCALAPPDATA`（`C:\Users\yunomin61\AppData\Local`）は
+  owner=現在user、protected=False、継承ACEがSYSTEM/Administrators/現在userの各FullControl（read-only記録）。
+- 非ASCII path: タスクroot `C:\px4-e17-試験é-f83190`（日本語とCP932にない`é`を含む）へ検証済みZIPを新規展開
+  （ZIP SHA-256一致、内側16件bad 0、manifest version `0.2.0`/source_ref `8c40d49…`）。firmwareを
+  `…\ファームé.bin`へcopyしSHA-256一致。親`C:\Users\YUNOMI~1\AppData\Local\Temp\px4e17lap-98e6e00c`、
+  `--runtime-dir`は`<親>\試験é`。AF_UNIX sample長はworker 88、control 105、stream 104 bytes（<108）。
+  daemonはready（`ready=yes`）、firmware load成功。8受信同時30秒でreceiver 0–6はrc 0・全counter 0
+  （packets 477344〜478774 / 345411〜345847）、receiver 7はexit 8（TEI 11047、CC 674、sync/queue/USB 0）。
+  receiver 2は`--output …\出力é-r2.ts`へ書き込み、file size 64937268 bytes = 報告bytes（345411×188）、先頭byte 0x47。
+  card-status/ATR/reset rc 0、APDU 10回 rc 0（SW `90 00`）。argv・file open（firmware、runtime/endpoint、output）は
+  ACP 932下で壊れなかった。
+- endpoint ACL（daemon稼働中）: `<RT>`、`px4-userland`、`00001205000960`、`control.sock`、`stream.sock`の5件すべて
+  owner=現在user SID、protected=True、ACEは現在user SIDのFullControl 1件だけ（継承なし）。PASS。
+- busy: daemon1稼働中に同じ`--device`で2つ目のpx4dを起動。同じ`--runtime-dir`、別の`--runtime-dir`
+  （`<親>\b2`）とも`device open: BUSY`、exit 4。後者のruntime dirにentryは作られず、daemon1はready=yesのまま
+  受信を継続した。PASS。
+- 停止: daemon1 exit 0、`<RT>`・`b2`・親とも空になり削除、stray px4d/px4-ts/px4ctl 0。
+- **既知の制限（[Issue #52](https://github.com/Khronos31/px4-userland/issues/52)、0.2.xで修正予定）**: 非ASCIIの`--runtime-dir`ではpx4dのstderrが最初の非ASCII文字で途切れた。raw stderr
+  121 bytesは`px4d ready: device=00001205000960 endpoint=C:\Users\YUNOMI~1\AppData\Local\Temp\px4e17lap-98e6e00c\`
+  （0x5c）で終わり、改行もない。endpoint自体は正しく作成・利用できた。追加切り分け（同日、Q3U4のみ、PS5.1）で、
+  原因はready行だけが`fprintf(stderr, "…%ls\n")`でwide pathを出力し、CRTが既定"C" localeのためU+00FFを超える文字で
+  変換失敗（EILSEQ、戻り値-1）することと判明した。cmdの`2> file`、`Start-Process -RedirectStandardError`、
+  `chcp 65001`併用のいずれも同じ77 bytesで途切れ、ASCIIのみの既定`LOCALAPPDATA`では行末CRLFまで140 bytes出力された。
+  stream error flagは立たず後続の`fprintf`は出力される（同CRTの最小programで確認）が、改行が欠けるため次の行が
+  同一行に連結される。U+0080〜U+00FFはLatin-1の1 byteで出て文字化けする。px4ctl/px4-tsはpathを出力しない。
+  既定`LOCALAPPDATA`はlong pathのため、日本語user名では既定設定でも再現し得る。daemonの動作への影響はない。
+- 判定: 4項目のうちcode page/PowerShell記録、endpoint ACL、busyはPASS。非ASCII pathはargv・file open・endpoint作成の
+  観点でPASS。ready行のstderr切断は2026-10-10ユーザー決定により0.2.0の既知の制限（[Issue #52](https://github.com/Khronos31/px4-userland/issues/52)）として扱い、
+  非ASCII pathは「既知の制限付きPASS」とする。
+- 失敗・診断試行（保存済み）: `e17rest-defff5`はPowerShell 7.6.6で実行し、手順の
+  `[System.IO.Directory]::CreateDirectory($LAP, $acl)`がPowerShell 7（.NET）に存在しないoverloadで停止（daemon未起動）。
+  `e17rest-80d027`（Windows PowerShell 5.1）は手順どおり`$RT`を事前作成しなかったため、px4dが
+  `serial endpoint: NOT_FOUND`（exit 3）で終了した（あわせてscriptの初回status pollがPS5.1でnative stderrを
+  終了errorに変換した）。同じ展開物での切り分け（`e17rest-80d027\diag`）では、ASCIIの未作成runtime dirは
+  同じNOT_FOUND/exit 3、owner=現在user・protected DACLで事前作成したASCII/非ASCII runtime dirはともにready・exit 0・
+  残留なし。正式runではこの事前作成を加えた。
+
+### 3機種同時接続・同一serial（`e17multi-c80689`、2026-10-10 約09:01 UTC／18:01 JST）
+
+- Q3U4・M1UR・S1URを同時接続（M1UR/S1URはUSB hub経由、port `5-1.4.1`/`5-1.4.2`）。`--list`/`--list-json` rc 0。
+  M1UR（`ISDB-T/S`）とS1UR（`ISDB-T`）が同じserial `000000000000001`の別enclosureとして現れ、双方
+  `serial_unique=false`、`lnb_15v_supported=false`。Q3U4はS receiverだけtrue、T receiverはfalse。全値boolean。
+- `px4d --device 000000000000001 --firmware <FW> --runtime-dir <RT>`は`device open: INVALID_ARGUMENT`、両候補を
+  列挙して`--usb-path`と`--instance`を要求し、exit 2。指定runtime dirにentryは作成されず、stray processなし。
+  USB interface claimの有無は直接観測していない。
+- 同時接続中は手順どおり受信・カード・LNBの試験を行っていない。
+
+### PX-M1UR単独（`e17m1ur-5be907`、2026-10-10 09:03〜09:19 UTC／18:03〜18:19 JST）
+
+| run | daemon | 結果 |
+|---|---|---|
+| A（09:03:55〜09:04:40） | opt-inなし | `--list`/`--list-json` OK。ISDB-S 0V 30秒 packets 478964 全counter 0。CARD ATR/reset/APDU 10 rc 0。15V要求は`UNSUPPORTED` exit 3、packet 0。daemon exit 0、残留なし。ISDB-T 527143は約6秒で`TIMEOUT`（packet 0、exit 8） |
+| B1（09:04:40〜09:05:21） | `--allow-lnb-power` | **無効試行**: daemonが40回のstatus pollでreadyにならず（`connect: NOT_FOUND`）、後続の15V要求のexit 3も`NOT_FOUND`によるもので拒否の証拠にしない。px4dのstdout/stderr/exit値は保存されず、停止確認のログ行も同秒に「35秒以内に終了せず」と記録され整合しない。stray processなし。原因未解明の単発事象として保持 |
+| b2（09:07:55〜09:08:15） | `--allow-lnb-power` | daemon 1秒でready。15V要求は`UNSUPPORTED` exit 3、packet 0。直後status ready。ISDB-S 0V 5秒 packets 81576 全counter 0。ISDB-T 527143/557142は約6秒で`TIMEOUT`。daemon exit 0、残留なし |
+| c3（09:12:55〜09:13:28） | opt-inなし | 同じ配線で再試行。ISDB-T 527143（`--tune-timeout-ms 30000`）とT27/T25/T22がすべて約6秒で`TIMEOUT`（packet 0）。対照のISDB-S 0V 5秒は全counter 0 |
+| d4（09:17:56〜09:19:10） | opt-inなし | ユーザーが分配器を1段減らした後。ISDB-T 527143 30秒 packets 345946、T27 30秒 packets 345951、ISDB-S 0V 5秒 packets 82389、いずれも全counter 0、rc 0。daemon exit 0、残留なし |
+
+判定: M1URの15V要求拒否はopt-inなし（A）・あり（b2）の双方で`UNSUPPORTED` exit 3（PASS）。GPIO無書込みは
+offline/mock試験に依拠し、実機で個別測定していない。A/b2/c3のISDB-T失敗は過剰分配による受信レベル不足と判断し
+（d4で解消、同機はLinuxでISDB-T受信済み）、失敗試行として保持する。
+
+### PX-S1UR単独（`e17s1ur-653101`、2026-10-10 09:23:16〜09:24:27 UTC／18:23〜18:24 JST）
+
+- `--list`/`--list-json` OK（`ISDB-T`、`lnb_15v_supported=false`）。ISDB-T 527143 30秒 packets 345946、`--channel T27`
+  30秒 packets 345952、いずれも全counter 0、rc 0。CARD status/ATR/reset/APDU 10 rc 0。
+- ISDB-S要求（1318000 slot 0）は受信開始前に`INVALID_ARGUMENT` exit 2、packet 0。daemon exit 0、残留なし。PASS。
+
+### PX-M1UR / PX-S1UR Windows profile試験（`m1urq-92a667`、`s1urq-81b3aa`、2026-10-10 11:37〜13:18 UTC／20:37〜22:18 JST）
+
+各機種を単独接続し（USB port `5-1.4`／`5-1.2`、PnP status OK、service WinUSB）、qualification runごとに検証済みZIP
+（SHA-256 `c409edea…bdc3`一致）を新規展開して内側`SHA256SUMS` 16件bad 0、manifest version `0.2.0`/source_ref
+`8c40d49…`、firmware SHA-256 `5213a5a3…b484`一致を確認した。物理操作のsub-run（`phys-*`、`usb-*`）は親runの展開物を
+使い、開始時に`SHA256SUMS`を再照合した（16件bad 0）。runtime dirは保護された親（owner=現在user、protected、ACE OK）
+配下のASCII path、daemonはopt-inなし。各daemonは1秒でready、全daemonのstopは残留なし・stray 0。
+`--list`/`--list-json` rc 0、M1URは`ISDB-T/S`、S1URは`ISDB-T`、いずれも`serial_unique=true`、`lnb_15v_supported=false`。
+
+**PX-M1UR（`m1urq-92a667`、11:37:40〜12:09:23 UTC／20:37〜21:09 JST、`DONE errorcount=0 verdict=PASS`）**
+
+| 区分 | 結果 |
+|---|---|
+| 受信（daemon d1） | ISDB-T 527143 10秒 115834 packets、ISDB-S 1318000 slot0 0V 10秒 160724、ISDB-S 1049480 slot0 0V 10秒 116667。いずれもrc 0、sync/TEI/CC/queue/USB 0 |
+| stop/reopen（d1） | T→T→S→Tの5秒×4（59531／59532／81574／58714 packets）、全counter 0、rc 0。前後のstatus ready/free、usb/protocol errors 0 |
+| card（d1、d2） | card-status/ATR/reset/APDU 10回が各daemonの前後でrc 0（SW `90 00`、`reader-generation=1`） |
+| daemon再起動（d1 exit 0 → d2） | T 5秒 58716、S 0V 5秒 82389 packets、全counter 0 |
+| 30分soak（d2） | ISDB-T 527143 1800秒（wall 1803秒）、**20,668,426 packets / 3,885,664,088 bytes**、sync/TEI/CC/queue/USB 0、empty intervals 128,166、exit 0。受信中に約30秒ごと`px4ctl card-apdu --repeat 5`を60回（**APDU 300/300**、rc 0）。5分ごとstatus 6回すべてready/streaming・errors 0 |
+| 資源（px4d） | handle 189→197→195（snap2〜6一定）→189、private bytes 18.5→22.1→22.0 MB→18.4 MB、thread 10→7→6。disposition `安定` |
+| card抜去/再挿入（`phys-6af665`、12:11:28〜12:14:10 UTC） | 抜去でgeneration 1→7、`card-present=no`、`reader-generation=2`、ATR/reset/APDUは`NO_CARD` exit 9。cardなしでT 5秒（58715）全counter 0。再挿入でgeneration 13、`reader-generation=3`、status/ATR/reset/APDU 10 rc 0、T 5秒（58716）全counter 0。**VALID** |
+| USB切断（`phys-6af665`のUSB step） | **INVALID（試験orchestratorの誤検出、製品不具合ではない）**: 抜去検出に`px4d --list`を使ったため、d3がclaim中のdeviceを`status=open_failed`と読み、未抜去のまま12:14:14 UTCに「抜去観測」とした。12:15:31 UTCの時点でd3はready・streaming、clientも受信継続。orchestratorを停止し、d3はstdin EOFで終了（exit値未取得）、残留なし（`INVALID-usb-step.txt`） |
+| USB切断・再接続（`usb-714d78`、12:18:13〜12:20:35 UTC、PnP不在2回連続で検出） | 受信中に抜去: in-flight `px4-ts`は`DISCONNECTED` exit 7（739258 packets書込み）、旧daemonは`shutdown cleanup: USB_IO`／`px4d stopped: USB_IO`で自ら exit 7、runtime残留なし・stray 0。再挿入後（port `5-1.2`、新address）`--list` ready、新daemon d4が1秒でready、card status/ATR/reset/APDU 10 rc 0、T 10秒（116651）・S 0V 10秒（160725）全counter 0、d4 exit 0。**PASS**（restart-based recovery） |
+| 15V拒否 | 先行`e17m1ur-5be907`（A、b2）でopt-inなし・ありとも`UNSUPPORTED` exit 3（上記） |
+
+**PX-S1UR（`s1urq-81b3aa`、12:22:21〜12:53:56 UTC／21:22〜21:53 JST、`DONE errorcount=0 verdict=PASS`）**
+
+| 区分 | 結果 |
+|---|---|
+| 受信（d1） | ISDB-T 527143 10秒 115835、557142 10秒 115839 packets、全counter 0、rc 0 |
+| ISDB-S拒否 | 1318000 slot0 0V要求は受信開始前に`INVALID_ARGUMENT` exit 2、packets 0。直後status ready/free |
+| stop/reopen（d1） | 527143→527143→557142→527143の5秒×4（58714／59532／59536／59530）、全counter 0 |
+| card（d1、d2） | 前後でstatus/ATR/reset/APDU 10 rc 0 |
+| daemon再起動（d2） | 527143・557142各5秒（58715／58720）、全counter 0 |
+| 30分soak（d2） | ISDB-T 527143 1800秒（wall 1803秒）、**20,667,610 packets / 3,885,510,680 bytes**（Linux S1UR記録と同数）、全counter 0、empty intervals 128,048、exit 0。受信中**APDU 300/300**（60回×5）。status 6回すべてready/streaming・errors 0 |
+| 資源（px4d） | handle 189→197→195→189、private bytes 18.5→22.1→22.0 MB→18.4 MB、thread 10→7→6。disposition `安定` |
+| card抜去/再挿入・USB切断/再接続（`phys-df3e4e`、13:07:25〜13:17:48 UTC、`DONE errorcount=0 verdict=PASS`） | 抜去でgeneration 1→7、`NO_CARD` exit 9、cardなしT 5秒全counter 0。再挿入でgeneration 13、card操作rc 0、T 5秒（59532）全counter 0。受信中のUSB抜去でclient `DISCONNECTED` exit 7（423466 packets）、旧daemon `USB_IO`で exit 7、残留なし。再挿入後の新daemon d4は1秒でready、card操作rc 0、527143・557142各10秒（115834／115839）全counter 0、d4 exit 0 |
+
+- 失敗・無効試行（保存済み）: `m1urq-cce233`（11:33:51 UTC、`Get-FileHash`が見つからずscript停止）、
+  `m1urq-65a196`（11:35:23 UTC、ZIP照合後に`Expand-Archive`の`DestinationPath`がnull）はいずれもdaemon起動前の
+  script不具合で、device操作・残留なし。上記`phys-6af665`のUSB stepは無効（card stepは有効）。
+- 手順の置換・未確認:
+  - SPEC 10.2.7/Linux認定のPC/SC併走APDUは、Windows Phase 1にPC/SC adapterがないため受信中の直接`px4ctl card-apdu`
+    （各300/300）で置き換えた。native-card-adapterは対象外（N/A）のまま。
+  - 同一lease retuneはWindowsで未確認（`retune_tool`はPOSIX IPC専用、`px4-ts`にretune機能なし）。stop/reopenと
+    別leaseでのT/S切替だけを確認した。
+  - 同一daemonのUSB自動再接続は対象外（旧daemonは`USB_IO`で終了し、新規起動で復旧）。同一serial衝突中の
+    `--usb-path`による個別起動は未確認。
+- 判定: 両機種とも10.2.7の共通認定項目のうち、Windows 11 x64 native libusb pathで識別、firmware、機種固有system
+  （M1UR T/S 0V・15V拒否、S1UR T・ISDB-S拒否）、capture、stop/reopen、daemon再起動、status、card抜去/再挿入・
+  ATR/reset/APDU、USB切断後の復旧、cleanup、30分連続受信をPASSとした。tunerとcard coreを`今回再検証`、
+  same-lease retuneを`未認定`とする。
+
+### Q3U4 LNB端子間電圧（`e17volt-183347`、`e17volt0-183600`、2026-10-10 09:33〜09:36 UTC／18:33〜18:36 JST）
+
+- ユーザーの明示許可を得て、Q3U4単独、衛星F端子からアンテナ線を外した無負荷開放端で、ユーザーがテスター
+  （DC 20V range）を芯線・外導体間に当てて目視した。daemonは`--allow-lnb-power`、receiver 0、ISDB-S 1318000 slot 0、
+  `--tune-timeout-ms 30000 --duration-seconds 120`。
+- 15V要求（09:33:48〜09:34:18 UTC）: アンテナなしでlockできず30秒で`TIMEOUT`（exit 5、packet 0）。ユーザー観測は
+  「tune中の30秒間15Vを維持し、終了後すぐ0V」。意図した120秒保持ではなく、tune timeoutで終了した点を注記する。
+- 0V要求: 同runの0V phase（09:34:48〜09:35:19）はテスター外れのため不採用。`e17volt0-183600`で再実施
+  （09:36:02〜09:36:32、同じくexit 5）し、ユーザー観測は「ずっと0V」。
+- 両runともdaemon exit 0、最終status全receiver free、runtime残留なし、stray 0。数値の小数点以下は記録していない。
+  要求はreceiver 0（bridge 1）からだけで、bridge 2側S receiverからの要求と代表負荷時の給電能力は未測定
+  （`loaded supply unverified`）。
+
+### 全tuner × 局の受信確認
+
+- `e17chan-0ecb7a`（2026-10-10 09:53:07〜10:01:57 UTC／18:53〜19:01 JST）: daemonはopt-inなし。各captureは
+  `--channel <ch> --tune-timeout-ms 10000 --duration-seconds 10`、各roundでS 4 receiver・T 4 receiverを同時実行し、
+  全receiverが各局を1回ずつ受ける並び。事前sanity（T527143、S1318000 slot0）OK。終了後CARD rc 0、APDU 10 OK、
+  daemon exit 0、残留なし。
+  - 地上波13 ch（T16/17/19/21–27/30/31/32）× receiver 2/3/6/7: 東京の8局（T16/21/22/23/24/25/26/27）は32/32で
+    全counter 0。T31/T32は4/4。T30はreceiver 7だけexit 8（TEI 11088、CC 584、既知burst形）、他3は0。T17は
+    receiver 7でTEI 1（CC 0）、他3は0。T19は4 receiverとも`TIMEOUT`（packet 0）。
+  - 衛星38 slot（BS 26 slot、CS 12 transponder CS2–CS24）× receiver 0/1/4/5: BS 26 slotは104/104で全counter 0。
+    CS2–CS18とCS22は全receiverで0。CS20はreceiver 5だけTEI 4626/CC 270（他3は0）、CS24は4 receiverすべてTEI
+    920〜3070/CC 14〜323。sync/queue/USBは全capture 0。
+- 不採用の先行試行: `e17chan-f165a7`、`e17chan-db2a63`（09:44〜09:45 UTC。S指定の引数組立て誤りでexit 2、
+  T受信もTIMEOUT）、`e17chan-366e07`（09:46〜、アンテナ線未接続のため全TIMEOUT。ユーザーが停止を要求）。
+  いずれもcapture未成立で、daemon停止・残留なしを確認。
+- `e17rerun-f326ae`（10:22:13〜10:23:07 UTC／19:22〜19:23 JST、ユーザーがアンテナ側の新しい分配器を交換した後）:
+  T19はreceiver 2/3/6でrc 0・全counter 0、receiver 7はTEI 16069/CC 829（exit 8、既知burst形だが件数は他の観測より多い）。
+  CS20は4/4で0。CS24はreceiver 0/1/4で0、receiver 5だけTEI 26/CC 2。対照のT27（4/4）とBS15_0（4/4）は全counter 0。
+  終了後CARD/停止/残留確認OK。
+- 判定: T19/CS20/CS24の初回失敗は受信設備（新しい分配器）由来と判断した（同時期にユーザーがWebTS.appでも
+  T19を受信できないことを確認、交換後に回復）。初回結果は失敗として保持する。CS24 receiver 5の残りと
+  T17 receiver 7のTEI 1は、CS最上位帯の弱電界・単発として扱う。ユーザーは2026-10-10に受信確認を完了と判断した。
+
+### 2時間soak（`e17soak-e2c170`、2026-10-09 22:27:59〜10-10 00:28:16 UTC／10-10 07:28〜09:28 JST）
+
+- ユーザー決定: 対象E17、Q3U4、2時間**連続**（30分×4分割ではない）。直前に60秒のsmoke（`e17soak-smoke583`、PASS）。
+- 内容: daemon（opt-inなし）上で8受信を同時に7200秒（上記の周波数）。10分ごと12回、`px4ctl status`、
+  `card-apdu --repeat 10`、px4d/px4-tsのhandle数・working set・private bytes・thread数を記録。retune/stop-reopenは
+  soak中に行っていない。開始前・終了後のCARD status/ATR/reset/APDU 10はrc 0。
+- snapshot 12回すべてready、card present、streaming 8、APDU rc 0（10/10）、daemon status `usb-errors=0 protocol-errors=0`。
+- 終了時counter（全receiver exit 8。sync/TEI/queue/USBはreceiver 0–6で0）:
+
+| receiver | packets | continuity errors | TEI |
+|---|---|---|---|
+| 0（S、bridge 1） | 114473712 | 8 | 0 |
+| 1（S、bridge 1） | 114473330 | 8 | 0 |
+| 2（T、bridge 1） | 82666557 | 12 | 0 |
+| 3（T、bridge 1） | 82667332 | 12 | 0 |
+| 4（S、bridge 2） | 114474034 | 5 | 0 |
+| 5（S、bridge 2） | 114472758 | 5 | 0 |
+| 6（T、bridge 2） | 82667031 | 11 | 0 |
+| 7（T、bridge 2） | 82662682 | 629 | 10975 |
+
+- 資源推移（px4d、12点）: handle 243→242（min 242/max 243）、private bytes 120254464→120139776、working set
+  126615552→117518336、thread 12→8。px4-ts合計working setも減少。disposition `安定`。終了後daemon exit 0、
+  runtime残留なし、stray px4d/px4-ts 0。
+- 原判定: receiver 0–6のCCが非0のため、SPEC 10.2-7の基準ではFAIL（orchestratorの判定も`verdict=FAIL`）。
+  px4-userlandは欠落ごとの時刻を出力しないため、欠落が同時刻だったかは本runから判定できない。
+- 比較（`px4drv-soak-main1`、2026-10-10 06:55:36〜08:55:53 UTC／15:55〜17:55 JST）: 同じQ3U4・PC・
+  受信チャンネル（BS15/TS0 ×4、T22 ×4）で`tsukumijima/px4_drv` WinUSB版（`px4_drv_winusb-260922.zip`、SHA-256
+  `1e25e2ea9ac1894ebbe3ba9cb0e18d6beb772f4f42e51a0d1e22bfcaaa2a48ac`、Q3U4の`DeviceInterfaceGUID`をZadig bindingに
+  合わせ、`DiscardNullPackets=false`）をBonDriver経由で8受信同時7200秒受信し、リポジトリ外の計測tool
+  `bon-ccprobe-ts.exe`（SHA-256 `8225cebf111a7989e4c8a455cfc7ba6192e2c010b6dd658420ebf5134b64d5b1`）で欠落ごとの時刻を
+  記録した。burstの出た1 tuner（T1: TEI 11036、CC 620）を除く7 tunerの安定後CCは計53件（S0 6、S1 6、S2 10、S3 10、
+  T0 5、T2 8、T3 8）。うち51件は07:47:58.402〜.536 UTC（16:47:58 JST、約134 ms）に全8 tunerで同時に起き、残り2件は
+  受信開始約1.3秒後のT2/T3各1件。TEIは0、それ以外の約1時間50分は欠落0。DriverHostのhandle数は全記録点で263、
+  終了後processなし。px4_drv側ではCARD APDUを行っていない。計数規則（dup計上、startup除外）はpx4-tsと同一ではない。
+- disposition（2026-10-10ユーザー決定、SPEC v0.32 §10.5の0.2.0限定受入判断）: 同一bridge・同一chの2受信で件数が一致する署名と総数（61件 vs 53件）が
+  px4_drvと同等であることから、残存CCは2時間に1回程度のhost/USB側の一時停止による環境由来の一斉欠落とみなし、
+  **注記付きで受入**とする。原試行のcounterとexit 8は書き換えない。px4-userland側の欠落時刻は未取得であり、
+  一斉欠落だったことは件数の並びからの推定である。#50の大量欠落（RAW_IO以前）はこの結果をもって解消と判断する。
+
+### receiver 7
+
+- 短時間matrix（TEI 10953〜10985、CC 558〜638）、soak（TEI 10975、CC 629）、全局確認のT30（TEI 11088、CC 584）・
+  T19 rerun（TEI 16069、CC 829）で、receiver 7だけに起動直後の既知形burstを観測した。sync/queue/USB errorは0、
+  stream停止・crash・stale leaseなし。
+- 同一個体・同一RF・同一PCのpx4_drv WinUSB版2時間でも1 tunerだけに同形のburst（TEI 11036、CC 620）が出た。
+  Windows上でのSPEC 10.2.6a比較として、soakのTEIは参照以下、CCは参照より9件多い（計数規則差あり）。
+- `e17rest-f83190`（30秒）でもreceiver 7だけTEI 11047、CC 674。
+- 2026-10-10ユーザー決定: receiver 7は既知burstとして扱い、0.2.0のブロッカーにしない。v0.1.10限定のdisposition
+  （SPEC v0.29 §10.5）は継承せず、SPEC v0.32 §10.5に0.2.0限定の受入判断として記録した。
+
+### claim判定（E17、Windows 11 x64 native libusb、Phase 1）
+
+| model × feature | 判定 | 根拠・範囲 |
+|---|---|---|
+| Q3U4 tuner（grouping、firmware、ISDB-T/S capture、stop/reopen、USB disconnect/reconnect） | 今回再検証 | `e17r2-fef601`、全局確認、soak。receiver 7は上記扱い |
+| Q3U4 card core（ATR、reset、反復APDU、抜去/再挿入、USB再接続後） | 今回再検証 | `e17r2-fef601`、soak中のAPDU 12回 |
+| Q3U4 LNB 0/15/0（無負荷開放端） | 今回再検証（receiver 0のみ） | `e17volt-*`。15V保持は30秒、代表負荷は未測定 |
+| M1UR/S1UR 同一serial列挙・曖昧指定拒否 | 今回再検証 | `e17multi-c80689` |
+| M1UR tuner（ISDB-T/S 0V capture、15V拒否opt-inなし/あり、stop/reopen、daemon再起動、USB切断後の再起動復旧、30分連続） | 今回再検証 | `m1urq-92a667`、`usb-714d78`、`e17m1ur-*`（15V拒否） |
+| M1UR card core（ATR、reset、反復APDU、受信中APDU 300/300、抜去/再挿入、USB再接続後） | 今回再検証 | `m1urq-92a667`、`phys-6af665`（card stepのみ）、`usb-714d78` |
+| S1UR tuner（ISDB-T capture、ISDB-S拒否、stop/reopen、daemon再起動、USB切断後の再起動復旧、30分連続） | 今回再検証 | `s1urq-81b3aa`、`phys-df3e4e`、`e17s1ur-653101` |
+| S1UR card core（ATR、reset、反復APDU、受信中APDU 300/300、抜去/再挿入、USB再接続後） | 今回再検証 | `s1urq-81b3aa`、`phys-df3e4e` |
+| M1UR/S1UR same-lease retune | 未認定 | Windows用retune toolなし。stop/reopenと別leaseのT/S切替のみ |
+| native-card-adapter（WinSCard/PC/SC） | 対象外（N/A） | Phase 2以降 |
+
+上記4項目およびM1UR/S1UR profile試験の完了により、README・SPEC 10.3・release-validation §0のWindows行を、PX-Q3U4と
+PX-M1UR/PX-S1URは`tuner-hardware-verified`／`card-core-hardware-verified`（M1UR/S1URはsame-lease retune未認定を注記）、
+その他のmodel/profileは`hardware-unverified`へ更新した。native-card-adapterは全機種N/A。
+ready行の非ASCII切断（[Issue #52](https://github.com/Khronos31/px4-userland/issues/52)）は既知の制限として併記した。
+
+### 未実施・逸脱・残課題
+
+- multi〜全局確認のrunはrunごとの新規展開をせずsoakの展開先を再使用した（`e17rest-f83190`、`m1urq-92a667`、
+  `s1urq-81b3aa`は新規展開。後二者の物理操作sub-runは親runの展開物を再照合して使用）。
+- M1UR/S1URのPC/SC併走APDUは直接`px4ctl card-apdu`で置換（Windows Phase 1にPC/SCなし）。same-lease retuneは
+  Windowsで未確認（`retune_tool`はPOSIX IPC専用、`px4-ts`にretuneなし）。同一serial衝突中の`--usb-path`個別起動も未確認。
+- `phys-6af665`のUSB stepはorchestratorの誤検出（`px4d --list`のopen_failed）で無効、`usb-714d78`で再実施した。
+- E17手順のrunnable setupは`$RT`を事前作成しないが、px4dは存在しない`--runtime-dir`を`NOT_FOUND`で拒否する。
+  また同setupはWindows PowerShell 5.1前提（PowerShell 7では`CreateDirectory(path, acl)`が使えない）。手順へ反映した。
+- 非ASCII `--runtime-dir`でのpx4d ready行stderr切断（上記、[Issue #52](https://github.com/Khronos31/px4-userland/issues/52)）は0.2.0の既知の制限。0.2.xで修正予定。
+- SPEC 10.5-2の再現性確認のうち、両runのrunner image・実効toolchain/build inputの突合は本節の時点で未完了。2026-10-11に実施し一致（上記CI項）。
+- 他8 binary archiveの必須短時間matrixは本節の時点で未実施。2026-10-11に実施した（上の2026-10-11節）。
+- soakの欠落時刻（px4-userland側）は未取得。#50はopen（RAW_IO以前の大量欠落は解消、2時間1回程度の同時欠落は
+  px4_drvでも再現）。M1UR B1のdaemon not-readyは原因未解明。
+
+## 2026-10-09 v0.2.0 candidate（Windows native CI green / hardware-unverified）【不採用】
+
+- 不採用: このcandidate（`8180783`）とその後の`9e2fa3e`は実機E17前後でWindows Q3U4のbridge単位CC欠落（[Issue #50](https://github.com/Khronos31/px4-userland/issues/50)）が判明し、RAW_IO修正を含む`8c40d49`へ置き換えた（上記2026-10-10節）。以下のhash・CI記録は当時のcandidateのもので、0.2.0の最終candidateではない。
+
+- candidate: version `0.2.0`、source commit `818078382df9dec347082d8f2c49ea339ea2d1e6`、branch
+  `feat/windows-phase1`。tag・merge・release公開はしていない。
+- CI: push run [`37847893047`](https://github.com/Khronos31/px4-userland/actions/runs/37847893047) と
+  dispatch run [`37847901323`](https://github.com/Khronos31/px4-userland/actions/runs/37847901323) は全job
+  SUCCESS。Windows native job `113553917724`/`113553971785` は6 executable suite、exact release ZIPのCLI
+  smoke、fixture cleanupがすべてPASS（fixture length 25、worst worker socket path 74 bytes）。
+- artifact: 9 binary archiveとcorresponding-source archiveの計10 archive、外側`SHA256SUMS`（10件）。両runの
+  10 archiveはbyte-identicalで、checksumを照合した。外側`SHA256SUMS`も両runで一致。9 binaryのmanifestは
+  version `0.2.0`とcandidate `source_ref`を持ち、dependency noticeとembedded audit evidenceも両runで同一。
+
+| 配布binary archive | SHA-256 | 実機status |
+|---|---|---|
+| `px4-userland-0.2.0-linux-glibc-x86_64.tar.gz` | `e48b8e43687e90650b9a9a089d0b49404aa278eb8c57d45ab154c308353c2986` | 未認定（未実施） |
+| `px4-userland-0.2.0-linux-musl-x86_64.tar.gz` | `06e486830e34e311d3f82aabeaca41ef819cec102abe6af9d2ab5b821a2e2538` | 未認定（未実施） |
+| `px4-userland-0.2.0-linux-glibc-aarch64.tar.gz` | `02dc1dd27a97e9435d1be0e1e2dde82ac9bd2d45ee5f57c101ab944f112bae6d` | 未認定（未実施） |
+| `px4-userland-0.2.0-linux-musl-aarch64.tar.gz` | `b32ffcf8f83d3cba73bf28a501b3b8b285d89c10348ef8d9fe66353c664d9c0b` | 未認定（未実施） |
+| `px4-userland-0.2.0-darwin-arm64.tar.gz` | `73ba974ae74233d8432c79acdeaef45dcf1b1058ee64b04427d630629e556421` | 未認定（未実施） |
+| `px4-userland-0.2.0-android-aarch64.tar.gz` | `68f52a27cbf09bd3ea99697c1ad9a8dea74586666d35fc50c3100243261e3bba` | 未認定（未実施） |
+| `px4-userland-0.2.0-android-armv7a.tar.gz` | `322817f954afa4c2b0b89bf4d5727c17394507d904b2b6c971b6f83bd62375a0` | 未認定（未実施） |
+| `px4-userland-0.2.0-android-x86_64.tar.gz` | `1b17b10ea0974d27d8b48e0a78e438e8206e26f397e5757945c1b2f9a563374c` | 未認定（未実施） |
+| `px4-userland-0.2.0-windows-x86_64.zip` | `20d16cf733c38bd122fd2d4748512e9948223c059f45a812e8bddbe73e1a9a5e` | 未認定（未実施） |
+
+corresponding-source archive: `px4-userland-0.2.0-source.tar.gz` SHA-256
+`cf6778e132fef2a40fd4f38779366e7eb6d9fdfa03958fe2d79b1b651a1b9abf`。
+
+- input: pinnedなlibusb 1.0.30、Android NDK 27.3.13750724、Windows llvm-mingw 20250910 UCRT x86_64、
+  workflow/source/build optionsはcandidate commitで一致。ただしrunner上でfloatするartifact生成toolchain
+  （compiler/SDK/NDK等）の実効観測値はinventoryしていない。archive bytesは一致したが、SPEC 10.5-2の
+  input一致gateは未完了（pending）である。
+- shared POSIX影響: Windows Phase 1はPOSIX runtimeを変更した。`posix_ipc.h`/`control_server.h`の
+  `NativeHandle`/`PathChar` aliasと`valid()`述語（`>= 0`→`!= kInvalidHandle`）、`control_server.cpp`の
+  `empty_path()` helper、`control_workers.h`の`WakeHandle`、`px4d_signals.h`の追加stop API
+  （`request_stop`/`notify_cleanup_complete`/`cleanup_complete`。POSIXではflag設定とno-op）がPOSIX buildにも
+  及ぶため、「POSIX runtime未変更」とは扱わない。一方、POSIXのUSB transport、TS aggregation/demux、
+  firmware framing/hash、sleep timing primitiveは挙動を保持し、sleep呼出しとfirmware file openは`#else`側の
+  元のPOSIX codeを維持する。
+- 失敗試行: `532acd1` ShellCheck SC2015、`3de7d51` control startup error 255、`94f4f87` 診断で
+  default LOCALAPPDATA owner AdministratorsとAF_UNIX OKを確認、`8180783` fixture修正で解消。
+- 実機USB/tuner/card/LNBは未実施で`未認定`。soakはユーザー未決定。release未公開。
+
 ## 2026-10-09 Windows Phase 1 実装状況（native offline PASS / hardware-unverified）
 
 - 状態: `未認定`（物理機能）。WindowsはSPEC v0.30でPhase 1の対象へ追加した。物理tuner/card/LNB/USBの
@@ -25,7 +544,8 @@ Stable release の検証記録は本ファイルへ日付付きで追記する�
   - 3 CLI (`px4d`/`px4-ts`/`px4ctl`) の `--help` が exit 0。
 - 未実施: 物理USB/tuner/card/LNBの実機matrix。`hardware-unverified`を維持し、
   `tuner-hardware-verified`／`card-core-hardware-verified`とは表示しない。
-- Windows CI jobは未実行（push時に実行予定）。
+- Windows CI jobは未実行（push時に実行予定）。これは本節作成時点の記録であり、上記の「2026-10-09 v0.2.0
+  candidate」節でCIを実行して置き換えた。CI成功は実機evidenceではなく`hardware-unverified`を維持する。
 - WinSCard互換DLLとMicrosoft PC/SC IFD登録は今回の対象外（Phase 2以降で検討）。
 
 ## 2026-10-08 v0.1.10 release-candidate試験

@@ -1,9 +1,25 @@
 # px4-userland 仕様
 
-Status: Frozen v0.31 (2026-10-09)
+Status: Frozen v0.33 (2026-10-11)
 
 本書の`MUST`、`MUST NOT`、`SHOULD`は規範要件を示す。実機観測で前提の誤りが判明した場合も暗黙に
 実装だけを変えず、本書のversionと変更理由を更新してから実装する。
+
+### v0.33 change record (2026-10-11)
+
+- 10.5節: 0.2.0のreceiver 7について、E03でのSPEC 10.2.6a fresh比較（候補/`px4_drv`交互5組）の結果と、
+  参照並みとして既知制限に含めるユーザー決定を0.2.0限定の受入判断へ追記する。10.2.6aの規則、原記録、
+  hardware claimの範囲は変更しない。
+
+### v0.32 change record (2026-10-10)
+
+- 10.5節: 0.2.0の実機観測とユーザー決定に基づく、当該release限定の受入判断を明記する。
+  非ASCII endpoint pathでのready行切断（Issue #52）を0.2.0の既知の制限として記録する。
+- 10.3節: Windows 11 x64行にPX-Q3U4およびPX-M1UR/PX-S1URの0.2.0 E17実機evidenceを記載する。
+  E17 Windows 11 x64の2時間soakでreceiver 0〜6に残った少数のCC欠落は、同一条件の`tsukumijima/px4_drv`
+  WinUSB版2時間でも同等の全receiver同時欠落が出たことから環境由来として受け入れる。receiver 7の
+  TEI/continuity burstは既知不具合として継続する。原記録、TS integrity計数、CLI exit、実装、
+  将来releaseの一般受入条件は変更しない。v0.29のv0.1.10限定判断を0.2.0へ継承したものではない。
 
 ### v0.31 change record (2026-10-09)
 
@@ -1163,7 +1179,7 @@ featureのhardware evidenceがない場合は`build-tested / hardware-unverified
 | Bliss OS / x86_64 / Termux | 正式launcher、2-FD、Bionic CLI、T/S、内蔵card、process/FD/endpoint cleanup |
 | Google TV Streamer / ad-hoc APK | 対象外。実機検証はdtv-android所管であり、本リポジトリのevidence recordへ取り込まない |
 | M2 Mac mini / macOS | native libusb、grouping、T/S、内蔵card、実PC/SC consumer |
-| Windows 11 x64 / native libusb | `windows-2022` CI build、Windows native offline test、PE/import/archive audit。実機は`hardware-unverified` |
+| Windows 11 x64 / native libusb | `windows-2022` CI build、Windows native offline test、PE/import/archive audit。PX-Q3U4はnative Windows 11実機でT/S capture、8 receiver、内蔵card、USB/card抜差し（0.2.0 E17）。PX-M1UR/PX-S1URは同実機でprofile別T/S capture、30分連続受信、内蔵card、USB/card抜差し（same-lease retuneは未認定）。非ASCII endpoint pathのready行切断は既知の制限 #52。他profileは`hardware-unverified` |
 
 TermuxとAPKは同一hardwareでも別access pathである。APK経路はdtv-android所管として本リポジトリのclaim対象外とする。
 SCS native、HAOS Alpine add-on、native Linux、macOSもそれぞれ別runtime pathであり、証拠が直接存在するか継承条件を
@@ -1248,6 +1264,26 @@ macOSのUSB再接続後にreceiver 0〜3で観測したCC `5/5/6/6` は原因未
 これは当該releaseのリスク受入であり、原失敗を合格へ書き換えたり、hardware claimの範囲を広げたり、
 今後のreleaseで同様の異常を自動免除する規則ではない。詳細は
 [`validation-results.md`](docs/platforms/validation-results.md)のv0.1.10記録を参照する。
+
+0.2.0に限る受入判断（2026-10-10、ユーザー決定）: candidate `8c40d495850c332312cd4293489f400c8fb842d4`の
+E17 Windows 11 x64で、Q3U4 8 receiver同時の2時間soakの終了時にreceiver 0〜6でcontinuity error
+`8/8/12/12/5/5/11`（TEI、sync、queue drop、USB errorは0、各exit 8）を観測した。px4-userlandは欠落時刻を
+記録していない。同じQ3U4・host・受信channelで`tsukumijima/px4_drv` WinUSB版を2時間受信した比較では、
+burstの1 tunerを除く安定後のCC 53件のうち51件が約134 msの1回の全receiver同時欠落に集中し、TEIは0だった。
+同一bridge・同一channelの2 receiverで件数が一致する署名と総数が同等であることから、この残存CCを
+host/USB側の一時停止による環境由来の同時欠落として非blockingとする。px4-userland側が同時欠落だったことは
+件数の並びからの推定であり、計数規則も参照toolと同一ではない。receiver 7のTEI/continuity burst
+（E17短時間matrix、soak、全局確認で観測）は既知不具合として継続し、ブロッカーから除く。同じhost上の
+参照px4_drvでも1 tunerに同形のburstが出たが、10.2.6aの全試行非悪化を証明したとは表示しない。
+E03 `linux-glibc-x86_64`での10.2.6a fresh比較（同条件の候補/`px4_drv`交互5組、各8同時受信30秒）では、
+receiver 7のTEI/continuityはpair1で候補だけに、pair2で候補と参照の両方に同等のburstが出て、pair3〜5は両者0だった。
+2026-10-11のユーザー決定により、このburstを参照並みとして10.2.6aの既知制限に含め、0.2.0のブロッカーにしない。
+また、非ASCII文字（U+00FFを超える文字）を含むendpoint pathでは、px4dのready行（stderr）がその文字以降と改行を
+欠く（[Issue #52](https://github.com/Khronos31/px4-userland/issues/52)）。daemonの動作、endpoint作成、後続の診断出力には
+影響せず、ready判定は`px4ctl status`で行えるため、0.2.0の既知の制限として扱い0.2.xで修正する。
+これは当該releaseのリスク受入であり、原失敗を合格へ書き換えたり、hardware claimの範囲を広げたり、
+今後のreleaseで同様の異常を自動免除する規則ではない。詳細は
+[`validation-results.md`](docs/platforms/validation-results.md)の0.2.0 E17記録を参照する。
 
 Stable公開前に、次の条件をすべて満たすこと。
 

@@ -65,6 +65,11 @@
 
 機能軸別の対応状況は下表のとおりです（SPEC 10.3 準拠）。
 
+v0.2.0候補（`8c40d49`）では配布binary 9種（Windows ZIPを含む）の短時間実機確認を実施しました。
+結果は[Windows（E17）](docs/platforms/validation-results.md#2026-10-10-v020-candidate-e17-windows-11-x64-実機試験q3u4必須matrix-pass--soak注記付き受入)と
+[他8 archive](docs/platforms/validation-results.md#2026-10-11-v020-candidate-8-binary-archive短時間matrixe02e07e15)の検証記録を参照してください。
+PX-Q3U4のreceiver 7の既知不具合は、E03での`px4_drv`との交互比較（5組）の結果を含めて同記録に記載しています。
+
 v0.1.10では配布binary 8種の短時間実機確認を実施しました。PX-Q3U4のreceiver 7の既知不具合と、
 macOSで1回観測したUSB再接続後のCC異常（追加20回では未再現）を含む判定・検証範囲は、
 [今回の検証記録](docs/platforms/validation-results.md#2026-10-08-v0110-release-candidate試験)を参照してください。
@@ -83,7 +88,9 @@ macOSで1回観測したUSB再接続後のCC異常（追加20回では未再現�
 | Android Termux（aarch64 / armv7a / x86_64） | PX-Q3U4 | 完了 | 未認定（receiver 7のfresh参照比較条件を満たす根拠なし） | 未認定（receiver 7のfresh参照比較条件を満たす根拠なし） | 該当なし（N/A） | 各ABIのv0.1.9 candidateで2-FD launcher、8 receiver受信、card hotplug/APDU、USB reconnect後の復旧を実機確認済み。receiver 7のburstを含む個別claimの判定は[検証結果](docs/platforms/validation-results.md)参照。 |
 | Android Termux（aarch64 / armv7a / x86_64） | PX-M1UR / PX-S1UR | 完了 | 未認定（一部実機試験） | 未認定（一部実機試験） | 該当なし（N/A） | 各architectureでT/S該当系統と受信中APDUを確認。card抜去/再挿入とUSB切断/再接続は未実施。APKは対象外。 |
 | Android ad-hoc APK | PX-Q3U4 | 対象外 | 対象外 | 対象外 | 該当なし（N/A） | dtv-android 所管。本リポジトリの配布物・release gate には含めません（過去の内部試験記録は検証結果参照） |
-| Windows 11 x64（Phase 1） | 全model/profile | 対象（cross-build確認済み） | 未検証（hardware-unverified） | 未検証（hardware-unverified） | 該当なし（N/A） | `px4d`/`px4-ts`/`px4ctl`とlocal IPC（CARD_*含む）。Windows native CIでoffline testを実行。実機evidenceが得られるまで`hardware-unverified`。WinSCard互換DLLとPC/SC IFD登録はPhase 2 |
+| Windows 11 x64（Phase 1） | PX-Q3U4 | 完了 | 検証済み | 検証済み | 該当なし（N/A） | native libusb（WinUSB）。0.2.0 candidateでE17の8 receiver受信、card hotplug/APDU、USB再接続後のdaemon再起動、2時間soak、全局受信を確認（[検証記録](docs/platforms/validation-results.md#2026-10-10-v020-candidate-e17-windows-11-x64-実機試験q3u4必須matrix-pass--soak注記付き受入)）。既知の制限: 非ASCII endpoint pathでready行が途切れる（[Issue #52](https://github.com/Khronos31/px4-userland/issues/52)）。WinSCard互換DLLとPC/SC IFD登録はPhase 2 |
+| Windows 11 x64（Phase 1） | PX-M1UR / PX-S1UR | 完了 | 検証済み | 検証済み | 該当なし（N/A） | native libusb（WinUSB）。0.2.0 candidateでprofile別30分連続受信（受信中の直接APDU 300/300）、機種固有T/S（M1UR ISDB-S 0V・15V拒否、S1UR ISDB-S拒否）、stop/reopen、card抜去/再挿入、USB切断・再接続後のdaemon再起動による復旧、同時接続時のlist/JSONと曖昧serial拒否を確認。同一lease retune、同一daemonの自動USB再接続、衝突中の`--usb-path`による個別起動は未認定。既知の制限: [Issue #52](https://github.com/Khronos31/px4-userland/issues/52)。PC/SCはPhase 2 |
+| Windows 11 x64（Phase 1） | その他のmodel/profile | 完了 | 未検証（hardware-unverified） | 未検証（hardware-unverified） | 該当なし（N/A） | 実機evidenceなし |
 
 各claimは、明記したmodel/profile × runtime/access path × featureにだけ適用されます。別のmodel/profile、runtime/access path、featureへ検証結果を推論しません。表に記載のない組合せはverified claimの対象外です。
 
@@ -481,6 +488,10 @@ PX-Q3U4 内蔵の IC カードリーダーは `px4d` が管理します。本ソ
 > **LNB 15V 給電の安全に関する注意**
 > 衛星アンテナ設備への LNB 15V 給電は、配線や他の給電機器（ブースターやテレビなど）との競合を確認した上で行ってください。LNB 給電に対応する機種でも、誤給電を防ぐため、デーモン起動時の `--allow-lnb-power` と受信時の `px4-ts --lnb-voltage 15` の双方を明示した場合に限り 15V を要求できます。
 > PX-M1UR と DTV02-1T1S-U / DTV02A-1T1S-U の LNB 15V 給電はサポート対象外です。M1UR の実機開放端測定では、両オプションを指定しても 0V のままでした。DTV02系は未実測ですが、参照 `px4_drv` のLNB setterが無効です。candidate `2f555ff` はこれらT/S兼用機種の15V要求をopt-inの有無によらずGPIO書込み前に拒否します。公開済みv0.1.7でこれらの機種に15V要求を試した場合、修正版へ移行する前にUSBを物理的に抜き差しし、以前の給電状態を持ち越さないでください。給電が必要な設備では外部給電を別途用意してください。
+
+> [!NOTE]
+> **Windows: 非ASCII pathでのready行の途切れ（0.2.0）**
+> runtime directory（既定は`%LOCALAPPDATA%\px4-userland`。日本語ユーザー名の場合も該当）に日本語など非ASCII文字を含むと、`px4d`のstderrに出る`px4d ready: … endpoint=…`行がその文字の手前で途切れ、改行も出ません（[Issue #52](https://github.com/Khronos31/px4-userland/issues/52)、0.2.xで修正予定）。デーモンの動作や後続のメッセージには影響しません。ready判定には`px4ctl status`を使うか、ASCIIのみの`--runtime-dir`を指定してください。
 
 ## ビルド方法
 
