@@ -1,9 +1,15 @@
 # px4-userland 仕様
 
-Status: Frozen v0.33 (2026-10-11)
+Status: Frozen v0.34 (2026-10-11)
 
 本書の`MUST`、`MUST NOT`、`SHOULD`は規範要件を示す。実機観測で前提の誤りが判明した場合も暗黙に
 実装だけを変えず、本書のversionと変更理由を更新してから実装する。
+
+### v0.34 change record (2026-10-11)
+
+- 10.5節: 実機確認の対象が実機試験に用いるfinal candidateの配布binary archiveであり、
+  公開物はtag CIのarchive（候補archiveと文書以外のpayloadがbyte-identicalであることを確認したもの）である関係を明確にする。
+  試験要件そのものは変更しない。
 
 ### v0.33 change record (2026-10-11)
 
@@ -1304,8 +1310,9 @@ Stable公開前に、次の条件をすべて満たすこと。
    同一であることをrelease record上で確認できれば一致として扱う。正規化（UUID・署名・timestampのマスク等）
    による合格は認めない。source commit、toolchain/build inputs、static/dynamic link inventory、relink結果、
    artifact checksum、licenseおよびsource提供条件をrelease recordに残す。
-3. 公開するfinal candidateの配布binary archive 9種すべて（8つのtar archiveとWindows ZIP 1つ）について、対応する
-   OS/architectureの実機で短時間確認を毎回行う。
+3. 実機試験に用いるfinal candidateの配布binary archive 9種すべて（8つのtar archiveとWindows ZIP 1つ）について、対応する
+   OS/architectureの実機で短時間確認を毎回行う。公開する配布物はtag CIが生成したarchiveとし、候補archiveと
+   実行ファイル等の文書以外のpayloadがbyte-identicalであることを照合で確認する。
    artifact別のhostと手順は`docs/release-validation.md`のmatrixに従い、各archive個別に列挙、daemon動作中の
    B-CASカード抜去/再挿入（不在状態・ATR/reset・反復APDUの復帰）、短い受信、停止、USB disconnect/reconnect後の復旧、
    process/endpoint残留確認を行う。Windows ZIPはWindows 11 x64の実機で、列挙・ready、receiver capture、CARD_*操作、

@@ -7,7 +7,7 @@ Stable releaseは次の順で進める。
 1. リリース候補のsource commitを固定し、そのcommitからCIでcandidate artifactを作る。
 2. candidate artifactを展開し、必要な全OS/architectureで実機試験と仕様変更の試験を完了する。
 3. 試験結果を文書に記録してcommitする。
-4. その結果commitにタグを付け、release CIを実行して公開する。
+4. その結果commitにタグを付け、release CIを実行して公開する（公開手順は [`releasing.md`](releasing.md) を参照）。
 
 工程2の全試験が完了するまではcandidate commitを固定して使う。工程2の完了後、工程3で試験結果を記録するcommitは次工程への移行であり、candidateの差し替えではない。工程3の結果commit後に工程2へ戻って実機試験を繰り返さない。candidateのsource、package、build inputを工程2の完了前に変更した場合は、その変更を含む新candidateをCIで作り、影響する試験を行う。
 
