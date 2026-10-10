@@ -6,6 +6,76 @@
 
 Stable release の検証記録は本ファイルへ日付付きで追記する。新しい records directory や template framework、汎用スクリプトは作らない。release record には候補 version/commit/CI run、10 archive（9 binary + source。binaryは8 tar archiveとWindows ZIP）と checksum/audit結果、baseline tag と各 artifact の byte-identity 判定、変更の hunk-level 影響（call-path/guard）、claim ごとの `継承` / `今回再検証` / `未認定` / `対象外`、canary/soak の選定理由（環境ID E01–E17、固定順の位置、単一OS規則による非該当を含む）、各 test の環境ID・host・device/USB ID・runtime/access path・archive SHA-256・UTC時刻・コマンド・counter・結果・ログ保存先、未実施または非該当の物理操作と理由を記録する。canonical 環境ID と手順は [`release-validation.md`](../release-validation.md) を正本とする。Android ad-hoc APK は dtv-android 所管であり本記録に含めない。
 
+## 2026-10-11 v0.2.0 candidate 8 binary archive短時間matrix（E02–E07、E15）
+
+candidate・CI run・archive SHA-256は下記E17節と同一（source commit `8c40d495850c332312cd4293489f400c8fb842d4`、
+run `37996888969`の`release-candidate`）。外側`SHA256SUMS`で10件OKを確認した後、各archiveを試験hostへ転送し、
+各runで新規展開して内側`SHA256SUMS`とmanifest（version `0.2.0`、`source_ref`はcandidate commit、platformは対象target）を確認した。
+手元buildで代替していない。Q3U4は同一個体（base serial `00001205000960`、half `601/602`）、B-CAS、両RF lead、
+15V adapterを使用。firmwareは2169 bytes、SHA-256 `5213a5a38872661277a2cc1b2dfdfe88faf06f41205f460f3b51857f0568b484`。
+LNBは0V（`--allow-lnb-power`なし）。日時は2026-10-10 UTC（JSTでは10-11 00:10〜01:55）。
+raw log保存先はHAOSの`/config/.work/px4-0.2.0/`配下（各dirの`log/`）。ユーザー決定によりsoakとPX-M1UR/PX-S1URの追加試験は行っていない。
+
+| target | archive SHA-256 | 環境・日時 UTC | log |
+|---|---|---|---|
+| linux-glibc-x86_64 | `578d67a159b35b85b8a1b30362d0f288454d90aef12dafa3a443d433ed5a2390` | E03 Latitude、AnduinOS2.0.4/kernel7.0.0-34、一般user（uid1000、`video`/`plugdev`所属）、15:10:42〜15:18:23 | `e03-09ed0d/` |
+| linux-musl-x86_64 | `5219760847ba1f0ff40e54057b21b5992a8ee5ba26cf468f82763ff8692e2bbb` | E02 HAOS18.3/kernel6.18.52 Supervisor Alpine試験addon（container root）、PC/SC smoke 15:22:59〜、matrix 15:24:07〜15:28:54 | `e02-09ed0d/` |
+| linux-glibc-aarch64 | `5a7a1b38a77aba48745a9ac7ff0fcc096121f668d867a45a7c83715c9fa9ac0a` | E15 Switch、Fedora42/L4T4.9.140、一般user、15:31:59〜15:43:12 | `e15g-5ce4df/` |
+| linux-musl-aarch64 | `6d7f7e691c3ed4aeb2b618fc56c09fe4b23c41c5764e265bf808d3d14ac75f18` | E15同host、native Alpine3.22.5 rootful Podman container（uid0）、15:45:59〜15:51:17 | `e15m-5ce4df/` |
+| darwin-arm64 | `869e598ca55f0060973aaeff736f8d477ffd0f3a801b582c960dc504dd25e1c4` | E04 M2 Mac mini/macOS26.6.2/Darwin25.6.0、16:50:14〜16:55:19 | `e04-f42ef8/` |
+| android-aarch64 | `449da5c91c5995d4eac52704359e949b8bb0432136efb99efa9deaafd8a14ac6` | E05 Pixel9a/Android17/kernel6.1.162、Termux0.118.3/Termux:API0.53.0、15:56:04〜16:04:04 | `e05-88b80b/` |
+| android-armv7a | `f3445e80b4408f08892eae9c4c30c5a6dd577cd2c035fead2c5870ddd736f07c` | E06 Google TV Streamer/Android14/kernel5.15.180、Termux0.119.0-beta.3、16:25:06〜16:31:01 | `e06-78174a/` |
+| android-x86_64 | `75e095ecff2ae7c09a743c1d9bc37581d0ed7d30a9837112799e2248e7aec0ac` | E07 Bliss OS/Android13/kernel6.1.112、Termux0.118.3、16:39:47〜16:46:22 | `e07-95aea8/` |
+
+コマンドと受信条件はv0.1.10節と同じ（§0.1の列挙、daemon起動、`px4ctl status/list/card-*`と
+`card-apdu 90:30:00:00:00 --repeat 10`、8 receiver各30秒、USB切断clientと再接続後の新daemon、TERM/wait/runtime残留確認。
+S1318000kHz slot0 / T527143kHz、receiver0〜3は`--channel BS15_0/T22`を併用）。Linux/macOSはv0.1.10の
+`matrix-posix.sh`、Termuxは`termux-matrix.sh`（正式`px4-termux`の2-FD経路）をリポジトリ外で次の点だけ変更して使用した:
+物理操作の検知待ちを各900秒に延長、USB抜去/再接続の判定をclaim中も消えないUSB実在数（Linux: sysfsの`0511:084a`数、
+macOS: `ioreg -p IOUSB`、Termux: `termux-usb -l`、E07はsysfs照合でQ3の2 pathのみ）で行う、Termuxでは各launcher起動前に
+両pathへ`termux-usb -r`を実行する、`--list-json`のkey・型・値（enclosure/devices/receiver system・LNB capability）照合を追加（Linux/macOS）。
+USB/cardの物理操作は通知後にユーザーが実施した。
+
+全8 archiveで列挙/ready8（Linux/macOSは`--list-json`照合OK、Termuxは`termux-usb -l`と`px4ctl list`）、
+カード抜去で`present=no`・reader-generation 1→2・ATR/APDU exit9（`NO_CARD`）、再挿入でgeneration3・ATR/reset/APDU10成功、
+各8 receiver captureの中間時点でstreaming8・APDU10成功、USB切断でclient exit7（`DISCONNECTED`）・旧daemon/launcher自己終了exit7、
+再列挙後の新daemon ready・8 receiver受信・APDU10、通常停止（Linux/macOSはdaemon exit0、Termuxはrunnerの`daemon stop clean`判定）、runtime dir除去、
+残留processなしを確認した。旧daemonのstop理由はE15 musl・E04で`USB_IO`、他は`DISCONNECTED`（exit7は共通）。
+receiver0〜6のTS sync/TEI/CC/queue/USBは全8 archive・全3 captureで0、全receiverのbytes=packets×188。
+
+receiver7の各matrix 30秒区間（TEI/CC、sync/queue/USBは全0。非0の区間はexit8、0/0の区間はexit0）:
+
+| target | 初回 / card再挿入後 / USB再接続後 |
+|---|---|
+| E03 glibc x86_64 | 10980/577、11029/710、10941/605 |
+| E02 musl x86_64 | 0/0、10853/567、11047/611 |
+| E15 glibc aarch64 | 11075/619、10983/690、11042/593 |
+| E15 musl aarch64 | 10962/576、10979/631、10980/608 |
+| E04 macOS | 10981/620、11027/644、10962/558 |
+| E05 aarch64 | 10918/540、11028/609、10986/611 |
+| E06 armv7a | 0/0、10959/635、10952/594 |
+| E07 x86_64 | 10966/582、11037/634、11020/674 |
+
+本節ではreceiver7の10.2.6a参照比較を実施していない。0.2.0に限るSPEC §10.5の受入判断はE17を対象とし、本節には適用しない。
+
+E02は試験addonのDockerfile・candidates・config.yaml・Supervisor optionsを`/config/.work/px4-0.2.0/e02-backup/`へ退避し、
+candidate musl archiveを`candidates/`へstage、bashとoverlay entrypointを追加した一時Dockerfileでrebuildして実行した。
+entrypointはarchive/firmware SHA-256照合後、既存`userland-stable-run`のPC/SC smoke（q3u4、serial `00001205000960`、30秒、siano0、LNB0）を実行し
+（status passed、daemon/pcsc/card exit0、PC/SC reader確認、receiver0〜6 exit0・receiver7 exit8）、続けてmatrixを実行した。終了後addonはstopped。
+ユーザー指示によりaddonの元設定への復元は行っていない（退避は保持）。
+E15 muslはv0.1.10試験image `localhost/px4-010-matrix:alpine322`へ`apk add jq`だけを加えたimage
+`localhost/px4-020-matrix:alpine322`（ID `1d728e15af20`）の`--rm`一時containerで実行し、終了後container消滅を確認した。
+E05/E06/E07のUSB permissionは各launcher起動前の`termux-usb -r`で取得した。E06の再接続後（新path `/001/105`、`/001/106`）は
+第1 pathの要求がTermux:API側で`Permission request timeout`を返した後、両pathでlauncherがready8となった。
+E07はOS起動USB等を接続したまま、sysfs vendor/product/half serial照合でQ3の2 pathだけを選択した。
+
+試行の逸脱:
+
+- E05の初回試行（`e05-88b80b/attempt1-invalid-longpath/`）は試験用runtime dirを長い作業dir配下に置いたrunで、px4dが
+  `serial endpoint: INVALID_ARGUMENT`を出してready前に終了した（GATE-INCOMPLETE、物理操作前）。runner側の設定不備として無効とし、
+  短いruntime dir（`$PREFIX/tmp/e05r2`、endpoint path 102 bytes）で新規展開して再実施した上表のrunを記録する。
+- E05の2回のTermux preflightで`termux-info`を実行し、Androidのclipboardを上書きした。E06/E07ではこれを除いた。
+
 ## 2026-10-10 v0.2.0 candidate E17 Windows 11 x64 実機試験（Q3U4必須matrix PASS / soak注記付き受入）
 
 - candidate: version `0.2.0`、source commit `8c40d495850c332312cd4293489f400c8fb842d4`（`feat/windows-phase1`、
@@ -349,7 +419,7 @@ ready行の非ASCII切断（[Issue #52](https://github.com/Khronos31/px4-userlan
   また同setupはWindows PowerShell 5.1前提（PowerShell 7では`CreateDirectory(path, acl)`が使えない）。手順へ反映した。
 - 非ASCII `--runtime-dir`でのpx4d ready行stderr切断（上記、[Issue #52](https://github.com/Khronos31/px4-userland/issues/52)）は0.2.0の既知の制限。0.2.xで修正予定。
 - SPEC 10.5-2の再現性確認のうち、両runのrunner image・実効toolchain/build inputの突合は未完了。
-- 他8 binary archiveの必須短時間matrixは未実施（Windows対応で共通codeの変更が多いため、全環境で回帰をやり直す予定）。
+- 他8 binary archiveの必須短時間matrixは本節の時点で未実施。2026-10-11に実施した（上の2026-10-11節）。
 - soakの欠落時刻（px4-userland側）は未取得。#50はopen（RAW_IO以前の大量欠落は解消、2時間1回程度の同時欠落は
   px4_drvでも再現）。M1UR B1のdaemon not-readyは原因未解明。
 

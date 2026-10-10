@@ -65,6 +65,10 @@
 
 機能軸別の対応状況は下表のとおりです（SPEC 10.3 準拠）。
 
+v0.2.0候補（`8c40d49`）では配布binary 9種（Windows ZIPを含む）の短時間実機確認を実施しました。
+結果は[Windows（E17）](docs/platforms/validation-results.md#2026-10-10-v020-candidate-e17-windows-11-x64-実機試験q3u4必須matrix-pass--soak注記付き受入)と
+[他8 archive](docs/platforms/validation-results.md#2026-10-11-v020-candidate-8-binary-archive短時間matrixe02e07e15)の検証記録を参照してください。
+
 v0.1.10では配布binary 8種の短時間実機確認を実施しました。PX-Q3U4のreceiver 7の既知不具合と、
 macOSで1回観測したUSB再接続後のCC異常（追加20回では未再現）を含む判定・検証範囲は、
 [今回の検証記録](docs/platforms/validation-results.md#2026-10-08-v0110-release-candidate試験)を参照してください。
