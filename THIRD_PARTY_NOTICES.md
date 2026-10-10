@@ -2,8 +2,8 @@
 
 This document describes the dependencies and materials for the currently implemented `release-candidate` packaging
 contract. It is not, by itself, a declaration that the project is stable or ready for a general release. The release
-candidate workflow generates and audits eight platform archives plus one corresponding-source archive, then uploads them
-together with an outer `SHA256SUMS` file.
+candidate workflow generates and audits nine binary archives (eight tar archives plus the Windows ZIP) and one
+corresponding-source archive, then uploads them together with an outer `SHA256SUMS` file.
 
 ## No vendored dependency in the repository source
 
@@ -18,8 +18,8 @@ firmware, APK/add-on material, and vendor drivers.
 
 ## libusb license copy in binary archives
 
-Every Linux, macOS, and Android binary archive includes the exact libusb 1.0.30 license text at `libusb/COPYING`, verified
-against the pinned SHA-256.
+Every binary archive (Linux, macOS, Android, and Windows) includes the exact libusb 1.0.30 license text at
+`libusb/COPYING`, verified against the pinned SHA-256.
 
 Primary license text: [libusb 1.0.30 `COPYING`](https://github.com/libusb/libusb/blob/v1.0.30/COPYING).
 
@@ -78,22 +78,50 @@ and any dependency outside `/usr/lib/` and `/System/Library/`, and to enforce th
 
 The Linux and macOS binary archives include `libusb/COPYING` but do not carry the libusb source themselves. Their prominent
 `DEPENDENCY-NOTICE.txt` identifies libusb 1.0.30, static linkage, LGPL-2.1-or-later, and the corresponding-source archive of
-the same candidate handoff, which contains the exact libusb source, verification hashes, and the Linux and macOS
-build/relink instructions in `BUILD-RELINK.md`. The license copy in every binary archive supplies the license text; the
+the same candidate handoff, which contains the exact libusb source, verification hashes, and the Linux, macOS, and
+Windows build/relink instructions in `BUILD-RELINK.md`. The license copy in every binary archive supplies the license text; the
 separate source archive supplies the exact source and source/relink materials. Both parts of the LGPL-2.1-or-later section 6
 route apply.
 
 Primary PC/SC license reference: [pcsc-lite `COPYING`](https://github.com/LudovicRousseau/PCSC/blob/master/COPYING).
 The exact host package versions remain deployment-specific system inputs and are not copied into the native archives.
 
+## Windows Phase 1 archive
+
+The Windows archive is a Phase 1 x86_64 UCRT build for `px4d.exe`, `px4-ts.exe`, and `px4ctl.exe`.
+It is produced with the pinned, checksum-verified llvm-mingw toolchain. `px4d.exe` statically includes the
+same-toolchain libusb 1.0.30 under LGPL-2.1-or-later; `px4-ts.exe` and `px4ctl.exe` do not link libusb. The archive
+includes the exact `libusb/COPYING` and does not include `libusb-1.0.dll`. The executables dynamically load Windows
+system libraries only, including the UCRT and the WinUSB, SetupAPI, Cfgmgr32, AdvAPI32, and hid libraries that libusb
+loads at runtime. The C++/unwinder (`libc++`/`libc++abi`/`libunwind`), `winpthreads`, `winstorecompat`, and MinGW-w64
+runtime portions are statically linked into the executables.
+
+Because those runtimes are statically linked, the archive ships the exact narrow toolchain license texts under
+`toolchain/`, taken from the same pinned, checksum-verified toolchain archive and audited against fixed SHA-256 values:
+
+- `toolchain/LICENSE.TXT` (LLVM Project, Apache-2.0 WITH LLVM-exception);
+- `toolchain/mingw32/COPYING` and `toolchain/mingw32/COPYING.MinGW-w64.txt` (MinGW-w64, Zope Public License 2.1 with
+  marked exceptions);
+- `toolchain/mingw32/COPYING.MinGW-w64-runtime.txt` (MinGW-w64 runtime licensing);
+- `toolchain/mingw32/COPYING.winpthreads.txt` and `toolchain/mingw32/COPYING.winstorecompat.txt` (MIT).
+
+Only these narrow license files are shipped; no compiler binary or toolchain source bulk is vendored into the
+repository or the archive. The prominent `DEPENDENCY-NOTICE.txt` names the toolchain and the exact license paths.
+The archive does not include WinSCard DLLs, Microsoft PC/SC IFD registration, kernel drivers, or WinUSB INF files.
+The source of the statically linked runtime materials is the pinned toolchain archive recorded in the build script
+and in SPEC 7.5.
+
 ## CI and archive audit
 
 The local packaging scripts and `.github/workflows/build_userland.yml` implement the same release-candidate contract.
 They require explicit already-built platform inputs, strict `N.N.N` version matching, and the exact pinned libusb source
 where Android or source packaging needs it. They audit archive allowlists, required files, manifests, checksums, path
-traversal, symlinks/hardlinks, firmware, Windows, probe, kernel/DKMS, and vendor content.
+traversal, symlinks/hardlinks, firmware, probe, kernel/DKMS, and vendor content. Legacy `windows/`/`win32/` source or
+vendor/kernel trees remain rejected; only the Phase 1 Windows ZIP's allowlisted members (the three CLIs and the
+narrow `toolchain/` license texts) are accepted and audited. A member named `libusb-1.0.dll`, or a `px4d.exe` that
+imports that DLL, is rejected.
 
-The final CI artifact is named `release-candidate` and contains exactly these nine archives (eight binary plus one source)
+The final CI artifact is named `release-candidate` and contains exactly these ten archives (nine binary plus one source)
 and the outer `SHA256SUMS`:
 
 - `px4-userland-<version>-linux-glibc-x86_64.tar.gz`;
@@ -104,6 +132,7 @@ and the outer `SHA256SUMS`:
 - `px4-userland-<version>-android-aarch64.tar.gz`;
 - `px4-userland-<version>-android-armv7a.tar.gz`;
 - `px4-userland-<version>-android-x86_64.tar.gz`;
+- `px4-userland-<version>-windows-x86_64.zip`;
 - `px4-userland-<version>-source.tar.gz`.
 
 This artifact is a candidate handoff, not a Git tag or GitHub Release. Stable acceptance is described in [`SPEC.md`](SPEC.md):

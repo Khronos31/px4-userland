@@ -93,3 +93,41 @@ To relink with a modified LGPL libusb, modify a copy of
 frameworks (IOKit, CoreFoundation, Security) and `libobjc`. The IFD bundle
 does not link libusb. Firmware is neither required to compile nor present in
 this archive.
+
+## Windows x64 rebuild and LGPL static relink
+
+Install CMake, Ninja (or samurai/samu), Make, a POSIX shell, Python 3, curl, `tar`, `xz`, `sha256sum`, and `strings`.
+All commands below run from this archive root (the directory containing `repository/` and `third_party/`).
+
+`scripts/build-windows.sh` verifies and extracts the pinned toolchain and libusb source archives into a private
+temporary work directory that it removes on exit. Its `--cache` directory holds only the downloaded archives,
+not an extracted toolchain tree. Preseed the bundled, already-verified libusb archive so the production rebuild
+uses the corresponding source instead of downloading it, then cross-build the Phase 1 executables:
+
+```sh
+mkdir -p toolchain-cache
+cp third_party/libusb-1.0.30.tar.bz2 toolchain-cache/
+repository/scripts/build-windows.sh --output build-windows --cache "$PWD/toolchain-cache"
+```
+
+The toolchain and libusb versions and their SHA-256 values are fixed in the script. The archive ships the exact
+narrow llvm-mingw runtime license texts under `toolchain/`; no compiler binary or toolchain source bulk is
+included.
+
+`px4d.exe` statically includes libusb 1.0.30, which remains LGPL-2.1-or-later. `px4-ts.exe` and `px4ctl.exe` do
+not link libusb. The executables still dynamically load Windows system libraries, including the UCRT and the
+WinUSB, SetupAPI, Cfgmgr32, AdvAPI32, and hid libraries that libusb loads at runtime. `libusb-1.0.dll` is not
+produced or shipped. To relink with a modified copy of the bundled source:
+
+```sh
+cp -R third_party/libusb-1.0.30 build-libusb
+# Modify build-libusb, then rebuild. This path skips the archive checksum.
+repository/scripts/build-windows.sh --output build-windows-relink \
+  --cache "$PWD/toolchain-cache" \
+  --libusb-source-dir "$PWD/build-libusb"
+strings build-windows-relink/px4d.exe | grep -F 'the marker you added'
+```
+
+`build-windows-relink/` must contain `px4d.exe`, `px4-ts.exe`, and `px4ctl.exe`, and must not contain
+`libusb-1.0.dll`. The production release path accepts only the pinned, checksum-verified libusb source archive;
+local relink builds do not emit release evidence. Firmware is neither required nor present in this archive.

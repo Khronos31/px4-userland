@@ -10,7 +10,7 @@
 #include <memory>
 #include <condition_variable>
 #include <mutex>
-#include <poll.h>
+#include "test_poll_compat.h"
 #include <thread>
 
 namespace {

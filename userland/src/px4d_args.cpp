@@ -125,6 +125,14 @@ Px4dArguments parse_px4d_arguments(int argc,
             result.allow_lnb_power = true;
             continue;
         }
+#if defined(_WIN32)
+        if (option == "--exit-on-stdin-eof") {
+            if (result.exit_on_stdin_eof)
+                return invalid("duplicate --exit-on-stdin-eof");
+            result.exit_on_stdin_eof = true;
+            continue;
+        }
+#endif
         if (option != "--device" && option != "--firmware" &&
             option != "--runtime-dir" && option != "--fd" &&
             option != "--usb-path" && option != "--instance") {

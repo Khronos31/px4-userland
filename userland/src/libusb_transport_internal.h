@@ -19,6 +19,11 @@ namespace px4::userland {
 
 Error map_libusb_error(int error) noexcept;
 
+// Error translation for the native device-acquisition open/claim boundary
+// (discovery open, open_and_claim, and the Q3U4 native acquire).  See the
+// definition in libusb_transport.cpp for the per-backend conflict mapping.
+Error map_acquisition_error(int error) noexcept;
+
 class LibusbApi {
 public:
     using Context = void*;
@@ -67,6 +72,16 @@ public:
     virtual int bulk_transfer(Handle handle, std::uint8_t endpoint,
                               std::uint8_t* buffer, int length, int* transferred,
                               unsigned int timeout_ms) noexcept = 0;
+    // Optional native stream policy. Prepare runs before the first submit;
+    // finish runs only after every callback has drained. The default leaves
+    // POSIX transports and backends without RAW_IO unchanged.
+    virtual int prepare_stream(Handle, std::uint8_t, std::size_t*,
+                               bool* raw_io_enabled) noexcept
+    {
+        *raw_io_enabled = false;
+        return 0;
+    }
+    virtual int finish_stream(Handle, std::uint8_t) noexcept { return 0; }
     virtual Transfer alloc_transfer() noexcept = 0;
     virtual void fill_bulk_transfer(Transfer transfer, Handle handle, std::uint8_t endpoint,
                                     std::uint8_t* buffer, int length,
@@ -107,6 +122,11 @@ public:
     int bulk_transfer(Handle handle, std::uint8_t endpoint,
                       std::uint8_t* buffer, int length, int* transferred,
                       unsigned int timeout_ms) noexcept override;
+#if defined(_WIN32)
+    int prepare_stream(Handle handle, std::uint8_t endpoint,
+                       std::size_t* transfer_size, bool* raw_io_enabled) noexcept override;
+    int finish_stream(Handle handle, std::uint8_t endpoint) noexcept override;
+#endif
     Transfer alloc_transfer() noexcept override;
     void fill_bulk_transfer(Transfer transfer, Handle handle, std::uint8_t endpoint,
                             std::uint8_t* buffer, int length,
@@ -308,6 +328,7 @@ private:
     std::condition_variable_any stream_changed_;
     bool stream_active_;
     std::atomic<bool> abandoned_;
+    std::atomic<bool> stream_policy_failed_{false};
     std::unique_ptr<StreamState> stream_;
 };
 

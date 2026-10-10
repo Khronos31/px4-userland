@@ -16,3 +16,7 @@ __pycache__/
 # CMake and Android build output
 /build-userland*/
 /build-android-*/
+
+# Windows cross-build output and downloaded toolchain cache
+/build-windows*/
+/.windows-toolchain/

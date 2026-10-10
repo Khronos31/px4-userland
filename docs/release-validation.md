@@ -35,7 +35,7 @@ Stable releaseは次の順で進める。
 | E14 | FreeBSD x86_64 | 対象外（SPEC §1・§2の対象外。記録は履歴のみ） | 対象外 |
 | E15 | Fedora aarch64 | `linux-glibc-aarch64`必須matrix環境。既存記録はhistorical baseline | §6 / validation-results.md |
 | E16 | Debian x86/i386 | source-build-only（i386配布artifactなし） | §6 / [Debian i386](platforms/debian-i686.md) |
-| E17 | Windows 11 x86_64 | 対象外（別製品 `tsukumijima/px4_drv`） | 対象外 |
+| E17 | Windows 11 x86_64 | 毎回必須の回帰試験対象。PX-Q3U4は0.2.0 candidate `8c40d49`のE17実機matrix、PX-M1UR/PX-S1URは同candidateのWindows profile試験（same-lease retuneは未認定）で`tuner-hardware-verified`／`card-core-hardware-verified`（非ASCII endpoint pathのready行切断は既知の制限 [#52](https://github.com/Khronos31/px4-userland/issues/52)）。他profileは`未認定`（`hardware-unverified`） | §6 / validation-results.md |
 | — | Android ad-hoc APK | 対象外（dtv-android 所管。本リポジトリの gate に含めない） | 対象外 |
 
 ### 毎回必須の短時間実機matrix
@@ -52,8 +52,9 @@ Stable releaseは次の順で進める。
 | `android-aarch64` | E05 Termux aarch64 | 同上。2-FD launcher経由で受信する |
 | `android-armv7a` | E06 Termux armv7a | E05と同じ手順、armv7a archive |
 | `android-x86_64` | E07 Bliss OS Termux x86_64 | E05と同じ手順、x86_64 archive |
+| `windows-x86_64` | E17 Windows 11 x64 | E17のWindows手順。列挙・ready、短い受信、CARD ATR/reset/反復APDU、カード抜去・再挿入、USB切断・再接続後のdaemon再起動、cooperative shutdown後の残留確認 |
 
-このmatrixはrelease archive manifestの8 binary targetと、Q3U4の既存実機記録に基づく。過去の受信・抜差し結果は[validation-results.md](platforms/validation-results.md)に記録されている。[PR #15](https://github.com/Khronos31/px4-userland/pull/15)はfinal candidate artifact auditとhardware canaryを記録し、[Issue #4](https://github.com/Khronos31/px4-userland/issues/4)はusbip・LSM・libusb/access pathなどディストリビューション名だけでは覆えない検証軸を整理している。過去記録は今回candidateのmatrix結果を代替しない。
+このmatrixはrelease archive manifestの9 binary target（8 tar archiveとWindows ZIP 1つ）と、Q3U4の既存実機記録に基づく。過去の受信・抜差し結果は[validation-results.md](platforms/validation-results.md)に記録されている。[PR #15](https://github.com/Khronos31/px4-userland/pull/15)はfinal candidate artifact auditとhardware canaryを記録し、[Issue #4](https://github.com/Khronos31/px4-userland/issues/4)はusbip・LSM・libusb/access pathなどディストリビューション名だけでは覆えない検証軸を整理している。過去記録は今回candidateのmatrix結果を代替しない。
 
 各artifactの実機確認は列挙、短い受信、カード状態確認、B-CAS抜去/再挿入、USB切断/再接続、復旧確認を順に実行する。これら一連の確認に総時間上限を設けない。5分の上限はユーザーへ物理操作を依頼してから操作が完了するまでの待機だけに適用する。候補archiveのchecksum・展開、APDU、RF/電源/firmware、host準備は検証開始前に済ませる。5分以内に物理操作が行われなければ、その操作を未完了として記録し、物理deviceを使う工程を中断する。5分を超える連続負荷試験は短時間確認に混ぜず、ユーザーが決定するsoakへ分ける。
 
@@ -256,17 +257,17 @@ receiver 7 で TEI/continuity burst が出て、SPEC 10.2.6a の比較条件（�
 3. 対象 claim ごとに `継承`、`今回再検証`、`未認定`、`対象外` のいずれかを記録し、根拠を書く。証拠の軸は SPEC 10.2.8 に従う。別 model、別 OS/runtime、別 access path、別 feature へ結果を外挿しない。同一 model・同一 runtime/access path・同一 feature の証拠は、対象 artifact の bytes が baseline と同一であるか、変更がその path へ影響しないと 10.5.1 の表で判定できる場合に継承できる。未知の影響は affected として扱い、`対象外` は SPEC の対象外または本手順 §0 の対象外に限る。
 4. 前回の適格なlong soakの日付やrelease数は事実情報として記録できるが、エージェントがsoak有無・時間・OSを決める規則として使わない。
 
-Termuxのarchitecture、Termux launcherのFD path、glibc/musl、native PC/SC adapterは別々のruntime/access pathとして扱う。WindowsとFreeBSD、Android ad-hoc APKは対象外である。変更も新規claimもないpathを毎回試験しない。
+Termuxのarchitecture、Termux launcherのFD path、glibc/musl、native PC/SC adapterは別々のruntime/access pathとして扱う。Windows 11 x64（E17）は0.2.0以降の毎回必須の回帰試験対象であり、releaseごとにnative libusbのtunerとCARD_*、実機の物理回帰を必須とする。CIのbuild/offline test成功は`build-tested`のみを示し、実機matrixが未完了の間は当該行を`未認定`（`hardware-unverified`）として扱う。FreeBSDとAndroid ad-hoc APKは対象外である。変更も新規claimもないpathを毎回試験しない。
 
 影響分類が複数にまたがる、依存範囲が不明、または非影響を証明できない場合は `unknown/ambiguous` として、影響し得るpath集合をユーザーへの説明に含める。配布artifactごとの必須短時間matrixは影響判定に関係なく毎回実施する。
 
 ## 2. source / CI / candidate artifact gate（毎回）
 
 1. 候補 commit に対応する `portable userland foundation` workflow を確認する。path filter 等により自動実行されていなければ、GitHub Actions の `workflow_dispatch` でその候補 ref を指定して実行する。
-2. workflow 内の unit/offline test、各 target build、source/relink、`release-candidate` と、それに依存する4つの Ubuntu/Alpine × x86_64/aarch64 artifact smoke job がすべて成功していることを確認する。失敗 job を無視して先へ進まない。
-3. `release-candidate` artifact が候補 commit の `source_ref` を示し、8 binary archiveと対応 source archiveの計9 tar archive、およびその外側 `SHA256SUMS` を含むことを確認する。チェックサムを照合し、CIの manifest・license・corresponding-source・binary/source archive audit が通っていることを確認する。
+2. workflow 内の unit/offline test、各 target build、source/relink、`release-candidate` と、それに依存する4つの Ubuntu/Alpine × x86_64/aarch64 artifact smoke job、Windows cross-build/PE audit/packaging job、および同じWindows ZIPを実行するWindows native offline test job がすべて成功していることを確認する。失敗 job を無視して先へ進まない。`release-candidate` はWindows cross-buildとnative testの両方に依存し、native testが消費したものと同一のWindows ZIPを取り込む。test executable artifactは取り込まない。
+3. `release-candidate` artifact が候補 commit の `source_ref` を示し、9 binary archive（8 tar archiveとWindows ZIP 1つ）と対応 source archiveの計10 archive、およびその外側 `SHA256SUMS`（10件）を含むことを確認する。チェックサムを照合し、CIの manifest・license・corresponding-source・binary/source archive audit（Windows ZIPのPE/import/archive監査を含む）が通っていることを確認する。
 4. 工程2の試験完了前に候補source commitが変わった場合は、そのcommitのCIとartifactを取り直す。前のcommitのarchive、手元で別途作ったbuild、PR runの古いartifactを新candidateの代用にしない。工程3の試験結果commitは候補source commitの変更ではなく、工程4ではその結果commitにタグを付けてrelease CIを実行する。
-5. release CIが生成した8 binary archiveを展開し、実機試験に使ったfinal candidate archiveと各payloadを比較する。更新された`README.md`、それを反映した`manifest.json`の`source_ref`およびREADMEのhash、内側の`SHA256SUMS`以外に差があれば公開を止めて原因を調べる。source archiveは工程3の記録commitを含むためbinary candidateのsource archiveとは異なる。比較したrun、archive、差異の判定をrelease recordへ記録する。
+5. release CIが生成した9 binary archiveを展開し、実機試験に使ったfinal candidate archiveと各payloadを比較する。更新された`README.md`、それを反映した`manifest.json`の`source_ref`およびREADMEのhash、内側の`SHA256SUMS`以外に差があれば公開を止めて原因を調べる。source archiveは工程3の記録commitを含むためbinary candidateのsource archiveとは異なる。比較したrun、archive、差異の判定をrelease recordへ記録する。
 
 手動dispatchとartifact取得には次の短いCLI手順を使える。`<candidate-ref>`、`<run-id>`、`<new-empty-dir>`を実際の値へ置き換え、artifactは新しい空ディレクトリへ展開する。既に成功済みの自動runが候補commitと一致するなら再dispatchしない。
 
@@ -280,18 +281,18 @@ gh run download <run-id> --name release-candidate --dir <new-empty-dir>
 
 CI が行う build・audit・smoke を成功後に同じ目的でローカル再実行しない。CIで失敗または未実施の項目がある場合に限り、原因調査に必要な既存コマンドを実行する。新しい汎用検証スクリプトは作らない。
 
-SPEC 10.5-2の再現性確認は、final candidateと同一source commitに対する独立した2回のclean CI candidate runで、8 binary archive、corresponding-source archiveの9 tar archiveすべてのSHA-256が一致し、各archive本体がbyte-identicalであり、かつ外側`SHA256SUMS`自体もbyte-identicalであることによる。比較は、§2のCLI手順で候補commitの`release-candidate` runを2本分取得してから、次の手順で行う。
+SPEC 10.5-2の再現性確認は、final candidateと同一source commitに対する独立した2回のclean CI candidate runで、9 binary archive（8 tar archiveとWindows ZIP 1つ）、corresponding-source archiveの10 archiveすべてのSHA-256が一致し、各archive本体がbyte-identicalであり、かつ外側`SHA256SUMS`自体もbyte-identicalであることによる。Windows ZIPもtar archiveと同じbyte一致比較の対象とし、ZIP内部のtimestamp正規化だけによる合格は認めない。比較は、§2のCLI手順で候補commitの`release-candidate` runを2本分取得してから、次の手順で行う。
 
 1. 1本目のartifactを新しい空ディレクトリ`<run1-dir>`へ、2本目のartifactを別の新しい空ディレクトリ`<run2-dir>`へ展開する。既に成功済みの同一commit runを1本目に使ってよい。
-2. 各ディレクトリで`sha256sum -c SHA256SUMS`を実行し、9件すべてがOKであることを確認する。
-3. 両runの9 archiveを個別に`cmp`で比較し、外側`SHA256SUMS`も`cmp`で比較する。
+2. 各ディレクトリで`sha256sum -c SHA256SUMS`を実行し、10件すべてがOKであることを確認する。
+3. 両runの10 archive（Windows ZIPを含む）を個別に`cmp`で比較し、外側`SHA256SUMS`も`cmp`で比較する。
 
 ```sh
 RUN1_DIR="/path/to/run1-dir"  # 展開先の実際のpathに置き換える
 RUN2_DIR="/path/to/run2-dir"  # 展開先の実際のpathに置き換える
 (cd "$RUN1_DIR" && sha256sum -c SHA256SUMS)
 (cd "$RUN2_DIR" && sha256sum -c SHA256SUMS)
-for a in "$RUN1_DIR"/*.tar.gz; do cmp "$a" "$RUN2_DIR/${a##*/}"; done  # 9 archiveのbyte一致を期待
+for a in "$RUN1_DIR"/*.tar.gz "$RUN1_DIR"/*.zip; do cmp "$a" "$RUN2_DIR/${a##*/}"; done  # 10 archiveのbyte一致を期待
 cmp "$RUN1_DIR/SHA256SUMS" "$RUN2_DIR/SHA256SUMS"    # 一致を期待
 sha256sum "$RUN1_DIR/SHA256SUMS" "$RUN2_DIR/SHA256SUMS"
 ```
@@ -310,7 +311,7 @@ gh run view <run-id> --job <job-id> --log > "$LOG/run-<run-id>-job-<job-id>.log"
 
 ## 3. 配布artifactごとの実機短時間確認（毎回必須）
 
-§0の8行すべてについて、candidate artifactそのものを使い、対応する環境で独立に実施する。必須確認の一連の操作に総時間上限は設けない。B-CAS/USBの物理操作はユーザーが行い、各操作を依頼した時点から最大5分待つ。各物理操作を依頼する直前にHAOS/SCS側でCodexは`beep`、Claude Codeは`vibe`を実行する。各runの記録にはarchive名/SHA-256、source commit、環境ID/OS version/architecture、機種/USB path、実施時刻、コマンド、終了値、card status/generation/ATR/APDU応答、TS/counter、残留の有無を残す。
+§0の9行すべてについて、candidate artifactそのものを使い、対応する環境で独立に実施する。Windows行はE17のWindows手順に従い、native Windows 11 x64で実施する。必須確認の一連の操作に総時間上限は設けない。B-CAS/USBの物理操作はユーザーが行い、各操作を依頼した時点から最大5分待つ。各物理操作を依頼する直前にHAOS/SCS側でCodexは`beep`、Claude Codeは`vibe`を実行する。各runの記録にはarchive名/SHA-256、source commit、環境ID/OS version/architecture、機種/USB path、実施時刻、コマンド、終了値、card status/generation/ATR/APDU応答、TS/counter、残留の有無を残す。
 
 1. 候補archiveのhash確認・展開、Q3U4のfirmware/RF/電源preflight、ログ先作成を済ませる。これらを含めて一連の確認に総時間上限は設けない。
 2. `px4d --list` と `--list-json` でQ3U4が8 receiver readyと列挙されることを確認し、JSON schema・boolean型・receiver capability値を照合する。M1UR/S1URのserial衝突やLNB非対応profile表示が変更対象なら、§0の該当する機種別追加確認も行う。
@@ -342,7 +343,7 @@ Linux musl aarch64はE15 Fedora aarch64上のAlpine arm64 Docker containerでcan
 - 2時間: 指定OSで、選択されたprofileに応じた負荷、反復status/APDU、retune/stop-reopen、FD数・RSSの経時傾向、cleanupを確認する。Q3U4では§0.1の8 receiver T/S混在を使う。
 - いずれもshell終了値だけで合否を決めない。TS/counterはSPECの受入条件を使う。FD/RSSは数値固定の合否閾値を設定せず、非安定な持続増加は`判定保留`として調査する。
 
-追加profile認定、single receiver認定、PX-M1UR/PX-S1UR同一serial確認、receiver 7比較の個別条件はSPEC 10.2.6a/10.2.7と各記録を参照する。これらの認定を毎回必須の8-artifact短時間matrixの代わりに使わない。
+追加profile認定、single receiver認定、PX-M1UR/PX-S1UR同一serial確認、receiver 7比較の個別条件はSPEC 10.2.6a/10.2.7と各記録を参照する。これらの認定を毎回必須の9-artifact短時間matrixの代わりに使わない。
 
 ### PX-M1UR / PX-S1UR の同一serial確認
 
@@ -377,7 +378,7 @@ release限定dispositionを適用する。原試行と追加試験を別々に�
 
 ハードウェア試験は [`platforms/validation-results.md`](platforms/validation-results.md) に日付付きで追記する。新しい records directory や template framework、汎用スクリプトは作らない。Stable release recordには少なくとも次を残す。
 
-- version、source commit、candidate workflow run、9 archiveと外側checksumの確認結果、toolchain/build input、static/dynamic link inventory、relink結果、license/corresponding-source条件
+- version、source commit、candidate workflow run、10 archive（9 binary archiveとsource archive）と外側checksumの確認結果、toolchain/build input、static/dynamic link inventory、relink結果、license/corresponding-source条件
 - 前回Stable tag、使用したbaseline evidence、baseline以後の累積差分、各artifactのbinary byte-identity判定
 - 変更impact分類と hunk-level の call-path / guard 適用条件、対象/除外したmodel-profile・runtime/access path・featureと根拠
 - claimごとの `継承` / `今回再検証` / `未認定` / `対象外`、exact candidateでの試験有無
@@ -395,7 +396,7 @@ release限定dispositionを適用する。原試行と追加試験を別々に�
 - READMEの各support claimが実証または適格なbaseline継承に対応し、未試験のmodel × runtime/access path × featureを認定表示していない。
 - crash、hang、use-after-free、stale lease、再接続不能、カード経路の重大な未解決issueがない。
 - 短時間matrixに未完了の配布artifactがある場合はStable gate未完了とし、そのままsupport表示だけで完了扱いしない。
-- SPEC 10.5-2の再現性確認（同一source commitの独立2 runによる9 archiveと外側`SHA256SUMS`のbyte一致）を、未実施のままpass扱いしない。toolchain/build inputが異なる比較はinconclusiveとして成功とせず、matching pairを取り直す。正規化比較による合格は認めない。
+- SPEC 10.5-2の再現性確認（同一source commitの独立2 runによる10 archive（Windows ZIPを含む）と外側`SHA256SUMS`のbyte一致）を、未実施のままpass扱いしない。toolchain/build inputが異なる比較はinconclusiveとして成功とせず、matching pairを取り直す。正規化比較による合格は認めない。
 - README、LICENSE、THIRD_PARTY_NOTICES、provenance、checksum、support表示、release archiveの内容が一致し、公開前レビュー済み。
 - 現行 inventory に無い機種は実機未検証としてREADMEに明示すればリリース可能。Betaを機種追加の代わりに使わない。
 
@@ -489,6 +490,256 @@ SPEC §1 の対象環境（Linux、Android、macOS）に含まれないため �
 
 - i386 配布 artifact は存在しない。source archive を native build し、CTest と Q3U4 の T/S 同時受信、内蔵 card APDU を確認する（[Debian i386](platforms/debian-i686.md)）。record は Stable `v0.1.3` source archive であり履歴。選定: 該当構成手順の変更時のみ。
 
-### E17 Windows 11 x86_64（対象外）
+### E17 Windows 11 x86_64（Windows archive必須matrix・Phase 1）
 
-px4 は Windows を対象外とする。Windows 利用者向けの `tsukumijima/px4_drv` は別製品・別 interface であり、本リポジトリの release gate・canary・long soak に含めない。
+- 位置づけ: `windows-x86_64`配布artifactの毎回必須の回帰試験対象。releaseごとにnative libusbのtunerと
+  CARD_*、実機の物理回帰を要求する。CIのbuild/offline test成功は`build-tested`のみを示し、本節が完了する
+  まで当該archiveのgateは未完了、support表示は`未認定`（`hardware-unverified`）である。
+  exact candidate archive（`px4-userland-<version>-windows-x86_64.zip`）をnative Windows 11 x64（実機）で
+  実行する。`windows-2022` CIはtest OSであり、Windows 11実機の代用にしない。
+- Phase 1範囲: `px4d`/`px4-ts`/`px4ctl`とversioned local IPCのCARD_*経路だけを使う。WinSCard互換DLLと
+  Microsoft PC/SC IFD登録はPhase 2以降で本節の対象外であり、native-card-adapter列は`該当なし（N/A）`とする。
+- preflight（read-only）:
+  - `$PSVersionTable.PSVersion`、`[System.Environment]::OSVersion`、`chcp`のdefault code page、`$env:LOCALAPPDATA`を記録する。
+  - `$env:LOCALAPPDATA`のowner SIDとACLを検証する。worker wake pipeの親検証（`verify_runtime_parent`）はownerが
+    現在user SIDと一致し、書込み可能なACEが現在user/SYSTEM/Administratorsだけであることを要求する。実測CI runner
+    では既定ownerが`BUILTIN\Administrators`でこの条件を満たさない。owner不一致、または現在user以外のuntrusted
+    writerがあれば、後述のruntime dir / ACLで示すタスク専用の安全な親を使う。owner SID・各ACE・protected flagを
+    記録し、この検証はdaemon起動前に行う。
+  - WinUSB backend: `Get-PnpDevice -PresentOnly`と`pnputil /enum-drivers`で対象USB ID（`0511:xxxx`）の現driver
+    bindingをinventoryとして記録する。ユーザー確認なしにWinUSB INF・driverのinstall/変更/削除
+    （`pnputil /add-driver`・`/delete-driver`等）を行わず、kernel driverやINFを導入しない。
+  - PX-S1UD/mirakc等の稼働経路を変更しない。対象Q3U4をclaim中の他daemonがあれば`px4d`が`busy`で失敗することを
+    確認する。firmwareは利用者が用意した既存ファイルを`--firmware`で指定するだけで、download・抽出・変換をしない。
+- runtime dir / ACL:
+  - daemonのworker wake pipeは`LOCALAPPDATA`を親として`verify_runtime_parent`（ownerが現在user SID、trusted
+    writerのみ）を通す必要がある。既定profileのACLがこの条件を満たすとは仮定しない。後述のrunnable setupは
+    常にタスク専用の短い親ディレクトリを作り、ownerを現在user SID、継承を切ったprotected DACLで現在userだけに
+    許可して、daemonへprocess-scopedで`LOCALAPPDATA`として渡す（setupの`$LAP`）。profile ACL・global env・
+    driverは変更しない。これは検証fixtureであり、製品defaultの不具合を修正したものではない。実際の製品運用でも
+    安全な親が必要で、その要件は製品の`verify_runtime_parent`のままとする。`$RT`はこの親の下に置き、worker
+    socketとendpoint socketの両方がAF_UNIXの108 byte未満に収まることをsetupで確認する。`px4d`は存在しない
+    `--runtime-dir`を`serial endpoint: NOT_FOUND`（exit 3）で拒否する（2026-10-10 native Windows 11で観測）ため、
+    `$RT`も親と同じowner・protected DACLで事前作成する。
+  - setupはWindows PowerShell 5.1（`powershell.exe`）で実行する。PowerShell 7の.NETには
+    `[System.IO.Directory]::CreateDirectory(string, DirectorySecurity)`がない。PowerShell 5.1で
+    `$ErrorActionPreference = 'Stop'`のままnative commandのstderrを`2>&1`で取り込むと終了errorになるため、
+    ready待ちのstatus poll等native commandを呼ぶ範囲は`$ErrorActionPreference`を`Continue`にする。
+  - endpointがsame-user private ACLであること、non-ASCII（UTF8）のruntime/firmware/output pathでもargv・
+    file openがACPで壊れないことを確認する。
+- コマンド（PowerShell。POSIX風の`/dev/null`・`sha256sum`・`$?`をそのまま使わない。空白入りpathに耐えるため
+  引数は配列で組み立て、`Start-Process -ArgumentList`の文字列連結は使わない）。`$D`はタスクごとの新しい
+  pathを使い、既存treeを`Expand-Archive -Force`で上書きしない。`$LOG`は使用前に作成する。redirectした
+  stdout/stderrは必ず`ReadToEndAsync`で drain してから待つ（drainしないとpipeが埋まり`WaitForExit`がhangする）:
+
+  ```powershell
+  $ErrorActionPreference = 'Stop'
+  $D = 'C:\px4-e17-<taskid>\extract'      # タスク固有の未使用path。既存pathを再利用しない。
+  $LOG = 'C:\px4-e17-<taskid>\log'
+  $ZIP = 'C:\path\to\px4-userland-<version>-windows-x86_64.zip'
+  if (Test-Path $D) { throw "refusing to reuse existing extraction path: $D" }
+  New-Item -ItemType Directory -Path $D | Out-Null
+  New-Item -ItemType Directory -Path $LOG | Out-Null
+  Get-FileHash -Algorithm SHA256 $ZIP
+  Expand-Archive -Path $ZIP -DestinationPath $D   # fresh $D への展開。-Force で既存を上書きしない。
+
+  # 既定profileのLOCALAPPDATA owner SID/ACLはread-onlyで記録する（変更しない）。
+  $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+  $lap = [System.Environment]::GetEnvironmentVariable('LOCALAPPDATA')
+  $lapAcl = Get-Acl -LiteralPath $lap
+  $lapOwner = $lapAcl.GetOwner([System.Security.Principal.SecurityIdentifier])
+  Write-Host "default LOCALAPPDATA=$lap owner=$($lapOwner.Value) currentUser=$($me.Value) protected=$($lapAcl.AreAccessRulesProtected)"
+  foreach ($ace in $lapAcl.Access) {
+    Write-Host "  lap ace identity=$($ace.IdentityReference) rights=$($ace.FileSystemRights) inherited=$($ace.IsInherited)"
+  }
+
+  # 既定profileのACLがworker親検証を満たすとは仮定できないため、常にタスク専用の保護された親を作る
+  # （検証fixture）。profile ACL・global env・driverは変更しない。製品defaultの不具合修正ではない。
+  $parentRoot = [System.Environment]::GetEnvironmentVariable('RUNNER_TEMP')
+  if (-not $parentRoot) { $parentRoot = [System.Environment]::GetEnvironmentVariable('TEMP') }
+  $LAP = Join-Path $parentRoot ('px4e17lap-' + [guid]::NewGuid().ToString('N').Substring(0,8))
+  if (Test-Path $LAP) { throw "refusing to reuse existing LOCALAPPDATA parent: $LAP" }
+  $acl = New-Object System.Security.AccessControl.DirectorySecurity
+  $acl.SetOwner($me)
+  $acl.SetAccessRuleProtection($true, $false)
+  $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+    $me, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+  [System.IO.Directory]::CreateDirectory($LAP, $acl) | Out-Null
+
+  $ID = '<device serial>'   # daemonの--device
+  $RT = Join-Path $LAP 'px4-e17-<taskid>'
+  # AF_UNIX sun_pathは108 byte未満。worker socketとendpoint socket（<RT>\px4-userland\<ID>\<name>.sock）の
+  # full sampleをUTF-8 byte数で確認する。
+  $sampleWorker = Join-Path $LAP ('px4-wake-' + ('0' * 16) + '\w.sock')
+  $sampleControl = Join-Path (Join-Path (Join-Path $RT 'px4-userland') $ID) 'control.sock'
+  $sampleStream = Join-Path (Join-Path (Join-Path $RT 'px4-userland') $ID) 'stream.sock'
+  $workerBytes = [System.Text.Encoding]::UTF8.GetByteCount($sampleWorker)
+  $controlBytes = [System.Text.Encoding]::UTF8.GetByteCount($sampleControl)
+  $streamBytes = [System.Text.Encoding]::UTF8.GetByteCount($sampleStream)
+  Write-Host "LOCALAPPDATA parent=$LAP workerSocketBytes=$workerBytes controlSocketBytes=$controlBytes streamSocketBytes=$streamBytes"
+  if ($workerBytes -ge 108 -or $controlBytes -ge 108 -or $streamBytes -ge 108) {
+    throw "socket path too long for AF_UNIX: worker=$workerBytes control=$controlBytes stream=$streamBytes"
+  }
+  # px4dは--runtime-dirの存在を要求する。親と同じowner・protected DACLで作る。
+  $rtAcl = New-Object System.Security.AccessControl.DirectorySecurity
+  $rtAcl.SetOwner($me)
+  $rtAcl.SetAccessRuleProtection($true, $false)
+  $rtAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+    $me, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+  [System.IO.Directory]::CreateDirectory($RT, $rtAcl) | Out-Null
+
+  # .NET Framework (PowerShell 5.1) ProcessStartInfo.Arguments用のWindows引用。
+  function ConvertTo-WindowsArg([string]$value) {
+    if ($value -notmatch '[ \t"]') { return $value }
+    $escaped = [regex]::Replace($value, '(\\*)"', '$1$1\"')
+    $escaped = [regex]::Replace($escaped, '(\\+)$', '$1$1')
+    return '"' + $escaped + '"'
+  }
+  function Join-WindowsArgs([string[]]$values) {
+    return ($values | ForEach-Object { ConvertTo-WindowsArg $_ }) -join ' '
+  }
+  function Start-OwnedProcess([string]$file, [string[]]$arguments, [bool]$stdin, [string]$localAppData) {
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $file
+    $psi.Arguments = Join-WindowsArgs $arguments
+    $psi.UseShellExecute = $false
+    # この子processだけにLOCALAPPDATAを渡す（通常のprofile環境は変更しない）。
+    if ($localAppData) { $psi.EnvironmentVariables['LOCALAPPDATA'] = $localAppData }
+    $psi.RedirectStandardInput = $stdin
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    return [pscustomobject]@{
+      Process = $proc
+      StdoutTask = $proc.StandardOutput.ReadToEndAsync()
+      StderrTask = $proc.StandardError.ReadToEndAsync()
+    }
+  }
+  function Stop-OwnedProcess($owned, [int]$boundMs, [string]$name) {
+    if (-not $owned.Process.HasExited) { $owned.Process.StandardInput.Close() }
+    $exited = $owned.Process.WaitForExit($boundMs)
+    if (-not $exited) {
+      # 未完processのdrain taskへResultで入らない。PID/timeout evidenceを保存してthrowする。
+      $owned.Process.Id | Out-File (Join-Path $LOG "$name.timeout.txt")
+      throw "owned $name $($owned.Process.Id) did not exit within ${boundMs}ms; do not force-kill without explicit failure-recovery authorization"
+    }
+    $stdoutDrained = $owned.StdoutTask.Wait(5000)
+    $stderrDrained = $owned.StderrTask.Wait(5000)
+    if (-not ($stdoutDrained -and $stderrDrained)) {
+      $owned.Process.Id | Out-File (Join-Path $LOG "$name.drain-timeout.txt")
+      throw "owned $name $($owned.Process.Id) exited but its output drains did not complete; evidence in $LOG"
+    }
+    $owned.StdoutTask.Result | Out-File (Join-Path $LOG "$name.out")
+    $owned.StderrTask.Result | Out-File (Join-Path $LOG "$name.err")
+    "$($owned.Process.ExitCode)" | Out-File (Join-Path $LOG "$name.rc")
+    return $owned.Process.ExitCode
+  }
+  function Start-Ts([int]$receiver, [string]$system, [int]$frequency, [string]$slot) {
+    $a = @('--device', $ID, '--receiver', "$receiver", '--system', $system, '--frequency-khz', "$frequency")
+    if ($slot) { $a += @('--slot', $slot) }
+    $a += @('--runtime-dir', $RT, '--output', 'NUL', '--duration-seconds', '30')
+    return Start-OwnedProcess (Join-Path $D 'px4-ts.exe') $a $false
+  }
+  function Wait-Captures($captures) {
+    $timeout = @()
+    foreach ($c in $captures) {
+      if (-not $c.Process.WaitForExit(90000)) {   # 30s tune + 30s capture + cleanup margin
+        # 未完processのdrain taskへResultで入らない。timeoutを記録し他captureの判定は継続する。
+        "$($c.Process.Id)" | Out-File -Append "$LOG\ts-timeout.txt"
+        $timeout += $c.Process.Id
+        continue
+      }
+      $stdoutDrained = $c.StdoutTask.Wait(5000)
+      $stderrDrained = $c.StderrTask.Wait(5000)
+      if (-not ($stdoutDrained -and $stderrDrained)) {
+        "$($c.Process.Id) drain incomplete" | Out-File -Append "$LOG\ts-timeout.txt"
+        $timeout += $c.Process.Id
+        continue
+      }
+      $c.StderrTask.Result | Out-File -Append "$LOG\ts.err"
+      "$($c.Process.ExitCode)" | Out-File -Append "$LOG\ts.rc"
+    }
+    if ($timeout.Count -ne 0) {
+      throw "TS capture(s) exceeded the 90s bound without Kill; evidence in $LOG\ts-timeout.txt: $($timeout -join ', ')"
+    }
+  }
+  & "$D\px4d.exe" --list | Tee-Object "$LOG\list.txt"
+  & "$D\px4d.exe" --list-json | Out-File "$LOG\list.json"
+  ```
+
+  daemon起動・ready確認・受信・CARD・停止（X-START/X-LOAD/X-MON/X-CARD-HP/X-STOP相当）。`$ID`は`--device`、
+  `$FW`は利用者提供firmware。daemonにはprocess-scopedで`LOCALAPPDATA=$LAP`を渡し、通常のprofile環境は変更しない。
+  標準入力をredirectし、`--exit-on-stdin-eof`でcooperative shutdownする。
+  ready判定はexit codeだけでなくstatusの`ready=yes` fieldを確認する。CARDは**daemon停止前**に実行する。
+  受信はQ3U4では8 receiverを**同時に**起動し（逐次実行で代用しない）、各processを有限時間で待つ。他profileは
+  SPEC 10.2.7の該当receiverだけを使う。コマンド失敗時も`finally`でowned stdinをcloseしてcleanupを試み、
+  主失敗を隠さない:
+
+  ```powershell
+  $owned = Start-OwnedProcess (Join-Path $D 'px4d.exe') `
+    @('--device', $ID, '--firmware', $FW, '--runtime-dir', $RT, '--exit-on-stdin-eof') $true $LAP
+  $primary = $null
+  try {
+    $ready = $false
+    for ($i = 0; $i -lt 30; $i++) {
+      $status = (& "$D\px4ctl.exe" --device $ID --runtime-dir $RT status 2>> "$LOG\px4ctl.err") | Out-String
+      $status | Out-File -Append "$LOG\status-start.txt"
+      if ($LASTEXITCODE -eq 0 -and $status -match 'ready=yes') { $ready = $true; break }
+      Start-Sleep -Seconds 1
+    }
+    if (-not $ready) { throw 'px4d did not reach ready=yes within the bounded poll' }
+
+    $captures = @()
+    # Q3U4: 0/1/4/5=ISDB-S、2/3/6/7=ISDB-T。8 receiverを同時起動する。他profileはSPEC 10.2.7の該当のみ。
+    foreach ($r in 0..7) {
+      if ($r -in 0,1,4,5) { $captures += Start-Ts $r 'isdb-s' 1318000 '0' }
+      else { $captures += Start-Ts $r 'isdb-t' 527143 '' }
+    }
+    Wait-Captures $captures
+    (& "$D\px4ctl.exe" --device $ID --runtime-dir $RT status 2>> "$LOG\px4ctl.err") | Out-File "$LOG\status-after.txt"
+
+    # CARD（daemon停止前）。抜去/再挿入の物理操作を挟み、各出力とexit値を保存する。
+    foreach ($op in 'card-status','card-atr','card-reset') {
+      (& "$D\px4ctl.exe" --device $ID --runtime-dir $RT $op 2>> "$LOG\card.err") | Out-File "$LOG\$op.txt"
+      "$LASTEXITCODE" | Out-File "$LOG\$op.rc"
+    }
+    (& "$D\px4ctl.exe" --device $ID --runtime-dir $RT card-apdu 90:30:00:00:00 --repeat 10 2>> "$LOG\card.err") | Out-File "$LOG\card-apdu.txt"
+    "$LASTEXITCODE" | Out-File "$LOG\card-apdu.rc"
+  } catch {
+    $primary = $_
+  } finally {
+    try { Stop-OwnedProcess $owned 35000 'px4d' | Out-Null }
+    catch { if ($null -eq $primary) { $primary = $_ } }
+  }
+  if ($null -ne $primary) { throw $primary }
+  ```
+
+  停止後の確認は所有PIDだけを見る（無関係なglobal processを混ぜない）。実際のexit codeとendpoint残留を
+  確認し、空のowned dirだけを削除する。タスク専用の親を作った場合だけ、その親も（空になった後で）削除する:
+
+  ```powershell
+  if (-not $owned.Process.HasExited) { throw 'owned px4d is still running after the shutdown attempt' }
+  if ($owned.Process.ExitCode -ne 0) { throw "owned px4d exit code was $($owned.Process.ExitCode)" }
+  $ownedDirs = @($RT, $LAP)   # $RTを先に、次に親を確認・削除する
+  foreach ($dir in $ownedDirs) {
+    if (-not (Test-Path $dir)) { continue }
+    $left = Get-ChildItem -Force $dir
+    if ($left) { throw "runtime dir still has entries after cleanup: $dir => $($left.Name -join ', ')" }
+    Remove-Item $dir -Force   # 空のowned dirだけを削除する。失敗証拠を隠す再帰削除は行わない。
+  }
+  ```
+
+  CARDの合否は`card-status`の`present=no`、`card-atr`/`card-apdu`の`NO_CARD`（exit 9）、再挿入後の
+  ATR/reset/APDU 10回成功をoutput fieldとexit値で確認する。PC/SC adapter・WinSCard経由の確認は行わない（N/A）。
+
+- USB再接続（X-USB-HP相当）: 1 receiver clientを起動し、ユーザーの物理USB切断で`DISCONNECTED`/exit 7と
+  client残留なしを確認する。再接続後は`--list`/`--list-json`で再列挙を確認し、旧daemonはX-STOPと同じ
+  `Stop-OwnedProcess $owned 35000 'px4d'`でcooperative stopしてから、同じ手順で起動し直す。readyを再確認し、
+  短い受信とCARD APDUを再実行する。旧daemonの自動復帰を合格条件にしない。
+- 物理操作とsoak: B-CAS/USBの物理操作はユーザーが行い、各操作を依頼する直前にHAOS/SCS側でCodexは`beep`、
+  Claude Codeは`vibe`を実行し、依頼から最大5分待つ。LNBは0Vのままとし、別途許可された隔離測定なしに15Vを
+  要求・測定しない。5分を超える連続負荷試験は本節に含めず、SPEC 10.5.2「Soak: user decision」に従って
+  短時間確認の完了後にユーザーが有無・時間・対象OSを決める。
+- 適用条件: Q3U4の項目（8 receiver同時captureを含む）は実際に接続した機種がQ3U4の場合だけ適用し、他profileは
+  SPEC 10.2.7の該当項目を使う。TS/counterの合否はSPEC 10.2の適用条件で判定し、shell終了値だけで決めない。
+  新しい汎用検証scriptやframeworkは追加しない。

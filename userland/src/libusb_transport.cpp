@@ -323,6 +323,32 @@ Error map_libusb_error(int error) noexcept
     }
 }
 
+// The libusb backends disagree on how "another process already holds the
+// device" is reported at the acquisition boundary.  Linux usbfs reports a
+// competing claim as LIBUSB_ERROR_BUSY, which map_libusb_error already
+// translates to BUSY (device open: BUSY, exit 4).  The WinUSB backend
+// instead fails libusb_open itself: while a daemon holds the WinUSB
+// interface, the backing CreateFile on the interface path returns
+// ERROR_ACCESS_DENIED and libusb translates that to LIBUSB_ERROR_ACCESS
+// (measured on Windows 11 real hardware with a running px4d: libusb_open
+// returns -3 for both bridges before any claim attempt).  Map that conflict
+// to the same BUSY so a duplicate daemon reports the identical
+// device open: BUSY (exit 4) on Windows and POSIX.  On Linux, ACCESS at
+// this boundary is a genuine permission denial (for example a root-owned
+// usbfs node), which keeps the generic USB_IO translation of
+// map_libusb_error; the POSIX acquisition tests pin that behavior.
+// Darwin's claim reports kIOReturnExclusiveAccess as LIBUSB_ERROR_ACCESS
+// as well (libusb os/darwin_usb.c), but no measured evidence exists for it
+// yet, so it keeps the generic translation until real-device evidence is
+// recorded.
+Error map_acquisition_error(int error) noexcept
+{
+#if defined(_WIN32)
+    if (error == LIBUSB_ERROR_ACCESS) return Error::BUSY;
+#endif
+    return map_libusb_error(error);
+}
+
 int NativeLibusbApi::init(Context* context, bool no_device_discovery) noexcept
 {
     if (context == nullptr) {
@@ -696,7 +722,7 @@ Result<void> NativeEnumerator::discover(DeviceDiscovery& discovery) noexcept
         if (handle != nullptr) {
             api_.close(handle);
         }
-        candidate.discovery_error = open_result == 0 ? Error::INTERNAL : map_libusb_error(open_result);
+        candidate.discovery_error = open_result == 0 ? Error::INTERNAL : map_acquisition_error(open_result);
             candidate.status = ObservationStatus::open_failed;
         } else {
             // serial descriptorは列挙中だけ読み、interfaceの所有開始はopen_and_claimへ分離する。
@@ -730,12 +756,12 @@ Result<std::unique_ptr<LibusbTransport>> NativeEnumerator::open_and_claim(
             api_.close(handle);
         }
         return Result<std::unique_ptr<LibusbTransport>>::failure(
-            open_result == 0 ? Error::INTERNAL : map_libusb_error(open_result));
+            open_result == 0 ? Error::INTERNAL : map_acquisition_error(open_result));
     }
     const int claim_result = api_.claim_interface(handle, 0);
     if (claim_result != 0) {
         api_.close(handle);
-        return Result<std::unique_ptr<LibusbTransport>>::failure(map_libusb_error(claim_result));
+        return Result<std::unique_ptr<LibusbTransport>>::failure(map_acquisition_error(claim_result));
     }
     std::unique_ptr<LibusbTransport> transport(new (std::nothrow)
                                                     LibusbTransport(api_, context_, handle, -1));
@@ -787,6 +813,7 @@ struct LibusbTransport::StreamState final {
     std::uint64_t deferred_error_order = 0U;
     bool resubmit_failed = false;
     bool stopping = false;
+    bool raw_io_enabled = false;
 };
 
 LibusbTransport::RetainedFd::~RetainedFd() noexcept
@@ -973,6 +1000,7 @@ Result<std::size_t> LibusbTransport::bulk_read(std::uint8_t endpoint, MutableByt
     }
     ApiGateLock lock(runtime_state_);
     if (abandoned_.load() ||
+        (endpoint == kTsInEndpoint && stream_policy_failed_.load()) ||
         (runtime_state_ != nullptr && runtime_state_->abandoned.load())) {
         return failure(Error::USB_IO);
     }
@@ -1043,7 +1071,7 @@ Result<void> LibusbTransport::start_stream(const StreamConfig& config) noexcept
         return Result<void>::failure(Error::INVALID_ARGUMENT);
     }
     std::unique_lock<std::recursive_mutex> lock(stream_gate_);
-    if (abandoned_.load() ||
+    if (abandoned_.load() || stream_policy_failed_.load() ||
         (runtime_state_ != nullptr && runtime_state_->abandoned.load())) {
         return Result<void>::failure(Error::USB_IO);
     }
@@ -1070,9 +1098,18 @@ Result<void> LibusbTransport::start_stream(const StreamConfig& config) noexcept
     stream_ = std::move(state);
     stream_active_ = true;
 
+    const int prepare_result = api_->prepare_stream(
+        handle_, config.endpoint, &stream_->transfer_size, &stream_->raw_io_enabled);
+    if (prepare_result != 0 || stream_->transfer_size == 0U ||
+        stream_->transfer_size > kMaxStreamTransfer) {
+        (void)cancel_and_drain_locked(lock);
+        return Result<void>::failure(prepare_result != 0
+            ? map_libusb_error(prepare_result) : Error::INTERNAL);
+    }
+
     for (std::size_t index = 0U; index < config.transfer_count; ++index) {
         stream_->ready[index].buffer.reset(
-            new (std::nothrow) std::uint8_t[config.transfer_size]);
+            new (std::nothrow) std::uint8_t[stream_->transfer_size]);
         if (!stream_->ready[index].buffer) {
             (void)cancel_and_drain_locked(lock);
             return Result<void>::failure(Error::INTERNAL);
@@ -1082,14 +1119,14 @@ Result<void> LibusbTransport::start_stream(const StreamConfig& config) noexcept
     for (std::size_t index = 0U; index < config.transfer_count; ++index) {
         StreamState::Slot& slot = stream_->slots[index];
         slot.state = stream_.get();
-        slot.buffer.reset(new (std::nothrow) std::uint8_t[config.transfer_size]);
+        slot.buffer.reset(new (std::nothrow) std::uint8_t[stream_->transfer_size]);
         slot.transfer = api_->alloc_transfer();
         if (!slot.buffer || slot.transfer == nullptr) {
             (void)cancel_and_drain_locked(lock);
             return Result<void>::failure(Error::INTERNAL);
         }
         api_->fill_bulk_transfer(slot.transfer, handle_, config.endpoint, slot.buffer.get(),
-                                 static_cast<int>(config.transfer_size), on_transfer, &slot, 0U);
+                                 static_cast<int>(stream_->transfer_size), on_transfer, &slot, 0U);
         // Publish the slot before submit: a fake or real libusb backend may dispatch
         // completion synchronously from submit_transfer.
         slot.status = StreamState::SlotStatus::submitted;
@@ -1298,6 +1335,16 @@ Result<void> LibusbTransport::cancel_and_drain_locked(
             first_error = Error::USB_IO;
         }
         return Result<void>::failure(first_error);
+    }
+    if (stream_->raw_io_enabled) {
+        const int result = api_->finish_stream(handle_, stream_->endpoint);
+        if (result != 0) {
+            // Callback lifetime is safe, so ordinary destruction may close
+            // the handle. Do not allow another purge/start using a pipe whose
+            // policy could not be restored.
+            stream_policy_failed_.store(true);
+            if (first_error == Error::OK) first_error = map_libusb_error(result);
+        }
     }
     destroy_stream_locked();
     stream_active_ = false;
@@ -1855,14 +1902,14 @@ Result<void> Q3U4Runtime::Impl::acquire_native(
         const int result = api_->open(candidates[slot]->device, &pending[slot].handle);
         if (result != 0 || pending[slot].handle == nullptr) {
             cleanup();
-            return Result<void>::failure(result == 0 ? Error::INTERNAL : map_libusb_error(result));
+            return Result<void>::failure(result == 0 ? Error::INTERNAL : map_acquisition_error(result));
         }
     }
     for (std::size_t slot = 0U; slot < bridge_count; ++slot) {
         const int result = api_->claim_interface(pending[slot].handle, 0);
         if (result != 0) {
             cleanup();
-            return Result<void>::failure(map_libusb_error(result));
+            return Result<void>::failure(map_acquisition_error(result));
         }
         pending[slot].claimed = true;
     }

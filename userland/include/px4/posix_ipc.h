@@ -15,6 +15,22 @@ inline constexpr const char* kControlEndpointName = "control.sock";
 inline constexpr const char* kStreamEndpointName = "stream.sock";
 inline constexpr std::size_t kStoredPathCapacity = 512U;
 
+// POSIX descriptors are int; a Windows SOCKET is a pointer-width handle. The
+// platform adapter behind this API stores the native value, so callers must
+// treat it as opaque and only pass it back to the adapter or an OS wait. The
+// POSIX build keeps the exact int representation.
+#if defined(_WIN32)
+using NativeHandle = std::uintptr_t;
+inline constexpr NativeHandle kInvalidHandle =
+    static_cast<NativeHandle>(~static_cast<std::uintptr_t>(0U));
+// AF_UNIX and the Win32 file APIs used by the adapter take wide paths.
+using PathChar = wchar_t;
+#else
+using NativeHandle = int;
+inline constexpr NativeHandle kInvalidHandle = -1;
+using PathChar = char;
+#endif
+
 enum class EndpointAccess : std::uint8_t {
     private_user,
     shared_group,
@@ -46,13 +62,19 @@ public:
 
     static Result<SerialEndpointLease> acquire(
         const EndpointConfig& endpoint, std::string_view observed_serial) noexcept;
-    bool valid() const noexcept { return lock_fd_ >= 0; }
+    bool valid() const noexcept { return lock_fd_ != kInvalidHandle; }
     void close() noexcept;
 
 private:
-    int directory_fd_ = -1;
-    int lock_fd_ = -1;
+    NativeHandle directory_fd_ = kInvalidHandle;
+    NativeHandle lock_fd_ = kInvalidHandle;
     std::array<char, 64U> filename_{};
+#if defined(_WIN32)
+    // Full lock path captured at acquire time. The Windows close() performs
+    // the POSIX-equivalent last-holder lock-file cleanup and needs the path;
+    // the POSIX build derives it from directory_fd_ + filename_ instead.
+    std::array<PathChar, kStoredPathCapacity> lock_path_{};
+#endif
 };
 
 class SocketListener;
@@ -71,10 +93,10 @@ public:
     static Result<SocketStream> connect(const EndpointConfig& config,
                                         Timeout timeout) noexcept;
 
-    bool valid() const noexcept { return fd_ >= 0; }
+    bool valid() const noexcept { return fd_ != kInvalidHandle; }
     // Borrowed descriptor for integration with an outer event loop. The
     // caller must not close it or transfer ownership.
-    int native_handle() const noexcept { return fd_; }
+    NativeHandle native_handle() const noexcept { return fd_; }
     void close() noexcept;
 
     // A successful read always returns at least one byte. EOF and reset are
@@ -94,10 +116,10 @@ public:
     Result<void> write_frame(ByteView frame, Timeout timeout) noexcept;
 
 private:
-    explicit SocketStream(int fd) noexcept : fd_(fd) {}
+    explicit SocketStream(NativeHandle fd) noexcept : fd_(fd) {}
     friend class SocketListener;
 
-    int fd_ = -1;
+    NativeHandle fd_ = kInvalidHandle;
 };
 
 // Move-only listener ownership. Destruction closes the fd and unlinks only the
@@ -116,11 +138,11 @@ public:
     static Result<SocketListener> listen(const EndpointConfig& config,
                                          int backlog = 16) noexcept;
 
-    bool valid() const noexcept { return fd_ >= 0; }
+    bool valid() const noexcept { return fd_ != kInvalidHandle; }
     // Borrowed descriptor for integration with an outer event loop. The
     // caller must not close it or transfer ownership.
-    int native_handle() const noexcept { return fd_; }
-    const char* endpoint_path() const noexcept { return endpoint_path_.data(); }
+    NativeHandle native_handle() const noexcept { return fd_; }
+    const PathChar* endpoint_path() const noexcept { return endpoint_path_.data(); }
     Result<SocketStream> accept(Timeout timeout) noexcept;
     void close() noexcept;
 
@@ -134,10 +156,10 @@ private:
     void move_from(SocketListener& other) noexcept;
     void cleanup_paths() noexcept;
 
-    int fd_ = -1;
-    std::array<char, kStoredPathCapacity> product_directory_{};
-    std::array<char, kStoredPathCapacity> instance_directory_{};
-    std::array<char, kStoredPathCapacity> endpoint_path_{};
+    NativeHandle fd_ = kInvalidHandle;
+    std::array<PathChar, kStoredPathCapacity> product_directory_{};
+    std::array<PathChar, kStoredPathCapacity> instance_directory_{};
+    std::array<PathChar, kStoredPathCapacity> endpoint_path_{};
     FileIdentity product_identity_{};
     FileIdentity instance_identity_{};
     FileIdentity endpoint_identity_{};

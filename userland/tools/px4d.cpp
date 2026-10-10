@@ -5,9 +5,17 @@
 #include "px4/firmware.h"
 #include "px4/it930x.h"
 #include "px4/libusb_transport.h"
-#include "px4/posix_tuner_nonce.h"
+#include "px4/platform_sleep.h"
 #include "px4/q3u4_stream.h"
 #include "px4/tuner_service.h"
+
+#if defined(_WIN32)
+#include "px4/windows_tuner_nonce.h"
+#include "px4_windows_args.h"
+#include "px4d_windows_stdin.h"
+#else
+#include "px4/posix_tuner_nonce.h"
+#endif
 
 #include "mlt5pe_backend.h"
 #include "mlt5pe_frontend.h"
@@ -35,6 +43,12 @@ namespace {
 using namespace px4::userland;
 using namespace px4::userland::ipc::posix;
 
+#if defined(_WIN32)
+using PlatformTunerNonceSource = px4::userland::ipc::windows::WindowsTunerNonceSource;
+#else
+using PlatformTunerNonceSource = PosixTunerNonceSource;
+#endif
+
 void usage() noexcept
 {
     std::printf(
@@ -52,6 +66,10 @@ void usage() noexcept
         "  USB device: two for paired models, one for single-device models.\n"
         "\n"
         "  --allow-lnb-power  permit explicit ISDB-S 15 V requests; default off\n"
+#if defined(_WIN32)
+        "  --exit-on-stdin-eof  exit with cleanup when stdin reaches EOF (Windows\n"
+        "                     cooperative parent stop)\n"
+#endif
         "  --list             print connected supported enclosures and exit;\n"
         "  --list-json        print the same data as compact JSON and exit;\n"
         "                     read-only, needs neither firmware nor a daemon\n");
@@ -116,7 +134,11 @@ public:
 
     void sleep_ms(std::uint32_t milliseconds) noexcept override
     {
+#if defined(_WIN32)
+        (void)platform::sleep_milliseconds(milliseconds);
+#else
         std::this_thread::sleep_for(std::chrono::milliseconds(milliseconds));
+#endif
     }
 };
 
@@ -128,6 +150,13 @@ public:
 private:
     It930xController& controller_;
 };
+
+#if defined(_WIN32)
+void on_stdin_eof(void*) noexcept
+{
+    px4::userland::px4d::request_stop();
+}
+#endif
 
 // Publishes the control/data endpoints and runs the foreground loop until a
 // stop signal or loop failure.  Returns the process exit status.
@@ -159,9 +188,22 @@ int serve(const Px4dArguments& arguments, const std::string& base_serial,
         std::fprintf(stderr, "signal setup failed\n");
         return 70;
     }
+#if defined(_WIN32)
+    px4::userland::cli::StdinEofMonitor eof_monitor;
+    if (arguments.exit_on_stdin_eof &&
+        !eof_monitor.start(::GetStdHandle(STD_INPUT_HANDLE), &on_stdin_eof, nullptr)) {
+        std::fprintf(stderr, "stdin monitor setup failed\n");
+        return 70;
+    }
+#endif
 
+#if defined(_WIN32)
+    std::fprintf(stderr, "px4d ready: device=%s endpoint=%ls\n",
+                 base_serial.c_str(), server.value()->endpoint_path());
+#else
     std::fprintf(stderr, "px4d ready: device=%s endpoint=%s\n",
                  base_serial.c_str(), server.value()->endpoint_path());
+#endif
     Error loop_error = Error::OK;
     while (!px4::userland::px4d::stop_requested()) {
         const auto polled = server.value()->poll_once(Timeout{100U});
@@ -175,6 +217,14 @@ int serve(const Px4dArguments& arguments, const std::string& base_serial,
         std::fprintf(stderr, "shutdown cleanup: %s\n", error_string(cleanup.error()));
         if (loop_error == Error::OK) loop_error = cleanup.error();
     }
+#if defined(_WIN32)
+    eof_monitor.stop();
+    // Release the serial namespace lease before advertising cleanup so a
+    // console/termination handler cannot let the process exit while the
+    // private endpoint namespace is still held.
+    (void)serial_lease.value().close();
+    px4::userland::px4d::notify_cleanup_complete();
+#endif
     if (loop_error != Error::OK) {
         std::fprintf(stderr, "px4d stopped: %s\n", error_string(loop_error));
     }
@@ -221,7 +271,7 @@ int run_q3u4(const Px4dArguments& arguments, Q3U4Runtime& runtime,
         dev1_lnb, dev2_lnb,
         arguments.allow_lnb_power && device_profile(runtime.model()).supports_lnb_15v);
     Q3U4FrontendTunerBackend tuner_backend(enclosure, lnb_power);
-    PosixTunerNonceSource nonce_source;
+    PlatformTunerNonceSource nonce_source;
     const auto stream = Q3U4StreamDataPlane::create(runtime.dev1(), runtime.dev2());
     if (!stream) {
         std::fprintf(stderr, "stream data plane: %s\n", error_string(stream.error()));
@@ -357,7 +407,7 @@ int run_w3u4(const Px4dArguments& arguments, Q3U4Runtime& runtime,
         lnb, lnb,
         arguments.allow_lnb_power && device_profile(runtime.model()).supports_lnb_15v);
     W3U4TunerBackend tuner_backend(enclosure, lnb_power);
-    PosixTunerNonceSource nonce_source;
+    PlatformTunerNonceSource nonce_source;
     const auto stream = Q3U4StreamDataPlane::create_w3u4(runtime.dev1());
     if (!stream) {
         std::fprintf(stderr, "stream data plane: %s\n", error_string(stream.error()));
@@ -398,7 +448,7 @@ int run_mlt5pe(const Px4dArguments& arguments, Q3U4Runtime& runtime,
         lnb, arguments.allow_lnb_power && device_profile(runtime.model()).supports_lnb_15v);
     Mlt5PeTunerBackend tuner_backend(frontend, lnb_power, receiver_count,
                                      satellite_supported, runtime.model());
-    PosixTunerNonceSource nonce_source;
+    PlatformTunerNonceSource nonce_source;
     const auto stream = Q3U4StreamDataPlane::create_mlt_family(runtime.dev1(), runtime.model());
     if (!stream) {
         std::fprintf(stderr, "stream data plane: %s\n", error_string(stream.error()));
@@ -428,7 +478,7 @@ int run_single_receiver(const Px4dArguments& arguments, Q3U4Runtime& runtime,
     CardSession card_session(card_hardware, time);
     NativeCardProtocolSession protocol(card_session);
     CardService card_service(frontend, protocol);
-    PosixTunerNonceSource nonce_source;
+    PlatformTunerNonceSource nonce_source;
     const auto stream = Q3U4StreamDataPlane::create_single_receiver(runtime.dev1(), runtime.model());
     if (!stream) {
         std::fprintf(stderr, "stream data plane: %s\n", error_string(stream.error()));
@@ -444,8 +494,18 @@ int run_single_receiver(const Px4dArguments& arguments, Q3U4Runtime& runtime,
 
 int main(int argc, char** argv)
 {
+#if defined(_WIN32)
+    const std::vector<std::string> owned_argv =
+        px4::userland::cli::windows_argv_utf8(argc, argv);
+    std::vector<const char*> argv_views;
+    argv_views.reserve(owned_argv.size());
+    for (const std::string& value : owned_argv) argv_views.push_back(value.c_str());
+    const Px4dArguments arguments =
+        parse_px4d_arguments(static_cast<int>(argv_views.size()), argv_views.data());
+#else
     const Px4dArguments arguments =
         parse_px4d_arguments(argc, const_cast<const char* const*>(argv));
+#endif
     if (!arguments.valid) {
         std::fprintf(stderr, "argument error: %.*s\n",
                      static_cast<int>(arguments.error.size()), arguments.error.data());

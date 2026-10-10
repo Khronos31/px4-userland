@@ -22,8 +22,42 @@ printf '%s\n' "$android_block" | grep -F 'actions/upload-artifact@' >/dev/null
 printf '%s\n' "$android_block" | grep -F 'shellcheck packaging/termux/px4-termux' >/dev/null
 grep -F 'android-api-24, source-archive' "$workflow" >/dev/null
 grep -F 'android-x86_64' "$workflow" >/dev/null
-grep -F 'len(actual) != 9' "$workflow" >/dev/null
+grep -F 'len(actual) != 10' "$workflow" >/dev/null
 grep -F 'android_x86_64_archive' "$workflow" >/dev/null
+# The release contract now includes the Windows ZIP. The aggregate must depend
+# on both the Windows cross-build and the native offline test of the same ZIP,
+# and must import the tested candidate archive without the test executables.
+grep -F 'source-archive, windows-x86_64, windows-native-tests' "$workflow" >/dev/null
+grep -F 'needs: windows-x86_64' "$workflow" >/dev/null
+grep -F 'windows_archive' "$workflow" >/dev/null
+release_candidate_block=$(awk '
+    $0 == "  release-candidate:" { in_job = 1; next }
+    in_job && /^  [^ ]/ { exit }
+    in_job { print }
+' "$workflow")
+printf '%s\n' "$release_candidate_block" | grep -F 'name: win-candidate' >/dev/null
+if printf '%s\n' "$release_candidate_block" | grep -F 'win-candidate-tests' >/dev/null; then
+    printf '%s\n' 'release-candidate must not import Windows test executables' >&2
+    exit 1
+fi
+printf '%s\n' "$release_candidate_block" | grep -F 'audit-artifact.sh --platform windows-x86_64' >/dev/null
+grep -F 'name: Corresponding-source Windows static relink proof' "$workflow" >/dev/null
+grep -F 'scripts/test-windows-static-relink.sh' "$workflow" >/dev/null
+grep -F -- '--enable-static --disable-shared' "$root/scripts/build-windows.sh" >/dev/null
+grep -F -- '--libusb-source-dir' "$root/scripts/build-windows.sh" >/dev/null
+grep -F 'imports {WINDOWS_LIBUSB_DLL}; libusb is statically linked' "$root/scripts/audit-artifact.py" >/dev/null
+grep -F 'https://libusb.info' "$root/scripts/audit-artifact.py" >/dev/null
+grep -F 'expected two libusb version URLs before replacement' "$root/scripts/test-windows-static-relink.sh" >/dev/null
+if grep -F -- '--enable-shared' "$root/scripts/build-windows.sh" >/dev/null; then
+    printf '%s\n' 'Windows libusb build must not enable a shared library' >&2
+    exit 1
+fi
+if grep -F 'missing Windows libusb DLL' "$root/scripts/audit-artifact.py" >/dev/null; then
+    printf '%s\n' 'Windows audit must not require a shipped libusb DLL' >&2
+    exit 1
+fi
+# shellcheck disable=SC2016
+printf '%s\n' "$release_candidate_block" | grep -F '"$windows_archive"' >/dev/null
 grep -F 'TERMUX_LAUNCHER' "$root/scripts/audit-artifact.py" >/dev/null
 grep -F '"packaging" / "termux"' "$root/scripts/package-artifact.py" >/dev/null
 # shellcheck disable=SC2016

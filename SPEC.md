@@ -1,9 +1,49 @@
 # px4-userland 仕様
 
-Status: Frozen v0.29 (2026-10-08)
+Status: Frozen v0.33 (2026-10-11)
 
 本書の`MUST`、`MUST NOT`、`SHOULD`は規範要件を示す。実機観測で前提の誤りが判明した場合も暗黙に
 実装だけを変えず、本書のversionと変更理由を更新してから実装する。
+
+### v0.33 change record (2026-10-11)
+
+- 10.5節: 0.2.0のreceiver 7について、E03でのSPEC 10.2.6a fresh比較（候補/`px4_drv`交互5組）の結果と、
+  参照並みとして既知制限に含めるユーザー決定を0.2.0限定の受入判断へ追記する。10.2.6aの規則、原記録、
+  hardware claimの範囲は変更しない。
+
+### v0.32 change record (2026-10-10)
+
+- 10.5節: 0.2.0の実機観測とユーザー決定に基づく、当該release限定の受入判断を明記する。
+  非ASCII endpoint pathでのready行切断（Issue #52）を0.2.0の既知の制限として記録する。
+- 10.3節: Windows 11 x64行にPX-Q3U4およびPX-M1UR/PX-S1URの0.2.0 E17実機evidenceを記載する。
+  E17 Windows 11 x64の2時間soakでreceiver 0〜6に残った少数のCC欠落は、同一条件の`tsukumijima/px4_drv`
+  WinUSB版2時間でも同等の全receiver同時欠落が出たことから環境由来として受け入れる。receiver 7の
+  TEI/continuity burstは既知不具合として継続する。原記録、TS integrity計数、CLI exit、実装、
+  将来releaseの一般受入条件は変更しない。v0.29のv0.1.10限定判断を0.2.0へ継承したものではない。
+
+### v0.31 change record (2026-10-09)
+
+- 3.3、7.5、10.4節: Windows Phase 1のlibusbは、ピンした1.0.30 sourceを同一toolchainで静的ライブラリにし、
+  `px4d.exe`へリンクする。`libusb-1.0.dll`は生成も同梱もしない。`px4-ts.exe`と`px4ctl.exe`はlibusbを
+  リンクしない。UCRTと、libusbが実行時にLoadLibraryするWinUSB等のOS標準DLLは動的のままとする。
+  LGPL-2.1 §6のexact sourceとrelink手順はLinux/macOS/Androidと同じ対応source archiveで提供する。
+  libusbをLGPL §3によりGPL化したとは主張しない。
+
+### v0.30 change record (2026-10-09)
+
+- 1、2.1、2.2、2項support matrix、3.1、3.2、7.5、10.3、10.4、11節: Windows 11 x64を製品範囲へ
+  追加するPhase 1の要件を定める。Windowsは`px4d`／`px4-ts`／`px4ctl`とversioned local IPCを提供し、
+  Q3U4のtunerと内蔵カードリーダーのCARD_*操作を扱う。同一ホスト内限定、AF_UNIX相当のendpoint、
+  same-user private access、BCryptGenRandom nonce、cooperative shutdown、binary stdout、pacingを要求する。
+  WinSCard互換DLLとMicrosoft PC/SC IFD登録はPhase 2以降の対象外であり本版に含めない。
+- 10.3、10.4節: Windowsはbuildとoffline testだけを`build-tested`として扱い、実機hardware evidenceが
+  得られるまで`hardware-unverified`を維持する。Windows x64配布物はPhase 1のrelease対象へ追加するが、
+  10.5節の必須実機短時間matrixが未完了の間は当該artifact gateを未完了とする。
+- 7.5節: Windowsはllvm-mingw/UCRT x64を正規toolchainとし、toolchainとlibusbのversion・checksumを
+  build scriptへ固定する。POSIX kernel API・chardev/ioctl・kernel moduleへ依存しない。Windows固有処理は
+  platform adapterへ隔離し、portable coreと既存POSIX runtimeの挙動・test coverageを変更しない。
+- 10.4、10.5節: Windows Phase 1の追加とrelease artifact集合の拡張を`0.2.0`として公開する。10.5節の
+  v0.1.10限定受入判断は0.1.10だけに適用し、0.2.0の受入・matrix・再現性確認へ継承または拡張しない。
 
 ### v0.29 change record (2026-10-08)
 
@@ -219,9 +259,11 @@ USB通信にはlibusb-1.0だけを使用し、Q3U4の8チューナーと内蔵IC
 v0.18ではPX-W3PE4/5、PX-Q3PE4/5、PX-MLT8PE3/5、DTV02A-4TS-P、PX-M1UR、PX-S1UR、DTV03A-1TU、
 DTV02-1T1S-U、DTV02A-1T1S-Uを識別対象へ加える。12機種はhardware-unverifiedである。
 
-対象環境はLinux/glibc、Linux/musl、Android/Bionic、macOSとする。ビルド成功と自動試験成功を移植性の
-条件とし、実機試験を行っていないOSは、
+対象環境はLinux/glibc、Linux/musl、Android/Bionic、macOS、およびWindows 11 x64（Phase 1）とする。
+ビルド成功と自動試験成功を移植性の条件とし、実機試験を行っていないOSは、
 公開時に「build-tested / hardware-unverified」と明記し、動作確認済みとは表現しない。
+WindowsはPOSIX runtimeと同一のversioned IPC wire形式と`control.sock`/`stream.sock`概念を用い、
+tunerと内蔵カードリーダーのCARD_*操作を扱う。WinSCard互換DLLはPhase 2以降とし、本版に含めない。
 
 support matrixと実機検証経路は次のとおりとする。
 
@@ -236,7 +278,7 @@ support matrixと実機検証経路は次のとおりとする。
 | Android | Bliss OS / x86_64 / Termux | `termux-usb`および`px4-termux`による2 fd渡し | 正式launcherの実機回帰（Bionic CLI、portable IPC） |
 | Android | Google TV Streamer / ad-hoc APK | Android USB Host APIからfd渡し | 対象外（dtv-android所管。本リポジトリのrelease gateに含めない） |
 | macOS | Apple Mac mini / M2 | native libusb | tuner、card core、PC/SC adapter |
-| Windows | unsupported | 対象外 | `tsukumijima/px4_drv`を利用する。px4-userlandのCLI/IPCとは非互換 |
+| Windows 11 x64 | GitHub Actions `windows-2022`（test OS）/ Windows 11 x64（supported） | native libusb（`libusb` WinUSB backend） | cross-build確認済み。offline testはWindows native CIで実行。実機`hardware-unverified` |
 
 ## 2. Scope
 
@@ -254,6 +296,11 @@ support matrixと実機検証経路は次のとおりとする。
 - Linux/macOSではPC/SC IFD Handlerを提供し、Androidではportable IPCを公開する。
 - Linux、Android Termux、macOSの各runtime経路でチューナーと内蔵カードリーダーを扱う。Android ad-hoc APKの
   実機検証はdtv-android所管とし、本リポジトリの配布物・release gateには含めない。
+- Windows 11 x64で`px4d`／`px4-ts`／`px4ctl`とversioned local IPCを提供し、tunerと内蔵カードリーダーの
+  CARD_*操作を扱う。同一ホスト内限定のAF_UNIX相当endpoint、same-user private access、
+  BCryptGenRandom nonce、cooperative shutdown、binary stdout、高分解能pacingを満たす。
+- Windows固有処理（socket、endpoint権限、非同期wake、nonce、sleep、console/signal、stdout）を
+  platform adapterへ隔離し、portable coreとPOSIX runtimeの実装・test coverageを変更しない。
 - 最終ツリーから、カーネルモジュール、DKMS、カーネル用chardev、非対象機種、旧Windows専用ホストなど、
   portable Q3U4 userland実装に不要なコードと配布処理を削除する。
 
@@ -271,8 +318,9 @@ support matrixと実機検証経路は次のとおりとする。
   本リポジトリのrelease artifactと検証gateにAPKを含めない。
 - B-CAS/ACASの暗号処理、ECM処理、TSのスクランブル解除。
 - ネットワーク越しの利用。IPCは同一ホスト内に限定する。
-- Windows用runtime、adapter、CLI/IPC互換層、配布物、build-only gate。Windows利用者向けの
-  `tsukumijima/px4_drv`は別製品・別interfaceであり、px4-userlandのdrop-in代替ではない。
+- Windows向けWinSCard互換DLL、Microsoft PC/SC IFD登録、System32 WinSCardへの転送、x86（32-bit）配布物。
+  これらはPhase 2以降の対象とし、Phase 1の`px4d`／`px4-ts`／`px4ctl`とlocal IPCには含めない。
+- Windowsでのカーネルドライバ／WinUSB INF配布、kernel-mode component。WindowsのUSB accessはlibusb経由に限定する。
 
 Q3U4またはMLT5系と共通するチップを持つ他機種で偶然動作しても、対応機種一覧へ追加しない。
 実機確認、回帰試験、明示的な仕様変更を行うまでは「unsupported / unverified」とする。
@@ -311,7 +359,8 @@ LNB用GPIOを書き込まず`UNSUPPORTED`で拒否する。対応しないprofil
 5. `stream`: 非同期bulk transfer、188-byte packet同期、受信機別分配、queue、統計。
 6. `card`: card hardware adapter、ATR、T=1状態機械、APDU、共有・排他。
 7. `ipc`: versioned local protocol、control connection、TS data connection。
-8. `platform`: filesystem Unix domain socket、終了通知などのOS差。
+8. `platform`: filesystem Unix domain socket（POSIX）またはAF_UNIX相当socket（Windows）、
+   終了通知、nonce、sleepなどのOS差。Windows実装は`userland/src/windows/`へ置く。
 9. `cli`: `px4d`、`px4-ts`、`px4ctl`。
 
 portable coreからOS vendor固有header、Linux kernel header、glibc内部APIをincludeしない。
@@ -327,6 +376,9 @@ portable coreからOS vendor固有header、Linux kernel header、glibc内部API�
 - libusbの最小バージョンは1.0.23とする。
 - Androidのruntime targetはAPI 24以上、`armv7a-linux-androideabi`、`aarch64-linux-android`、
   `x86_64-linux-android`とする。3つのABIを同一の配布・監査対象とし、各archiveへ同じ`px4-termux`を収録する。
+- Windows targetはx86_64のみとし、llvm-mingw/UCRTでクロスビルドする。toolchainとlibusbのversion・
+  SHA-256をbuild scriptへ固定する。libusb 1.0.30は`px4d.exe`へ静的リンクし、`libusb-1.0.dll`は同梱しない。
+  PE architecture、import DLL、静的libusbの版文字列、build path leak、legacy artifactを監査する。
 
 ## 4. Device contract
 
@@ -900,6 +952,32 @@ queue overflow、sync/TEI/drop検出を0にしない。stdoutはTSだけ、全�
 - libusbで列挙・claimできることを前提とし、DriverKit/kextを要求しない。
 - hardware未確認の場合はrelease metadataへ明記する。
 
+### 7.5 Windows (Phase 1)
+
+- 正規toolchainはllvm-mingwのUCRT x86_64とし、toolchain archiveとlibusb 1.0.30 sourceの
+  version・SHA-256をbuild scriptへ固定する。libusbは静的ライブラリとしてビルドし`px4d.exe`へリンクする。
+  `libusb-1.0.dll`は生成も同梱もしない。compiler/dependency binaryをtracked fileとして同梱しない。
+  OS標準DLLは動的のままとする。
+- portable coreはC++17、例外・RTTI不使用を維持する。Windows固有処理は`userland/src/windows/`の
+  platform adapterへ隔離し、既存POSIX codeは`#else`側で挙動を変えない。
+- endpointは`--runtime-dir`／`--instance`をサポートし、既定は`%LOCALAPPDATA%`配下とする。
+  same-user private accessを必須とし、制限付きDACL（current user SID）と所有検証、reparse point検査、
+  ファイル同一性検査を行う。安全でないfallbackを持たない。`shared_group`はWindowsでは明示的に
+  unsupportedとしてargument validationで失敗させる。
+- endpoint pathはWindows AF_UNIXのbyte長上限を検査し、Unicode pathを明示的に扱う。
+  serial/instance排他（SerialEndpointLease相当）をWindowsにも実装し、same-serial safetyを落とさない。
+- worker wakeはpoll可能なsocketで実装する。nonceはBCryptGenRandomを用いる。
+- shutdownはSetConsoleCtrlHandlerとcooperative parent-stop契約を提供する。親プロセス（.NET/denpa等）は
+  `px4d`の標準入力をcloseまたはEOFにして停止を要求でき、`px4d`は`--exit-on-stdin-eof` opt-in時に
+  stdin EOFを受けて通常のcleanup（LNB 0V、endpoint削除）を実行してから終了する。Ctrl+C等のconsole
+  control eventでもcleanup完了を待つhandshakeを行う。`TerminateProcess`がcleanupを行うと仮定しない。
+  既定LNB 0V、明示opt-in、shutdown時cleanupを維持する。
+- TS binary stdoutはbyteを保持し、stop/deadline/cancelに応答する。匿名pipeのconsumer停止でも
+  恒久blockせず、broken pipeを正しく扱う。file sinkとpipe sinkの両方を扱う。
+- IT930x 1ms pacingとSystemCardTimeのsleepはhigh-resolution waitable timerを用い、失敗を扱う。
+  process-global timer tweakは行わない。
+- カードaccessはlibusb経由のCARD_*操作に限定し、WinSCard DLLに依存しない。
+
 ## 8. Repository end state
 
 最終ツリーには、少なくとも以下だけを残す。
@@ -1101,6 +1179,7 @@ featureのhardware evidenceがない場合は`build-tested / hardware-unverified
 | Bliss OS / x86_64 / Termux | 正式launcher、2-FD、Bionic CLI、T/S、内蔵card、process/FD/endpoint cleanup |
 | Google TV Streamer / ad-hoc APK | 対象外。実機検証はdtv-android所管であり、本リポジトリのevidence recordへ取り込まない |
 | M2 Mac mini / macOS | native libusb、grouping、T/S、内蔵card、実PC/SC consumer |
+| Windows 11 x64 / native libusb | `windows-2022` CI build、Windows native offline test、PE/import/archive audit。PX-Q3U4はnative Windows 11実機でT/S capture、8 receiver、内蔵card、USB/card抜差し（0.2.0 E17）。PX-M1UR/PX-S1URは同実機でprofile別T/S capture、30分連続受信、内蔵card、USB/card抜差し（same-lease retuneは未認定）。非ASCII endpoint pathのready行切断は既知の制限 #52。他profileは`hardware-unverified` |
 
 TermuxとAPKは同一hardwareでも別access pathである。APK経路はdtv-android所管として本リポジトリのclaim対象外とする。
 SCS native、HAOS Alpine add-on、native Linux、macOSもそれぞれ別runtime pathであり、証拠が直接存在するか継承条件を
@@ -1110,7 +1189,7 @@ Linux aarch64はnative build、offline test、archive auditを満たしても`bu
 
 ### 10.4 Release artifacts
 
-最終配布物のplatform/architectureは次の8 binary archiveとする。source archiveは全binaryに共通で1つ作成する。
+Linux/Android/macOSのstable配布物のplatform/architectureは次の8つのbinary archiveとする。source archiveは全binaryに共通で1つ作成する。
 
 | Artifact | Runtime contract |
 |---|---|
@@ -1122,6 +1201,16 @@ Linux aarch64はnative build、offline test、archive auditを満たしても`bu
 | `px4-userland-<version>-android-aarch64.tar.gz` | Android API 24+、Bionic aarch64、Termux用 |
 | `px4-userland-<version>-android-armv7a.tar.gz` | Android API 24+、Bionic armv7a、Termux/Google TV用 |
 | `px4-userland-<version>-android-x86_64.tar.gz` | Android API 24+、Bionic x86_64、Termux/Bliss OS用 |
+
+Windows Phase 1はx86_64の`px4-userland-<version>-windows-x86_64.zip`を追加配布物とする。`px4d.exe`は
+同一toolchainでビルドしたlibusb 1.0.30を静的リンクする。`px4-ts.exe`と`px4ctl.exe`はlibusbをリンクしない。
+ZIPは3つの実行ファイル、LICENSE、第三者notice、exact source coverageを含み、`libusb-1.0.dll`は同梱しない。
+PE architecture、import DLL、静的libusbの版文字列、build path leak、legacy artifactを監査し、deterministic zipと
+最終archiveからのsmokeを要する。OS標準DLL（UCRT、およびlibusbが実行時にLoadLibraryするWinUSB等）は動的のままとする。
+Windows archiveのgateは、Windows IPC adapterとCLIの実装と10.3の`build-tested` evidenceに加え、
+10.5の必須短時間実機matrixのWindows行（exact candidate archiveを使用）が完了するまで未完了とする。実機確認が
+得られるまでは`hardware-unverified`と表示し、`build-tested`だけでは当該gateを完了としない。WinSCard互換DLLと
+Microsoft PC/SC IFD登録はPhase 2以降であり本gateの対象外とする。既存8 archiveの判定条件と順序は変更しない。
 
 各archiveは該当platformの`px4d`、`px4-ts`、`px4ctl`、利用可能なnative card adapter、GPL license、README、検証済み
 libusb 1.0.30のexact `libusb/COPYING`を含む。license textは追跡対象のpackaging materialからofflineで包装し、hashを検査する。
@@ -1150,14 +1239,15 @@ source archiveは `__pycache__/`、`.pyc`、`.pyo`、`.pyd` などのPythonバ�
 5. Linux production executableは`readelf -l`でPT_INTERPなし、`readelf -d`でDT_NEEDEDなしを検証する。Linux IFDは
    archive名に対応するglibc 2.31またはmuslのshared objectとして監査し、macOS binaryは`otool -L`でlibusb dylibと
    macOS system以外のdependencyがないことを検証する。
-6. Linux/macOS static libusbのexact source、license text、notice、build/relink instructionsは対応source archiveへ含める。
-   Linux/macOS binary archiveの`DEPENDENCY-NOTICE.txt`はstatic libusb 1.0.30、LGPL-2.1-or-later、対応source archive名を
+6. Linux/macOS/Windows static libusbのexact source、license text、notice、build/relink instructionsは対応source archiveへ含める。
+   Linux/macOS/Windows binary archiveの`DEPENDENCY-NOTICE.txt`はstatic libusb 1.0.30、LGPL-2.1-or-later、対応source archive名を
    明示し、全platformのbinary archiveで`libusb/COPYING`が検証済みexact license textと一致することを監査する。
+   Windowsの実行ファイルはOS標準DLLを動的ロードしてよい。libusbをLGPL §3によりGPL化したとは主張しない。
 
 このgateの包装・manifest・checksum・binary/source archive auditは、local packaging scriptsと
 `.github/workflows/build_userland.yml`の`release-candidate` workflowとして実装済みである。workflowはtagや
-GitHub Releaseを作成せず、8つのbinary archive、対応source archive、外側`SHA256SUMS`をcandidate artifactとして
-まとめる。release recordは各hardware claimについて、このcandidateのexact artifactで試験したか、従前artifactの
+GitHub Releaseを作成せず、9つのbinary archive（8つのtar archiveとWindows ZIP 1つ）、対応source archive、外側
+`SHA256SUMS`をcandidate artifactとしてまとめる。release recordは各hardware claimについて、このcandidateのexact artifactで試験したか、従前artifactの
 evidenceを継承したかを明記する。exact-current-artifactで未試験なら未試験と記録し、過去artifactの結果を今回の直接
 試験として扱わない。Androidの各ABI/access pathは正式launcherを用いた独立したevidenceを要する。Linux aarch64は
 archive auditとnative CI buildを必須とするが、実機未検証を既知の非ブロッカーとして公開時に明記する。
@@ -1175,14 +1265,35 @@ macOSのUSB再接続後にreceiver 0〜3で観測したCC `5/5/6/6` は原因未
 今後のreleaseで同様の異常を自動免除する規則ではない。詳細は
 [`validation-results.md`](docs/platforms/validation-results.md)のv0.1.10記録を参照する。
 
+0.2.0に限る受入判断（2026-10-10、ユーザー決定）: candidate `8c40d495850c332312cd4293489f400c8fb842d4`の
+E17 Windows 11 x64で、Q3U4 8 receiver同時の2時間soakの終了時にreceiver 0〜6でcontinuity error
+`8/8/12/12/5/5/11`（TEI、sync、queue drop、USB errorは0、各exit 8）を観測した。px4-userlandは欠落時刻を
+記録していない。同じQ3U4・host・受信channelで`tsukumijima/px4_drv` WinUSB版を2時間受信した比較では、
+burstの1 tunerを除く安定後のCC 53件のうち51件が約134 msの1回の全receiver同時欠落に集中し、TEIは0だった。
+同一bridge・同一channelの2 receiverで件数が一致する署名と総数が同等であることから、この残存CCを
+host/USB側の一時停止による環境由来の同時欠落として非blockingとする。px4-userland側が同時欠落だったことは
+件数の並びからの推定であり、計数規則も参照toolと同一ではない。receiver 7のTEI/continuity burst
+（E17短時間matrix、soak、全局確認で観測）は既知不具合として継続し、ブロッカーから除く。同じhost上の
+参照px4_drvでも1 tunerに同形のburstが出たが、10.2.6aの全試行非悪化を証明したとは表示しない。
+E03 `linux-glibc-x86_64`での10.2.6a fresh比較（同条件の候補/`px4_drv`交互5組、各8同時受信30秒）では、
+receiver 7のTEI/continuityはpair1で候補だけに、pair2で候補と参照の両方に同等のburstが出て、pair3〜5は両者0だった。
+2026-10-11のユーザー決定により、このburstを参照並みとして10.2.6aの既知制限に含め、0.2.0のブロッカーにしない。
+また、非ASCII文字（U+00FFを超える文字）を含むendpoint pathでは、px4dのready行（stderr）がその文字以降と改行を
+欠く（[Issue #52](https://github.com/Khronos31/px4-userland/issues/52)）。daemonの動作、endpoint作成、後続の診断出力には
+影響せず、ready判定は`px4ctl status`で行えるため、0.2.0の既知の制限として扱い0.2.xで修正する。
+これは当該releaseのリスク受入であり、原失敗を合格へ書き換えたり、hardware claimの範囲を広げたり、
+今後のreleaseで同様の異常を自動免除する規則ではない。詳細は
+[`validation-results.md`](docs/platforms/validation-results.md)の0.2.0 E17記録を参照する。
+
 Stable公開前に、次の条件をすべて満たすこと。
 
 1. 10.1のCI、静的監査、archive manifest、checksum、licenseおよびcorresponding-source監査が成功している。
-2. 最終candidateが使用した8 binary archive、corresponding-source archive、outer checksumについて、10.4の全
+2. 最終candidateが使用した9 binary archive（8つのtar archiveとWindows ZIP 1つ）、corresponding-source archive、
+   outer checksumについて、10.4の全
    auditを完了し、再現性確認を成功させる。再現性確認は、final candidateと同一source commitに対する独立した
-   2回のclean CI candidate run（別run・新規workspace）でrelease-candidate workflowを実行し、8 binary
-   archiveとcorresponding-source archiveの9 tar archiveすべてのSHA-256が両runで一致し、各archive本体が
-   byte-identicalであり、かつ
+   2回のclean CI candidate run（別run・新規workspace）でrelease-candidate workflowを実行し、9 binary
+   archiveとcorresponding-source archiveの10 archiveすべて（Windows ZIPを含む）のSHA-256が両runで一致し、
+   各archive本体がbyte-identicalであり、かつ
    外側`SHA256SUMS`自体もbyte-identical（`cmp`）であることをもって成功とする。入力の一致は、pinnedされた
    分は同一revision/digest、workflow上floatする分は両runの実効toolchain/build inputの観測値が一致する
    ことで判定する。両runのrunner image version/ID、compiler/SDK/NDK等のartifact生成に用いるtoolchain
@@ -1193,12 +1304,15 @@ Stable公開前に、次の条件をすべて満たすこと。
    同一であることをrelease record上で確認できれば一致として扱う。正規化（UUID・署名・timestampのマスク等）
    による合格は認めない。source commit、toolchain/build inputs、static/dynamic link inventory、relink結果、
    artifact checksum、licenseおよびsource提供条件をrelease recordに残す。
-3. 公開するfinal candidateの配布binary archive 8種すべてについて、対応するOS/architectureの実機で短時間確認を毎回行う。
+3. 公開するfinal candidateの配布binary archive 9種すべて（8つのtar archiveとWindows ZIP 1つ）について、対応する
+   OS/architectureの実機で短時間確認を毎回行う。
    artifact別のhostと手順は`docs/release-validation.md`のmatrixに従い、各archive個別に列挙、daemon動作中の
    B-CASカード抜去/再挿入（不在状態・ATR/reset・反復APDUの復帰）、短い受信、停止、USB disconnect/reconnect後の復旧、
-   process/endpoint残留確認を行う。必須確認の一連の所要時間に上限は設けず、archive間で証拠を代用しない。
+   process/endpoint残留確認を行う。Windows ZIPはWindows 11 x64の実機で、列挙・ready、receiver capture、CARD_*操作、
+   USB再接続後のdaemon再起動、cooperative shutdown残留確認を行う。必須確認の一連の所要時間に上限は設けず、
+   archive間で証拠を代用しない。
    5分を超える連続負荷試験は本項の短時間確認に含めず、soakとして扱う。必須の実機環境が利用できない場合は当該artifact gate未完了とする。
-   別OS/ABIで代用したり、agent判断で免除したりしない。Linux musl aarch64も含めmatrixの全配布targetに適用する。
+   別OS/ABIで代用したり、agent判断で免除したりしない。Linux musl aarch64とWindows 11 x64も含めmatrixの全配布targetに適用する。
 4. B-CASカード抜去/再挿入と物理USB detach/reconnectは人手で実施する。各物理操作を要求する直前にHAOS側でCodexは`beep`、
    Claude Codeは`vibe`を実行し、操作要求から完了まで最大5分待つ。この5分は各物理操作への応答待ち上限であり、必須確認
    一連の所要時間は制限しない。5分以内に操作が行われない場合、その操作および当該artifact gateは未完了とする。
@@ -1272,6 +1386,10 @@ Q3U4を指定された場合は8 receiverのISDB-T/S混在、必要なstatus/APD
 8. local IPC、`px4d`、`px4-ts`、`px4ctl`を完成する。
 9. Linux/macOSのPC/SC adapterを接続し、確認できたOSだけsupport表記を更新する。
 10. portable replacementごとにlegacy codeを削除し、READMEとrelease metadataをQ3U4-onlyへ更新する。
+11. Windows Phase 1: llvm-mingw/UCRT x64でplatform adapter（socket、endpoint権限、非同期wake、nonce、
+    sleep、console/signal、stdout）とWindows固有testを実装し、`px4d`／`px4-ts`／`px4ctl`とlocal IPCを
+    クロスビルドする。winSCard DLLと実機hardware claimは含めない。各stepはoffline testまたは
+    cross-buildがgreenになるまで次へ進めない。
 
 各incrementは対応するoffline testまたは実機観測がgreenになるまで次へ進めない。
 
