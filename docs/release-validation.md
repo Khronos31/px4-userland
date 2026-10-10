@@ -35,7 +35,7 @@ Stable releaseは次の順で進める。
 | E14 | FreeBSD x86_64 | 対象外（SPEC §1・§2の対象外。記録は履歴のみ） | 対象外 |
 | E15 | Fedora aarch64 | `linux-glibc-aarch64`必須matrix環境。既存記録はhistorical baseline | §6 / validation-results.md |
 | E16 | Debian x86/i386 | source-build-only（i386配布artifactなし） | §6 / [Debian i386](platforms/debian-i686.md) |
-| E17 | Windows 11 x86_64 | Phase 1 build/offline test。実機matrixは未完了（`hardware-unverified`） | §6 / validation-results.md |
+| E17 | Windows 11 x86_64 | 毎回必須の回帰試験対象。PX-Q3U4は0.2.0 candidate `8c40d49`のE17実機matrix、PX-M1UR/PX-S1URは同candidateのWindows profile試験（same-lease retuneは未認定）で`tuner-hardware-verified`／`card-core-hardware-verified`（非ASCII endpoint pathのready行切断は既知の制限 [#52](https://github.com/Khronos31/px4-userland/issues/52)）。他profileは`未認定`（`hardware-unverified`） | §6 / validation-results.md |
 | — | Android ad-hoc APK | 対象外（dtv-android 所管。本リポジトリの gate に含めない） | 対象外 |
 
 ### 毎回必須の短時間実機matrix
@@ -257,7 +257,7 @@ receiver 7 で TEI/continuity burst が出て、SPEC 10.2.6a の比較条件（�
 3. 対象 claim ごとに `継承`、`今回再検証`、`未認定`、`対象外` のいずれかを記録し、根拠を書く。証拠の軸は SPEC 10.2.8 に従う。別 model、別 OS/runtime、別 access path、別 feature へ結果を外挿しない。同一 model・同一 runtime/access path・同一 feature の証拠は、対象 artifact の bytes が baseline と同一であるか、変更がその path へ影響しないと 10.5.1 の表で判定できる場合に継承できる。未知の影響は affected として扱い、`対象外` は SPEC の対象外または本手順 §0 の対象外に限る。
 4. 前回の適格なlong soakの日付やrelease数は事実情報として記録できるが、エージェントがsoak有無・時間・OSを決める規則として使わない。
 
-Termuxのarchitecture、Termux launcherのFD path、glibc/musl、native PC/SC adapterは別々のruntime/access pathとして扱う。Windows Phase 1はbuild/offline testと`build-tested` evidenceまでを対象とし、実機matrixが未完了の間は`hardware-unverified`である。FreeBSDとAndroid ad-hoc APKは対象外である。変更も新規claimもないpathを毎回試験しない。
+Termuxのarchitecture、Termux launcherのFD path、glibc/musl、native PC/SC adapterは別々のruntime/access pathとして扱う。Windows 11 x64（E17）は0.2.0以降の毎回必須の回帰試験対象であり、releaseごとにnative libusbのtunerとCARD_*、実機の物理回帰を必須とする。CIのbuild/offline test成功は`build-tested`のみを示し、実機matrixが未完了の間は当該行を`未認定`（`hardware-unverified`）として扱う。FreeBSDとAndroid ad-hoc APKは対象外である。変更も新規claimもないpathを毎回試験しない。
 
 影響分類が複数にまたがる、依存範囲が不明、または非影響を証明できない場合は `unknown/ambiguous` として、影響し得るpath集合をユーザーへの説明に含める。配布artifactごとの必須短時間matrixは影響判定に関係なく毎回実施する。
 
@@ -492,37 +492,39 @@ SPEC §1 の対象環境（Linux、Android、macOS）に含まれないため �
 
 ### E17 Windows 11 x86_64（Windows archive必須matrix・Phase 1）
 
-- 位置づけ: `windows-x86_64`配布artifactの必須matrix環境。CIのbuild/offline test成功は`build-tested`のみを
-  示し、本節が完了するまで当該archiveのgateは未完了、support表示は`hardware-unverified`である。exact candidate
-  archive（`px4-userland-<version>-windows-x86_64.zip`）をnative Windows 11 x64（実機）で実行する。
-  `windows-2022` CIはtest OSであり、Windows 11実機の代用にしない。
+- 位置づけ: `windows-x86_64`配布artifactの毎回必須の回帰試験対象。releaseごとにnative libusbのtunerと
+  CARD_*、実機の物理回帰を要求する。CIのbuild/offline test成功は`build-tested`のみを示し、本節が完了する
+  まで当該archiveのgateは未完了、support表示は`未認定`（`hardware-unverified`）である。
+  exact candidate archive（`px4-userland-<version>-windows-x86_64.zip`）をnative Windows 11 x64（実機）で
+  実行する。`windows-2022` CIはtest OSであり、Windows 11実機の代用にしない。
 - Phase 1範囲: `px4d`/`px4-ts`/`px4ctl`とversioned local IPCのCARD_*経路だけを使う。WinSCard互換DLLと
   Microsoft PC/SC IFD登録はPhase 2以降で本節の対象外であり、native-card-adapter列は`該当なし（N/A）`とする。
 - preflight（read-only）:
   - `$PSVersionTable.PSVersion`、`[System.Environment]::OSVersion`、`chcp`のdefault code page、`$env:LOCALAPPDATA`を記録する。
+  - `$env:LOCALAPPDATA`のowner SIDとACLを検証する。worker wake pipeの親検証（`verify_runtime_parent`）はownerが
+    現在user SIDと一致し、書込み可能なACEが現在user/SYSTEM/Administratorsだけであることを要求する。実測CI runner
+    では既定ownerが`BUILTIN\Administrators`でこの条件を満たさない。owner不一致、または現在user以外のuntrusted
+    writerがあれば、後述のruntime dir / ACLで示すタスク専用の安全な親を使う。owner SID・各ACE・protected flagを
+    記録し、この検証はdaemon起動前に行う。
   - WinUSB backend: `Get-PnpDevice -PresentOnly`と`pnputil /enum-drivers`で対象USB ID（`0511:xxxx`）の現driver
     bindingをinventoryとして記録する。ユーザー確認なしにWinUSB INF・driverのinstall/変更/削除
     （`pnputil /add-driver`・`/delete-driver`等）を行わず、kernel driverやINFを導入しない。
   - PX-S1UD/mirakc等の稼働経路を変更しない。対象Q3U4をclaim中の他daemonがあれば`px4d`が`busy`で失敗することを
     確認する。firmwareは利用者が用意した既存ファイルを`--firmware`で指定するだけで、download・抽出・変換をしない。
 - runtime dir / ACL:
-  - `$env:LOCALAPPDATA`配下の短いpathを`$RT`として`--runtime-dir`へ渡す。既定動作では`px4d`自身が
-    same-user private ACLでruntime dirとendpointを作成するので、検証側で事前作成しない。
-  - `$RT`を検証側で事前作成する必要がある場合に限り、elevated tokenでの`New-Item`はownerが
-    `BUILTIN\Administrators`になり`px4d`のvalidatorに拒否される（native Windowsで観測）。その場合はownerを
-    現在user SIDに明示設定し、継承を切ったprotected DACLで現在userだけに許可する。これを満たせない、または
-    securityを弱める回避（broad ACL、public TEMP、owner検査の省略）は行わず、gate未完了として記録する:
-
-    ```powershell
-    $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-    $acl = New-Object System.Security.AccessControl.DirectorySecurity
-    $acl.SetOwner($me)
-    $acl.SetAccessRuleProtection($true, $false)
-    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
-      $me, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
-    [System.IO.Directory]::CreateDirectory($RT, $acl) | Out-Null
-    ```
-
+  - daemonのworker wake pipeは`LOCALAPPDATA`を親として`verify_runtime_parent`（ownerが現在user SID、trusted
+    writerのみ）を通す必要がある。既定profileのACLがこの条件を満たすとは仮定しない。後述のrunnable setupは
+    常にタスク専用の短い親ディレクトリを作り、ownerを現在user SID、継承を切ったprotected DACLで現在userだけに
+    許可して、daemonへprocess-scopedで`LOCALAPPDATA`として渡す（setupの`$LAP`）。profile ACL・global env・
+    driverは変更しない。これは検証fixtureであり、製品defaultの不具合を修正したものではない。実際の製品運用でも
+    安全な親が必要で、その要件は製品の`verify_runtime_parent`のままとする。`$RT`はこの親の下に置き、worker
+    socketとendpoint socketの両方がAF_UNIXの108 byte未満に収まることをsetupで確認する。`px4d`は存在しない
+    `--runtime-dir`を`serial endpoint: NOT_FOUND`（exit 3）で拒否する（2026-10-10 native Windows 11で観測）ため、
+    `$RT`も親と同じowner・protected DACLで事前作成する。
+  - setupはWindows PowerShell 5.1（`powershell.exe`）で実行する。PowerShell 7の.NETには
+    `[System.IO.Directory]::CreateDirectory(string, DirectorySecurity)`がない。PowerShell 5.1で
+    `$ErrorActionPreference = 'Stop'`のままnative commandのstderrを`2>&1`で取り込むと終了errorになるため、
+    ready待ちのstatus poll等native commandを呼ぶ範囲は`$ErrorActionPreference`を`Continue`にする。
   - endpointがsame-user private ACLであること、non-ASCII（UTF8）のruntime/firmware/output pathでもargv・
     file openがACPで壊れないことを確認する。
 - コマンド（PowerShell。POSIX風の`/dev/null`・`sha256sum`・`$?`をそのまま使わない。空白入りpathに耐えるため
@@ -533,7 +535,6 @@ SPEC §1 の対象環境（Linux、Android、macOS）に含まれないため �
   ```powershell
   $ErrorActionPreference = 'Stop'
   $D = 'C:\px4-e17-<taskid>\extract'      # タスク固有の未使用path。既存pathを再利用しない。
-  $RT = Join-Path $env:LOCALAPPDATA 'px4-e17-<taskid>'
   $LOG = 'C:\px4-e17-<taskid>\log'
   $ZIP = 'C:\path\to\px4-userland-<version>-windows-x86_64.zip'
   if (Test-Path $D) { throw "refusing to reuse existing extraction path: $D" }
@@ -541,6 +542,51 @@ SPEC §1 の対象環境（Linux、Android、macOS）に含まれないため �
   New-Item -ItemType Directory -Path $LOG | Out-Null
   Get-FileHash -Algorithm SHA256 $ZIP
   Expand-Archive -Path $ZIP -DestinationPath $D   # fresh $D への展開。-Force で既存を上書きしない。
+
+  # 既定profileのLOCALAPPDATA owner SID/ACLはread-onlyで記録する（変更しない）。
+  $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+  $lap = [System.Environment]::GetEnvironmentVariable('LOCALAPPDATA')
+  $lapAcl = Get-Acl -LiteralPath $lap
+  $lapOwner = $lapAcl.GetOwner([System.Security.Principal.SecurityIdentifier])
+  Write-Host "default LOCALAPPDATA=$lap owner=$($lapOwner.Value) currentUser=$($me.Value) protected=$($lapAcl.AreAccessRulesProtected)"
+  foreach ($ace in $lapAcl.Access) {
+    Write-Host "  lap ace identity=$($ace.IdentityReference) rights=$($ace.FileSystemRights) inherited=$($ace.IsInherited)"
+  }
+
+  # 既定profileのACLがworker親検証を満たすとは仮定できないため、常にタスク専用の保護された親を作る
+  # （検証fixture）。profile ACL・global env・driverは変更しない。製品defaultの不具合修正ではない。
+  $parentRoot = [System.Environment]::GetEnvironmentVariable('RUNNER_TEMP')
+  if (-not $parentRoot) { $parentRoot = [System.Environment]::GetEnvironmentVariable('TEMP') }
+  $LAP = Join-Path $parentRoot ('px4e17lap-' + [guid]::NewGuid().ToString('N').Substring(0,8))
+  if (Test-Path $LAP) { throw "refusing to reuse existing LOCALAPPDATA parent: $LAP" }
+  $acl = New-Object System.Security.AccessControl.DirectorySecurity
+  $acl.SetOwner($me)
+  $acl.SetAccessRuleProtection($true, $false)
+  $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+    $me, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+  [System.IO.Directory]::CreateDirectory($LAP, $acl) | Out-Null
+
+  $ID = '<device serial>'   # daemonの--device
+  $RT = Join-Path $LAP 'px4-e17-<taskid>'
+  # AF_UNIX sun_pathは108 byte未満。worker socketとendpoint socket（<RT>\px4-userland\<ID>\<name>.sock）の
+  # full sampleをUTF-8 byte数で確認する。
+  $sampleWorker = Join-Path $LAP ('px4-wake-' + ('0' * 16) + '\w.sock')
+  $sampleControl = Join-Path (Join-Path (Join-Path $RT 'px4-userland') $ID) 'control.sock'
+  $sampleStream = Join-Path (Join-Path (Join-Path $RT 'px4-userland') $ID) 'stream.sock'
+  $workerBytes = [System.Text.Encoding]::UTF8.GetByteCount($sampleWorker)
+  $controlBytes = [System.Text.Encoding]::UTF8.GetByteCount($sampleControl)
+  $streamBytes = [System.Text.Encoding]::UTF8.GetByteCount($sampleStream)
+  Write-Host "LOCALAPPDATA parent=$LAP workerSocketBytes=$workerBytes controlSocketBytes=$controlBytes streamSocketBytes=$streamBytes"
+  if ($workerBytes -ge 108 -or $controlBytes -ge 108 -or $streamBytes -ge 108) {
+    throw "socket path too long for AF_UNIX: worker=$workerBytes control=$controlBytes stream=$streamBytes"
+  }
+  # px4dは--runtime-dirの存在を要求する。親と同じowner・protected DACLで作る。
+  $rtAcl = New-Object System.Security.AccessControl.DirectorySecurity
+  $rtAcl.SetOwner($me)
+  $rtAcl.SetAccessRuleProtection($true, $false)
+  $rtAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+    $me, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+  [System.IO.Directory]::CreateDirectory($RT, $rtAcl) | Out-Null
 
   # .NET Framework (PowerShell 5.1) ProcessStartInfo.Arguments用のWindows引用。
   function ConvertTo-WindowsArg([string]$value) {
@@ -552,11 +598,13 @@ SPEC §1 の対象環境（Linux、Android、macOS）に含まれないため �
   function Join-WindowsArgs([string[]]$values) {
     return ($values | ForEach-Object { ConvertTo-WindowsArg $_ }) -join ' '
   }
-  function Start-OwnedProcess([string]$file, [string[]]$arguments, [bool]$stdin) {
+  function Start-OwnedProcess([string]$file, [string[]]$arguments, [bool]$stdin, [string]$localAppData) {
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $file
     $psi.Arguments = Join-WindowsArgs $arguments
     $psi.UseShellExecute = $false
+    # この子processだけにLOCALAPPDATAを渡す（通常のprofile環境は変更しない）。
+    if ($localAppData) { $psi.EnvironmentVariables['LOCALAPPDATA'] = $localAppData }
     $psi.RedirectStandardInput = $stdin
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
@@ -620,7 +668,8 @@ SPEC §1 の対象環境（Linux、Android、macOS）に含まれないため �
   ```
 
   daemon起動・ready確認・受信・CARD・停止（X-START/X-LOAD/X-MON/X-CARD-HP/X-STOP相当）。`$ID`は`--device`、
-  `$FW`は利用者提供firmware。標準入力をredirectし、`--exit-on-stdin-eof`でcooperative shutdownする。
+  `$FW`は利用者提供firmware。daemonにはprocess-scopedで`LOCALAPPDATA=$LAP`を渡し、通常のprofile環境は変更しない。
+  標準入力をredirectし、`--exit-on-stdin-eof`でcooperative shutdownする。
   ready判定はexit codeだけでなくstatusの`ready=yes` fieldを確認する。CARDは**daemon停止前**に実行する。
   受信はQ3U4では8 receiverを**同時に**起動し（逐次実行で代用しない）、各processを有限時間で待つ。他profileは
   SPEC 10.2.7の該当receiverだけを使う。コマンド失敗時も`finally`でowned stdinをcloseしてcleanupを試み、
@@ -628,7 +677,7 @@ SPEC §1 の対象環境（Linux、Android、macOS）に含まれないため �
 
   ```powershell
   $owned = Start-OwnedProcess (Join-Path $D 'px4d.exe') `
-    @('--device', $ID, '--firmware', $FW, '--runtime-dir', $RT, '--exit-on-stdin-eof') $true
+    @('--device', $ID, '--firmware', $FW, '--runtime-dir', $RT, '--exit-on-stdin-eof') $true $LAP
   $primary = $null
   try {
     $ready = $false
@@ -666,15 +715,17 @@ SPEC §1 の対象環境（Linux、Android、macOS）に含まれないため �
   ```
 
   停止後の確認は所有PIDだけを見る（無関係なglobal processを混ぜない）。実際のexit codeとendpoint残留を
-  確認し、空のowned dirだけを削除する:
+  確認し、空のowned dirだけを削除する。タスク専用の親を作った場合だけ、その親も（空になった後で）削除する:
 
   ```powershell
   if (-not $owned.Process.HasExited) { throw 'owned px4d is still running after the shutdown attempt' }
   if ($owned.Process.ExitCode -ne 0) { throw "owned px4d exit code was $($owned.Process.ExitCode)" }
-  if (Test-Path $RT) {
-    $left = Get-ChildItem -Force $RT
-    if ($left) { throw "runtime dir still has endpoint/lease entries after cleanup: $($left.Name -join ', ')" }
-    Remove-Item $RT -Force   # 空のowned dirだけを削除する。失敗証拠を隠す再帰削除は行わない。
+  $ownedDirs = @($RT, $LAP)   # $RTを先に、次に親を確認・削除する
+  foreach ($dir in $ownedDirs) {
+    if (-not (Test-Path $dir)) { continue }
+    $left = Get-ChildItem -Force $dir
+    if ($left) { throw "runtime dir still has entries after cleanup: $dir => $($left.Name -join ', ')" }
+    Remove-Item $dir -Force   # 空のowned dirだけを削除する。失敗証拠を隠す再帰削除は行わない。
   }
   ```
 
