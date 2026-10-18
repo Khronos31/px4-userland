@@ -1,8 +1,8 @@
 {
-  "kind": "work-in-progress-source-checkpoint-limited-review-ready",
+  "kind": "work-in-progress-source-checkpoint-cross-build-verified",
   "branch": "wip/userland-common-20261017",
   "upstream_main": "90f08a594487e2603bd5c09f778a0b3b64ac9a4d",
-  "snapshot_source": "/config/.work/userland-common-20261017/implementation/px4-product-status-ctl",
+  "snapshot_source": "/config/.work/userland-common-20261017/implementation/px4-status-windows-union",
   "snapshot_file_count": 293,
   "snapshot_file_sha256": {
     ".editorconfig": "a38dc184aabf62d6bea89d602420a10eb74d0cf4c464968cf6b597670752e669",
@@ -282,7 +282,7 @@
     "userland/tools/px4_ts_core.h": "00c48c828af885e4c7deadc1dc176e1ad064e412cd182b67acf48fb5f2cee933",
     "userland/tools/px4_ts_posix.cpp": "bcfbe08772c9e48d586fdb432e71ce2a7352466c0895cd81f9c602fef3da6ac2",
     "userland/tools/px4_ts_posix.h": "b63e61601432d770ae2c6e6b476911508211cd97db3a3a8144dbdf06c190d24e",
-    "userland/tools/px4_ts_windows.cpp": "d2ee784e7dc5d0a3545c3f6dd205fdf547b79af53a156959259c2ab01b936d07",
+    "userland/tools/px4_ts_windows.cpp": "4706b588e58e334b86d46c03b1f929d148a9cd59e03eabd918d30e7308366a39",
     "userland/tools/px4_ts_windows_output.cpp": "2fdbe169bd02a3e8e970519eb29dbe8c001bd853bc12b61e02562a726e9faad3",
     "userland/tools/px4_ts_windows_output.h": "bf5327117a0aefde4e144f1f6dc22e876ad31d8df966dd99e3737ab629011672",
     "userland/tools/px4_windows_args.h": "20d71af4d347f5324dd76fd3274a22e714e23f999e04b7e3a35a8506cd050631",
@@ -302,15 +302,16 @@
   "retained_upstream_files_outside_snapshot": [],
   "overlay_policy": "固定sourceを専用branchへ保全。metadata自体はsnapshot外。限定reviewと製品全体のRC認定は分ける。",
   "acceptance_scope": [
-    "製品bindingで同じctl sourceを共有。P実ctlを含む関連2試験、S/PIX別process status proofは成功。独立reviewのPIX準備gate修正は限定READY。",
-    "P/common以外の製品はこのP sourceへ明示overrideして検証。更新後pin/default-fetchは後続。",
-    "Windows入口の新wire接続は別作業中。全CLI/全OS/CARD/実機/RCはこのcheckpointの認定範囲に含めない。"
+    "Windows TS入口を既存run_wireへ接続。A vendorへ追加したSocketStream::write_allは既存P実装と同一。",
+    "P/A各daemon/TS/ctlと関連output/worker/platform試験exeのmingw cross-link成功。PEは実行しておらずnative受信/停止は後続。",
+    "Pでは先行共用ctlとWindows入口をdisjoint統合。新union全体のcross-buildは次CLI候補で確認予定。S/PIXのP pinは既検証4d5a982のまま。",
+    "旧Windows control fixtureはP Issue69/A旧IPC移行の追跡対象。既存test/期待値を変更しない。全CLI/全OS/CARD/RC認定ではない。"
   ],
   "acceptance_index": "https://github.com/Khronos31/agent-workspace/blob/design/userland-common-contract-20261017/implementation/accepted-source-index.md",
   "ci_policy": "このソース保全コミットは[skip ci]を含む。リリース・tag・mainへの反映は別の判断とする。",
   "known_followups": [
     "https://github.com/Khronos31/px4-userland/issues/68"
   ],
-  "previous_checkpoint_commit": "a5b72256e612995f0c3766ac31949ca7a7e485a5",
+  "previous_checkpoint_commit": "4d5a982e2ccf57931ac370a7c8373faf01053399",
   "common_source_commit": "80ccc7b7e9ccad7c9b3656f02a28d12f003c45a0"
 }
