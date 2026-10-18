@@ -82,6 +82,15 @@ public:
     // from production headers/binaries and must be installed before read().
     void set_read_wait_observer_for_test(ReadWaitObserver observer,
                                          void* context) noexcept;
+    using ReadResumeObserver = void (*)(void*, std::uint8_t) noexcept;
+    // Test-only one-shot scheduling seam immediately after the bounded wait
+    // returns and before the post-wait state decision.  When configured, the
+    // session mutex is released around the callback so a finite external gate
+    // can force an otherwise legal delayed-reader schedule; it models a
+    // scheduling delay and never substitutes for the queue.  It is absent from
+    // production headers/binaries.
+    void set_read_resume_observer_for_test(ReadResumeObserver observer,
+                                           void* context) noexcept;
     using PacketEnqueueObserver = void (*)(void*, std::uint8_t) noexcept;
     // Test-only barrier after a packet has been accounted and queued.  It is
     // absent from production headers/binaries.

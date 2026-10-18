@@ -4,6 +4,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "single_receiver_frontend.h"
 
+#include "strict_frequency_profiles.h"
+
 namespace px4::userland {
 namespace {
 Q3U4ReceiverMapping mapping(std::uint8_t address, bool secondary,
@@ -99,8 +101,21 @@ Result<void> SingleReceiverFrontend::open_receiver(std::uint8_t receiver) noexce
 
 Result<void> SingleReceiverFrontend::tune_terrestrial(std::uint8_t r,std::uint32_t f,
                                                        std::uint32_t timeout) noexcept
+{ (void)timeout; return tune_terrestrial_frequency(r,static_cast<std::uint64_t>(f)*1000U); }
+
+Result<TunerHzProgramming> SingleReceiverFrontend::tune_terrestrial_hz(
+    std::uint8_t r, std::uint64_t f, std::uint32_t timeout) noexcept
 {
-    (void)timeout; if(r||!opened_)return Result<void>::failure(Error::INVALID_ARGUMENT);
+    // Fractional R850 PLL: no honest command scalar, programmed_hz is absent.
+    (void)timeout; const auto x=tune_terrestrial_frequency(r,f);
+    if(!x)return Result<TunerHzProgramming>::failure(x.error());
+    return Result<TunerHzProgramming>::success(TunerHzProgramming{});
+}
+
+Result<void> SingleReceiverFrontend::tune_terrestrial_frequency(std::uint8_t r,
+                                                                 std::uint64_t f) noexcept
+{
+    if(r||!opened_)return Result<void>::failure(Error::INVALID_ARGUMENT);
     auto x=tc_t_.set_agc_t(false); if(!x)return x;
     if (receiver_supports(0U, ipc::System::ISDB_S)) { x=tc_s_.sleep_s(true); if(!x)return x; }
     constexpr std::uint8_t regs[]{0x0e,0x0f,0x71}; constexpr std::uint8_t vals[]{0x77,0x10,0x20};
@@ -108,7 +123,7 @@ Result<void> SingleReceiverFrontend::tune_terrestrial(std::uint8_t r,std::uint32
     x=tc_t_.sleep_t(false); if(!x)return x;
     x=tc_t_.write_reg(0x76U,0x0cU);if(!x)return x;
     x=tc_t_.write_reg(0x1fU,0x30U);if(!x)return x;
-    x=r850_.wakeup();if(!x)return x; x=r850_.set_frequency(f);if(!x)return x;
+    x=r850_.wakeup();if(!x)return x; x=r850_.set_frequency_hz(f);if(!x)return x;
     bool pll_locked=false;
     for(std::uint32_t i=0;i<50U;++i){auto locked=r850_.is_pll_locked();if(!locked)return Result<void>::failure(locked.error());if(locked.value()){pll_locked=true;break;}delay_.sleep_ms(10U);}
     if(!pll_locked)return Result<void>::failure(Error::TIMEOUT);
@@ -121,8 +136,31 @@ Result<void> SingleReceiverFrontend::tune_terrestrial(std::uint8_t r,std::uint32
 
 Result<void> SingleReceiverFrontend::tune_satellite(std::uint8_t r,std::uint32_t f,
                                                      std::uint32_t timeout) noexcept
+{ (void)timeout; return tune_satellite_frequency(r,static_cast<std::uint64_t>(f)*1000U); }
+
+Result<TunerHzProgramming> SingleReceiverFrontend::tune_satellite_hz(
+    std::uint8_t r, std::uint64_t f, std::uint32_t timeout) noexcept
 {
-    (void)timeout; if(r||!opened_||!receiver_supports(0U,ipc::System::ISDB_S))return Result<void>::failure(Error::UNSUPPORTED);
+    // Fractional RT710 PLL: no honest command scalar, programmed_hz is absent.
+    (void)timeout; const auto x=tune_satellite_frequency(r,f);
+    if(!x)return Result<TunerHzProgramming>::failure(x.error());
+    return Result<TunerHzProgramming>::success(TunerHzProgramming{});
+}
+
+TunerStrictProfile SingleReceiverFrontend::strict_profile(std::uint8_t r,
+                                                           ipc::System s) const noexcept
+{
+    if(!receiver_supports(r,s))return TunerStrictProfile{};
+    if(s==ipc::System::ISDB_T)return r850_terrestrial_strict_profile();
+    auto profile=rt710_satellite_strict_profile();
+    profile.lnb_voltage_mask=0U;
+    return profile;
+}
+
+Result<void> SingleReceiverFrontend::tune_satellite_frequency(std::uint8_t r,
+                                                               std::uint64_t f) noexcept
+{
+    if(r||!opened_||!receiver_supports(0U,ipc::System::ISDB_S))return Result<void>::failure(Error::UNSUPPORTED);
     auto x=tc_s_.set_agc_s(false);if(!x)return x;
     x=tc_t_.write_reg(0x0eU,0x11U);if(!x)return x; x=tc_t_.write_reg(0x0fU,0x70U);if(!x)return x;
     x=tc_t_.sleep_t(true);if(!x)return x;
@@ -131,7 +169,7 @@ Result<void> SingleReceiverFrontend::tune_satellite(std::uint8_t r,std::uint32_t
     x=s.write_reg(0x08U,model_==DeviceModel::dtv02a_1t1s_u?0x37U:0x10U);if(!x)return x;
     x=tc_s_.sleep_s(false);if(!x)return x; x=tc_s_.write_reg(0x04U,0x02U);if(!x)return x;
     x=tc_s_.write_reg(0x8eU,0x02U);if(!x)return x; x=tc_t_.write_reg(0x1fU,0x20U);if(!x)return x;
-    x=rt710_.set_params(f,28860U,4U);if(!x)return x;
+    x=rt710_.set_params_hz(f,28860U,4U);if(!x)return x;
     bool pll_locked=false;
     for(std::uint32_t i=0;i<50U;++i){auto locked=rt710_.is_pll_locked();if(!locked)return Result<void>::failure(locked.error());if(locked.value()){pll_locked=true;break;}delay_.sleep_ms(10U);}
     if(!pll_locked)return Result<void>::failure(Error::TIMEOUT);

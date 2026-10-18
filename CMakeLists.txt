@@ -142,16 +142,17 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+include(cmake/DtvUserlandCoreDependency.cmake)
+px4_add_dtv_userland_core()
+
 add_library(px4_userland_core STATIC
     userland/src/card.cpp
     userland/src/card_service.cpp
-    userland/src/error.cpp
     userland/src/firmware.cpp
     userland/src/identity.cpp
     userland/src/ipc.cpp
     userland/src/it930x.cpp
     userland/src/it930x_protocol.cpp
-    userland/src/logging.cpp
     userland/src/bridge_i2c.cpp
     userland/src/cxd2856er.cpp
     userland/src/cxd2858er.cpp
@@ -193,7 +194,7 @@ target_include_directories(px4_userland_core
 )
 
 target_compile_features(px4_userland_core PUBLIC cxx_std_17)
-target_link_libraries(px4_userland_core PUBLIC Threads::Threads)
+target_link_libraries(px4_userland_core PUBLIC Threads::Threads dtv::core dtv::receiver dtv::card dtv::capture)
 
 function(px4_enable_project_warnings target)
     target_compile_options(${target} PRIVATE
@@ -262,6 +263,8 @@ endif()
 if(UNIX)
     add_library(px4_userland_posix_ipc STATIC
         userland/src/control_client.cpp
+        userland/src/control_context.cpp
+        userland/src/enclosure_context.cpp
         userland/src/control_server.cpp
         userland/src/posix_ipc.cpp
         userland/src/posix_tuner_nonce.cpp
@@ -270,7 +273,9 @@ if(UNIX)
         PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
     )
     target_compile_features(px4_userland_posix_ipc PUBLIC cxx_std_17)
-    target_link_libraries(px4_userland_posix_ipc PUBLIC px4_userland_core)
+    # The control endpoint uses the shared UDTV connection serializer/codecs.
+    target_link_libraries(px4_userland_posix_ipc PUBLIC
+        px4_userland_core dtv::control dtv::identity)
     px4_enable_project_warnings(px4_userland_posix_ipc)
     if(NOT PX4_BUILD_TESTS)
         target_sources(px4_userland_posix_ipc PRIVATE userland/src/control_workers.cpp)
@@ -296,8 +301,20 @@ endif()
 # shared control server/worker wiring live in userland/src/windows/ and the
 # shared sources, selected only for Windows hosts.
 if(WIN32)
-    add_library(px4_userland_windows_platform STATIC
+    # Keep the sleep implementation below the core in static link order. The
+    # Windows platform adapter also depends on the core, so it cannot provide
+    # this symbol without creating a static-library cycle.
+    add_library(px4_userland_windows_sleep STATIC
         userland/src/windows/windows_sleep.cpp
+    )
+    target_include_directories(px4_userland_windows_sleep
+        PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+    )
+    target_compile_features(px4_userland_windows_sleep PUBLIC cxx_std_17)
+    px4_enable_project_warnings(px4_userland_windows_sleep)
+    target_link_libraries(px4_userland_core PUBLIC px4_userland_windows_sleep)
+
+    add_library(px4_userland_windows_platform STATIC
         userland/tools/px4d_signals.cpp
     )
     target_include_directories(px4_userland_windows_platform
@@ -310,6 +327,8 @@ if(WIN32)
 
     add_library(px4_userland_windows_ipc STATIC
         userland/src/control_client.cpp
+        userland/src/control_context.cpp
+        userland/src/enclosure_context.cpp
         userland/src/control_server.cpp
         userland/src/control_workers.cpp
         userland/src/windows/windows_ipc.cpp
@@ -322,6 +341,8 @@ if(WIN32)
     target_compile_features(px4_userland_windows_ipc PUBLIC cxx_std_17)
     target_link_libraries(px4_userland_windows_ipc PUBLIC
         px4_userland_core
+        dtv::control
+        dtv::identity
         px4_userland_windows_platform
         advapi32
         bcrypt
@@ -332,7 +353,6 @@ if(WIN32)
     if(PX4_BUILD_WINSCARD)
         # Client-only IPC: the proxy has no USB backend, daemon, or firmware code.
         add_library(px4_winscard_client STATIC
-            userland/src/error.cpp
             userland/src/ipc.cpp
             userland/src/control_client.cpp
             userland/src/windows/windows_ipc.cpp
@@ -343,7 +363,8 @@ if(WIN32)
             ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
         )
         target_compile_features(px4_winscard_client PUBLIC cxx_std_17)
-        target_link_libraries(px4_winscard_client PUBLIC advapi32 bcrypt ws2_32 Threads::Threads)
+        target_link_libraries(px4_winscard_client PUBLIC advapi32 bcrypt ws2_32 Threads::Threads dtv::core)
+        target_link_libraries(px4_winscard_client PRIVATE dtv::identity)
         px4_enable_project_warnings(px4_winscard_client)
         add_library(px4_winscard SHARED
             userland/src/windows/winscard_proxy.cpp
@@ -356,16 +377,16 @@ if(WIN32)
 
     add_executable(px4ctl
         userland/tools/px4ctl.cpp
-        userland/tools/px4ctl_format.cpp
     )
-    target_link_libraries(px4ctl PRIVATE px4_userland_windows_ipc shell32)
+    target_link_libraries(px4ctl PRIVATE px4_userland_windows_ipc dtv::json dtv::identity shell32)
     target_include_directories(px4ctl PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
         ${CMAKE_CURRENT_SOURCE_DIR}/userland/tools
     )
     target_compile_features(px4ctl PRIVATE cxx_std_17)
+    target_compile_definitions(px4ctl PRIVATE
+        PX4_USERLAND_PRODUCT_VERSION="${PROJECT_VERSION}")
     px4_enable_project_warnings(px4ctl)
-
     add_executable(px4-ts
         userland/tools/px4_ts_windows.cpp
         userland/tools/px4_ts_windows_output.cpp
@@ -407,6 +428,8 @@ if(WIN32)
             ${CMAKE_CURRENT_SOURCE_DIR}/userland/tools
         )
         target_compile_features(px4d PRIVATE cxx_std_17)
+        target_compile_definitions(px4d PRIVATE
+            PX4_USERLAND_PRODUCT_VERSION="${PROJECT_VERSION}")
         px4_enable_project_warnings(px4d)
         if(PX4_BUILD_TESTS)
             # When tests are enabled the core library omits q3u4_stream.cpp to
@@ -427,13 +450,13 @@ if(WIN32)
             userland/src/px4d_args.cpp
             userland/src/frontend_probe_support.cpp
             userland/src/ts_probe_support.cpp
-            userland/src/mock_transport.cpp
         )
         target_include_directories(px4_userland_windows_test_support
             PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
             PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
         )
         target_compile_features(px4_userland_windows_test_support PUBLIC cxx_std_17)
+        target_link_libraries(px4_userland_windows_test_support PUBLIC dtv::core)
         px4_enable_project_warnings(px4_userland_windows_test_support)
 
         # Reuse the original test_main aggregator and the unchanged portable
@@ -708,7 +731,6 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
         userland/src/px4d_args.cpp
         userland/src/frontend_probe_support.cpp
         userland/src/ts_probe_support.cpp
-        userland/src/mock_transport.cpp
         userland/src/libusb_transport_test_access.cpp
     )
     target_include_directories(px4_userland_test_support
@@ -716,6 +738,7 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
     )
     target_compile_features(px4_userland_test_support PUBLIC cxx_std_17)
+    target_link_libraries(px4_userland_test_support PUBLIC dtv::core)
     px4_enable_project_warnings(px4_userland_test_support)
 
     add_executable(px4_userland_tests
@@ -814,6 +837,12 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
     endif()
 
     add_test(NAME px4_userland_tests COMMAND px4_userland_tests)
+
+    add_executable(px4_card_ownership_characterization
+        userland/tests/card_ownership_characterization.cpp)
+    target_link_libraries(px4_card_ownership_characterization PRIVATE px4_userland_core)
+    add_test(NAME px4_card_ownership_characterization
+        COMMAND px4_card_ownership_characterization)
     add_executable(px4_userland_single_receiver_stream_tests
         userland/tests/single_receiver_stream_tests.cpp
         userland/src/q3u4_stream.cpp)
@@ -825,6 +854,54 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
     px4_enable_project_warnings(px4_userland_single_receiver_stream_tests)
     add_test(NAME px4_userland_single_receiver_stream_tests
              COMMAND px4_userland_single_receiver_stream_tests)
+
+    # D2a packet-session characterization: the SAME harness source compiled
+    # against a source-only instrumented copy of the fixed old P 90f08a59
+    # data plane and against the extracted common component through the real
+    # q3u4_stream.cpp.  The fixed-old copy is test-only experiment source; it
+    # is not a product source and is never linked into the product.
+    add_library(px4_packet_session_fixed_old STATIC
+        userland/tests/packet_session_fixed_old.cpp)
+    target_include_directories(px4_packet_session_fixed_old
+        PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/userland/src)
+    target_compile_features(px4_packet_session_fixed_old PUBLIC cxx_std_17)
+    target_compile_definitions(px4_packet_session_fixed_old PUBLIC
+        PX4_Q3U4_STREAM_TEST_ACCESS=1)
+    target_link_libraries(px4_packet_session_fixed_old PUBLIC px4_userland_core)
+    px4_enable_project_warnings(px4_packet_session_fixed_old)
+
+    add_executable(px4_packet_session_characterization_old
+        userland/tests/packet_session_characterization.cpp)
+    target_link_libraries(px4_packet_session_characterization_old
+        PRIVATE px4_packet_session_fixed_old)
+    target_include_directories(px4_packet_session_characterization_old PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/src)
+    target_compile_features(px4_packet_session_characterization_old
+        PRIVATE cxx_std_17)
+    px4_enable_project_warnings(px4_packet_session_characterization_old)
+    add_test(NAME px4_packet_session_characterization_old
+             COMMAND px4_packet_session_characterization_old)
+    set_tests_properties(px4_packet_session_characterization_old PROPERTIES
+        TIMEOUT 120)
+
+    add_executable(px4_packet_session_characterization_new
+        userland/tests/packet_session_characterization.cpp
+        userland/src/q3u4_stream.cpp)
+    target_link_libraries(px4_packet_session_characterization_new
+        PRIVATE px4_userland_core)
+    target_include_directories(px4_packet_session_characterization_new PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/src)
+    target_compile_features(px4_packet_session_characterization_new
+        PRIVATE cxx_std_17)
+    target_compile_definitions(px4_packet_session_characterization_new PRIVATE
+        PX4_Q3U4_STREAM_TEST_ACCESS=1)
+    px4_enable_project_warnings(px4_packet_session_characterization_new)
+    add_test(NAME px4_packet_session_characterization_new
+             COMMAND px4_packet_session_characterization_new)
+    set_tests_properties(px4_packet_session_characterization_new PROPERTIES
+        TIMEOUT 120)
+
     add_executable(px4_userland_tuner_service_settle_tests
         userland/tests/tuner_service_settle_tests.cpp)
     target_link_libraries(px4_userland_tuner_service_settle_tests
@@ -835,6 +912,131 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
     px4_enable_project_warnings(px4_userland_tuner_service_settle_tests)
     add_test(NAME px4_userland_tuner_service_settle_tests
              COMMAND px4_userland_tuner_service_settle_tests)
+    add_executable(px4_userland_tuner_service_trace_tests
+        userland/tests/tuner_service_trace_tests.cpp)
+    target_link_libraries(px4_userland_tuner_service_trace_tests
+        PRIVATE px4_userland_core)
+    target_include_directories(px4_userland_tuner_service_trace_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/include)
+    target_compile_features(px4_userland_tuner_service_trace_tests PRIVATE cxx_std_17)
+    px4_enable_project_warnings(px4_userland_tuner_service_trace_tests)
+    add_test(NAME px4_userland_tuner_service_trace_tests
+             COMMAND px4_userland_tuner_service_trace_tests)
+    # Outer bound behind the test's own finite waits.
+    set_tests_properties(px4_userland_tuner_service_trace_tests PROPERTIES TIMEOUT 120)
+    # R2: strict worker admission plus the real Q3U4/MLT power coordinators
+    # with mocked power I/O.  The test compiles its private-access copy of the
+    # worker lanes so the deterministic signal-failure injection is available.
+    add_executable(px4_receiver_r2_strict_tests
+        userland/tests/receiver_r2_strict_tests.cpp
+        userland/src/control_workers.cpp)
+    target_link_libraries(px4_receiver_r2_strict_tests PRIVATE px4_userland_core)
+    target_include_directories(px4_receiver_r2_strict_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/src)
+    target_compile_features(px4_receiver_r2_strict_tests PRIVATE cxx_std_17)
+    target_compile_definitions(px4_receiver_r2_strict_tests PRIVATE
+        PX4_CONTROL_WORKERS_TEST_ACCESS=1)
+    px4_enable_project_warnings(px4_receiver_r2_strict_tests)
+    add_test(NAME px4_receiver_r2_strict_tests COMMAND px4_receiver_r2_strict_tests)
+    set_tests_properties(px4_receiver_r2_strict_tests PROPERTIES TIMEOUT 120)
+    # R3 prepared Hz worker routes reuse only private R2 test fixtures.
+    add_executable(px4_receiver_r3_prepared_worker_tests
+        userland/tests/receiver_r3_prepared_worker_tests.cpp
+        userland/src/control_workers.cpp)
+    target_link_libraries(px4_receiver_r3_prepared_worker_tests
+        PRIVATE px4_userland_core)
+    target_include_directories(px4_receiver_r3_prepared_worker_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/tests)
+    target_compile_features(px4_receiver_r3_prepared_worker_tests PRIVATE cxx_std_17)
+    target_compile_definitions(px4_receiver_r3_prepared_worker_tests PRIVATE
+        PX4_CONTROL_WORKERS_TEST_ACCESS=1)
+    px4_enable_project_warnings(px4_receiver_r3_prepared_worker_tests)
+    add_test(NAME px4_receiver_r3_prepared_worker_tests
+             COMMAND px4_receiver_r3_prepared_worker_tests)
+    set_tests_properties(px4_receiver_r3_prepared_worker_tests PROPERTIES TIMEOUT 120)
+    # R2 actual socket-teardown evidence through the real control server.
+    add_executable(px4_receiver_r2_server_tests
+        userland/tests/receiver_r2_server_tests.cpp)
+    target_link_libraries(px4_receiver_r2_server_tests
+        PRIVATE px4_userland_core px4_userland_posix_ipc
+                px4_userland_posix_workers)
+    target_include_directories(px4_receiver_r2_server_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/src)
+    target_compile_features(px4_receiver_r2_server_tests PRIVATE cxx_std_17)
+    px4_enable_project_warnings(px4_receiver_r2_server_tests)
+    add_test(NAME px4_receiver_r2_server_tests
+             COMMAND px4_receiver_r2_server_tests)
+    set_tests_properties(px4_receiver_r2_server_tests PROPERTIES TIMEOUT 120)
+    # UDTV control endpoint through the actual product server body, real
+    # sockets, the real worker lanes and the same receiver engine.
+    if(TARGET px4_userland_posix_ipc)
+        add_executable(px4_runtime_v1_server_tests
+            userland/tests/runtime_v1_server_tests.cpp
+            userland/src/control_server.cpp
+            userland/src/control_workers.cpp
+            userland/src/q3u4_stream.cpp
+            userland/tools/px4_ts_core.cpp
+            userland/tools/px4_ts_posix.cpp)
+        target_link_libraries(px4_runtime_v1_server_tests
+            PRIVATE px4_userland_core px4_userland_posix_ipc dtv::json)
+        target_include_directories(px4_runtime_v1_server_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/tools)
+        target_compile_features(px4_runtime_v1_server_tests PRIVATE cxx_std_17)
+        target_compile_definitions(px4_runtime_v1_server_tests PRIVATE
+            PX4_CONTROL_SERVER_TEST_ACCESS=1
+            PX4_CONTROL_WORKERS_TEST_ACCESS=1
+            PX4_Q3U4_STREAM_TEST_ACCESS=1)
+        px4_enable_project_warnings(px4_runtime_v1_server_tests)
+        # Whole-context close of the production EnclosureContext with the
+        # production server and worker lanes; mock hardware only at the bottom.
+        add_executable(px4_owned_context_tests
+            userland/tests/owned_context_tests.cpp
+            userland/tools/px4d_signals.cpp)
+        target_link_libraries(px4_owned_context_tests
+            PRIVATE px4_userland_core px4_userland_posix_ipc px4_userland_posix_workers)
+        target_include_directories(px4_owned_context_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/tools)
+        target_compile_features(px4_owned_context_tests PRIVATE cxx_std_17)
+        px4_enable_project_warnings(px4_owned_context_tests)
+        add_test(NAME px4_owned_context_tests COMMAND px4_owned_context_tests)
+        set_tests_properties(px4_owned_context_tests PROPERTIES TIMEOUT 120)
+        add_test(NAME px4_runtime_v1_server_tests
+                 COMMAND px4_runtime_v1_server_tests)
+        set_tests_properties(px4_runtime_v1_server_tests PROPERTIES TIMEOUT 120)
+        add_executable(px4_normal_wire_idle_timeout_tests
+            userland/tests/normal_wire_idle_timeout_tests.cpp
+            userland/src/control_server.cpp
+            userland/src/control_workers.cpp
+            userland/src/q3u4_stream.cpp
+            userland/tools/px4_ts_core.cpp
+            userland/tools/px4_ts_posix.cpp)
+        target_link_libraries(px4_normal_wire_idle_timeout_tests
+            PRIVATE px4_userland_core px4_userland_posix_ipc dtv::json)
+        target_include_directories(px4_normal_wire_idle_timeout_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/tools)
+        target_compile_features(px4_normal_wire_idle_timeout_tests PRIVATE cxx_std_17)
+        target_compile_definitions(px4_normal_wire_idle_timeout_tests PRIVATE
+            PX4_CONTROL_SERVER_TEST_ACCESS=1
+            PX4_CONTROL_WORKERS_TEST_ACCESS=1
+            PX4_Q3U4_STREAM_TEST_ACCESS=1)
+        target_compile_definitions(px4_normal_wire_idle_timeout_tests PRIVATE
+            PX4CTL_EXECUTABLE="${CMAKE_CURRENT_BINARY_DIR}/px4ctl")
+        add_dependencies(px4_normal_wire_idle_timeout_tests px4ctl)
+        px4_enable_project_warnings(px4_normal_wire_idle_timeout_tests)
+        add_test(NAME px4_normal_wire_idle_timeout_tests
+                 COMMAND px4_normal_wire_idle_timeout_tests)
+        set_tests_properties(px4_normal_wire_idle_timeout_tests PROPERTIES TIMEOUT 120)
+    endif()
     add_executable(px4_userland_q3u4_power_order_tests
         userland/tests/q3u4_power_order_tests.cpp)
     target_link_libraries(px4_userland_q3u4_power_order_tests
@@ -882,12 +1084,35 @@ endif()
 if(TARGET px4_userland_posix_ipc)
     add_executable(px4ctl
         userland/tools/px4ctl.cpp
-        userland/tools/px4ctl_format.cpp
     )
-    target_link_libraries(px4ctl PRIVATE px4_userland_posix_ipc)
+    target_link_libraries(px4ctl PRIVATE px4_userland_posix_ipc dtv::json dtv::identity)
     target_include_directories(px4ctl PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/userland/include)
     target_compile_features(px4ctl PRIVATE cxx_std_17)
+    target_compile_definitions(px4ctl PRIVATE
+        PX4_USERLAND_PRODUCT_VERSION="${PROJECT_VERSION}")
     px4_enable_project_warnings(px4ctl)
+    if(TARGET px4_runtime_v1_server_tests)
+        target_compile_definitions(px4_runtime_v1_server_tests PRIVATE
+            PX4CTL_EXECUTABLE="${CMAKE_CURRENT_BINARY_DIR}/px4ctl")
+        add_dependencies(px4_runtime_v1_server_tests px4ctl)
+    endif()
+    if(TARGET px4_userland_posix_ipc)
+        add_executable(px4_posix_ipc_migration_tests
+            userland/tests/posix_ipc_migration_main.cpp
+            userland/tests/posix_ipc_tests.cpp
+            userland/src/posix_ipc.cpp)
+        target_link_libraries(px4_posix_ipc_migration_tests
+            PRIVATE px4_userland_posix_ipc dtv::identity)
+        target_include_directories(px4_posix_ipc_migration_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/src)
+        target_compile_definitions(px4_posix_ipc_migration_tests PRIVATE
+            PX4_POSIX_IPC_TEST_ACCESS=1)
+        target_compile_features(px4_posix_ipc_migration_tests PRIVATE cxx_std_17)
+        px4_enable_project_warnings(px4_posix_ipc_migration_tests)
+        add_test(NAME px4_posix_ipc_migration_tests
+            COMMAND px4_posix_ipc_migration_tests)
+        set_tests_properties(px4_posix_ipc_migration_tests PROPERTIES TIMEOUT 30)
+    endif()
 
     add_executable(px4-ts
         userland/tools/px4_ts.cpp
@@ -925,6 +1150,8 @@ if(TARGET px4_userland_posix_ipc)
             ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
         )
         target_compile_features(px4d PRIVATE cxx_std_17)
+        target_compile_definitions(px4d PRIVATE
+            PX4_USERLAND_PRODUCT_VERSION="${PROJECT_VERSION}")
         px4_enable_project_warnings(px4d)
     endif()
 endif()

@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "px4/card.h"
 #include "px4/card_service.h"
+#include "px4/control_context.h"
 #include "px4/control_server.h"
+#include "px4/enclosure_context.h"
 #include "px4/firmware.h"
 #include "px4/it930x.h"
 #include "px4/libusb_transport.h"
 #include "px4/platform_sleep.h"
 #include "px4/q3u4_stream.h"
 #include "px4/tuner_service.h"
+
+#include <dtv/userland/identity.h>
 
 #if defined(_WIN32)
 #include "px4/windows_tuner_nonce.h"
@@ -29,11 +33,14 @@
 #include "px4d_args.h"
 #include "px4d_list_format.h"
 #include "px4d_signals.h"
+#include "runtime_identity.h"
 
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <memory>
+#include <new>
 #include <string>
 #include <thread>
 #include <vector>
@@ -94,6 +101,7 @@ int exit_status(Error error) noexcept
     case Error::CARD_REMOVED:
     case Error::BUFFER_TOO_SMALL: return 9;
     case Error::FIRMWARE_REJECTED: return 10;
+    case Error::RESOURCE_LIMIT: return 4;
     case Error::INTERNAL: return 70;
     }
     return 70;
@@ -158,130 +166,72 @@ void on_stdin_eof(void*) noexcept
 }
 #endif
 
-// Publishes the control/data endpoints and runs the foreground loop until a
-// stop signal or loop failure.  Returns the process exit status.
-int serve(const Px4dArguments& arguments, const std::string& base_serial,
-          CardService& card_service, TunerService& tuner_service,
-          Q3U4StreamDataPlane& stream, std::uint8_t usb_present_mask,
-          std::uint8_t receiver_count, bool dual_system = false) noexcept
-{
-    const char* runtime_directory = arguments.runtime_directory.empty() ?
-                                        nullptr : arguments.runtime_directory.c_str();
-    const char* instance = arguments.instance.empty() ? base_serial.c_str()
-                                                      : arguments.instance.c_str();
-    const EndpointConfig endpoint{
-        runtime_directory, instance, kControlEndpointName,
-        arguments.group ? EndpointAccess::shared_group : EndpointAccess::private_user};
-    auto serial_lease = SerialEndpointLease::acquire(endpoint, base_serial);
-    if (!serial_lease) {
-        std::fprintf(stderr, "serial endpoint: %s\n", error_string(serial_lease.error()));
-        return exit_status(serial_lease.error());
-    }
-    auto server = PosixControlServer::create(
-        endpoint, card_service, tuner_service, base_serial, true, usb_present_mask,
-        &stream, receiver_count, dual_system);
-    if (!server) {
-        std::fprintf(stderr, "control endpoint: %s\n", error_string(server.error()));
-        return exit_status(server.error());
-    }
-    if (!px4::userland::px4d::install_signal_handlers()) {
-        std::fprintf(stderr, "signal setup failed\n");
-        return 70;
-    }
-#if defined(_WIN32)
-    px4::userland::cli::StdinEofMonitor eof_monitor;
-    if (arguments.exit_on_stdin_eof &&
-        !eof_monitor.start(::GetStdHandle(STD_INPUT_HANDLE), &on_stdin_eof, nullptr)) {
-        std::fprintf(stderr, "stdin monitor setup failed\n");
-        return 70;
-    }
-#endif
+// Whole-context cleanup budget for the standalone daemon.  It is the adopted
+// candidate value for a full close, not a per-model measured duration.  A
+// cleanup that has not quiesced by then ends the process abnormally.
+constexpr std::chrono::milliseconds kWholeContextCloseBudget{15000};
+constexpr int kCloseDeadlineExitStatus = 70;
 
-#if defined(_WIN32)
-    std::fprintf(stderr, "px4d ready: device=%s endpoint=%ls\n",
-                 base_serial.c_str(), server.value()->endpoint_path());
-#else
-    std::fprintf(stderr, "px4d ready: device=%s endpoint=%s\n",
-                 base_serial.c_str(), server.value()->endpoint_path());
-#endif
-    Error loop_error = Error::OK;
-    while (!px4::userland::px4d::stop_requested()) {
-        const auto polled = server.value()->poll_once(Timeout{100U});
-        if (!polled) {
-            loop_error = polled.error();
-            break;
-        }
+// Base of the four product families: the runtime that owns the claimed USB
+// transports (and their internal descriptor duplicates) and the clock every
+// family object shares.  Declared first, they are released last.
+class Px4Family : public EnclosureFamily {
+public:
+    explicit Px4Family(std::unique_ptr<Q3U4Runtime> runtime) noexcept
+        : runtime_(std::move(runtime))
+    {
     }
-    const auto cleanup = server.value()->shutdown();
-    if (!cleanup) {
-        std::fprintf(stderr, "shutdown cleanup: %s\n", error_string(cleanup.error()));
-        if (loop_error == Error::OK) loop_error = cleanup.error();
-    }
-#if defined(_WIN32)
-    eof_monitor.stop();
-    // Release the serial namespace lease before advertising cleanup so a
-    // console/termination handler cannot let the process exit while the
-    // private endpoint namespace is still held.
-    (void)serial_lease.value().close();
-    px4::userland::px4d::notify_cleanup_complete();
-#endif
-    if (loop_error != Error::OK) {
-        std::fprintf(stderr, "px4d stopped: %s\n", error_string(loop_error));
-    }
-    return exit_status(loop_error);
-}
+    const Q3U4Runtime& runtime() const noexcept { return *runtime_; }
+    Transport& runtime_dev1() noexcept { return runtime_->dev1(); }
+    Transport& runtime_dev2() noexcept { return runtime_->dev2(); }
+    TunerServiceTime& time() noexcept override { return time_; }
 
-int run_q3u4(const Px4dArguments& arguments, Q3U4Runtime& runtime,
-             const FirmwareImage& firmware, const std::string& base_serial) noexcept
-{
-    It930xController dev1(runtime.dev1());
-    It930xController dev2(runtime.dev2());
-    const auto initialized1 = dev1.initialize_q3u4(
-        firmware, InitializationPolicy::accept_cold_or_warm, runtime.model());
-    if (!initialized1) {
-        std::fprintf(stderr, "device 1 initialize: %s\n",
-                     error_string(initialized1.error()));
-        return exit_status(initialized1.error());
-    }
-    const auto initialized2 = dev2.initialize_q3u4(
-        firmware, InitializationPolicy::accept_cold_or_warm, runtime.model());
-    if (!initialized2) {
-        std::fprintf(stderr, "device 2 initialize: %s\n",
-                     error_string(initialized2.error()));
-        return exit_status(initialized2.error());
-    }
+protected:
+    std::unique_ptr<Q3U4Runtime> runtime_;
+    DaemonTime time_;
+};
 
-    DaemonTime time;
-    It930xBridgeI2cMaster dev1_i2c(dev1);
-    It930xBridgeI2cMaster dev2_i2c(dev2);
-    It930xBackendPower dev1_power(dev1);
-    It930xBackendPower dev2_power(dev2);
-    It930xPsbPurger dev1_purger(dev1);
-    It930xPsbPurger dev2_purger(dev2);
-    Q3U4FrontendEnclosure enclosure(dev1_i2c, dev2_i2c, dev1_power,
-                                    dev2_power, time, &dev1_purger, &dev2_purger);
-    Q3U4CardBackend backend(dev1, enclosure);
-    It930xCardHardware card_hardware(dev1);
-    CardSession card_session(card_hardware, time);
-    NativeCardProtocolSession protocol(card_session);
-    CardService card_service(backend, protocol);
-    It930xLnbPower dev1_lnb(dev1);
-    It930xLnbPower dev2_lnb(dev2);
-    Q3U4LnbPowerCoordinator lnb_power(
-        dev1_lnb, dev2_lnb,
-        arguments.allow_lnb_power && device_profile(runtime.model()).supports_lnb_15v);
-    Q3U4FrontendTunerBackend tuner_backend(enclosure, lnb_power);
-    PlatformTunerNonceSource nonce_source;
-    const auto stream = Q3U4StreamDataPlane::create(runtime.dev1(), runtime.dev2());
-    if (!stream) {
-        std::fprintf(stderr, "stream data plane: %s\n", error_string(stream.error()));
-        return exit_status(stream.error());
+// PX-Q3U4 paired bridges.  Members follow the original construction order;
+// the stream data plane is declared last so it is released first.
+class Q3U4Family final : public Px4Family {
+public:
+    Q3U4Family(std::unique_ptr<Q3U4Runtime> runtime, bool allow_lnb_15v) noexcept
+        : Px4Family(std::move(runtime)),
+          dev1(runtime_->dev1()), dev2(runtime_->dev2()),
+          dev1_i2c(dev1), dev2_i2c(dev2), dev1_power(dev1), dev2_power(dev2),
+          dev1_purger(dev1), dev2_purger(dev2),
+          enclosure(dev1_i2c, dev2_i2c, dev1_power, dev2_power, time_, &dev1_purger,
+                    &dev2_purger),
+          card(dev1, enclosure), card_hardware(dev1),
+          card_session(card_hardware, time_), protocol(card_session),
+          dev1_lnb(dev1), dev2_lnb(dev2), lnb_power(dev1_lnb, dev2_lnb, allow_lnb_15v),
+          tuner(enclosure, lnb_power)
+    {
     }
-    TunerService tuner_service(tuner_backend, nonce_source, time, nullptr, nullptr,
-                               stream.value().get());
-    return serve(arguments, base_serial, card_service, tuner_service, *stream.value(),
-                 0x03U, ipc::kQ3U4ReceiverCount);
-}
+    TunerServiceBackend& tuner_backend() noexcept override { return tuner; }
+    CardServiceBackend& card_backend() noexcept override { return card; }
+    CardProtocolSession& card_protocol() noexcept override { return protocol; }
+    TunerStreamControl* stream_control() noexcept override { return stream.get(); }
+
+    It930xController dev1;
+    It930xController dev2;
+    It930xBridgeI2cMaster dev1_i2c;
+    It930xBridgeI2cMaster dev2_i2c;
+    It930xBackendPower dev1_power;
+    It930xBackendPower dev2_power;
+    It930xPsbPurger dev1_purger;
+    It930xPsbPurger dev2_purger;
+    Q3U4FrontendEnclosure enclosure;
+    Q3U4CardBackend card;
+    It930xCardHardware card_hardware;
+    CardSession card_session;
+    NativeCardProtocolSession protocol;
+    It930xLnbPower dev1_lnb;
+    It930xLnbPower dev2_lnb;
+    Q3U4LnbPowerCoordinator lnb_power;
+    Q3U4FrontendTunerBackend tuner;
+    std::unique_ptr<Q3U4StreamDataPlane> stream;
+};
 
 // PX-W3U4 has no second bridge.  The Q3U4 coordinator still describes two
 // bridges; power and LNB calls for receivers 0..3 stay on the first, and the
@@ -329,6 +279,24 @@ public:
                                 std::uint32_t timeout_ms) noexcept override
     {
         return inner_.tune_satellite(receiver, frequency_khz, timeout_ms);
+    }
+    Result<TunerHzProgramming> tune_terrestrial_hz(std::uint8_t receiver,
+                                                   std::uint64_t frequency_hz,
+                                                   std::uint32_t timeout_ms) noexcept override
+    {
+        return inner_.tune_terrestrial_hz(receiver, frequency_hz, timeout_ms);
+    }
+    Result<TunerHzProgramming> tune_satellite_hz(std::uint8_t receiver,
+                                                 std::uint64_t frequency_hz,
+                                                 std::uint32_t timeout_ms) noexcept override
+    {
+        return inner_.tune_satellite_hz(receiver, frequency_hz, timeout_ms);
+    }
+    TunerStrictProfile strict_profile(std::uint8_t receiver,
+                                      ipc::System system) const noexcept override
+    {
+        if (!receiver_supports(receiver, system)) return TunerStrictProfile{};
+        return inner_.strict_profile(receiver, system);
     }
     Result<bool> is_locked(std::uint8_t receiver, ipc::System system) noexcept override
     {
@@ -379,115 +347,343 @@ private:
     Q3U4FrontendTunerBackend inner_;
 };
 
-int run_w3u4(const Px4dArguments& arguments, Q3U4Runtime& runtime,
-             const FirmwareImage& firmware, const std::string& base_serial) noexcept
-{
-    It930xController device(runtime.dev1());
-    const auto initialized = device.initialize_q3u4(
-        firmware, InitializationPolicy::accept_cold_or_warm, runtime.model());
-    if (!initialized) {
-        std::fprintf(stderr, "device initialize: %s\n", error_string(initialized.error()));
-        return exit_status(initialized.error());
+class W3U4Family final : public Px4Family {
+public:
+    W3U4Family(std::unique_ptr<Q3U4Runtime> runtime, bool allow_lnb_15v) noexcept
+        : Px4Family(std::move(runtime)),
+          device(runtime_->dev1()), bridge_i2c(device), power(device), purger(device),
+          enclosure(bridge_i2c, bridge_i2c, power, absent_power, time_, &purger, nullptr),
+          card(device, enclosure), card_hardware(device),
+          card_session(card_hardware, time_), protocol(card_session), lnb(device),
+          lnb_power(lnb, lnb, allow_lnb_15v), tuner(enclosure, lnb_power)
+    {
     }
+    TunerServiceBackend& tuner_backend() noexcept override { return tuner; }
+    CardServiceBackend& card_backend() noexcept override { return card; }
+    CardProtocolSession& card_protocol() noexcept override { return protocol; }
+    TunerStreamControl* stream_control() noexcept override { return stream.get(); }
 
-    DaemonTime time;
-    It930xBridgeI2cMaster bridge_i2c(device);
-    It930xBackendPower power(device);
+    It930xController device;
+    It930xBridgeI2cMaster bridge_i2c;
+    It930xBackendPower power;
     AbsentBridgePower absent_power;
-    It930xPsbPurger purger(device);
-    Q3U4FrontendEnclosure enclosure(bridge_i2c, bridge_i2c, power, absent_power,
-                                    time, &purger, nullptr);
-    Q3U4CardBackend backend(device, enclosure);
-    It930xCardHardware card_hardware(device);
-    CardSession card_session(card_hardware, time);
-    NativeCardProtocolSession protocol(card_session);
-    CardService card_service(backend, protocol);
-    It930xLnbPower lnb(device);
-    Q3U4LnbPowerCoordinator lnb_power(
-        lnb, lnb,
-        arguments.allow_lnb_power && device_profile(runtime.model()).supports_lnb_15v);
-    W3U4TunerBackend tuner_backend(enclosure, lnb_power);
-    PlatformTunerNonceSource nonce_source;
-    const auto stream = Q3U4StreamDataPlane::create_w3u4(runtime.dev1());
+    It930xPsbPurger purger;
+    Q3U4FrontendEnclosure enclosure;
+    Q3U4CardBackend card;
+    It930xCardHardware card_hardware;
+    CardSession card_session;
+    NativeCardProtocolSession protocol;
+    It930xLnbPower lnb;
+    Q3U4LnbPowerCoordinator lnb_power;
+    W3U4TunerBackend tuner;
+    std::unique_ptr<Q3U4StreamDataPlane> stream;
+};
+
+class Mlt5PeFamily final : public Px4Family {
+public:
+    Mlt5PeFamily(std::unique_ptr<Q3U4Runtime> runtime, bool allow_lnb_15v,
+                 std::uint8_t receiver_count, bool satellite_supported) noexcept
+        : Px4Family(std::move(runtime)),
+          device(runtime_->dev1()), bus1(device, 1U), bus3(device, 3U), power(device),
+          purger(device),
+          frontend(bus1, bus3, power, time_, &purger, receiver_count, runtime_->model()),
+          card(device, frontend), card_hardware(device),
+          card_session(card_hardware, time_), protocol(card_session), lnb(device),
+          lnb_power(lnb, allow_lnb_15v),
+          tuner(frontend, lnb_power, receiver_count, satellite_supported, runtime_->model())
+    {
+    }
+    TunerServiceBackend& tuner_backend() noexcept override { return tuner; }
+    CardServiceBackend& card_backend() noexcept override { return card; }
+    CardProtocolSession& card_protocol() noexcept override { return protocol; }
+    TunerStreamControl* stream_control() noexcept override { return stream.get(); }
+
+    It930xController device;
+    It930xBridgeI2cMaster bus1;
+    It930xBridgeI2cMaster bus3;
+    It930xBackendPower power;
+    It930xPsbPurger purger;
+    Mlt5PeFrontend frontend;
+    Mlt5PeCardBackend card;
+    It930xCardHardware card_hardware;
+    CardSession card_session;
+    NativeCardProtocolSession protocol;
+    It930xLnbPower lnb;
+    Mlt5PeLnbPowerCoordinator lnb_power;
+    Mlt5PeTunerBackend tuner;
+    std::unique_ptr<Q3U4StreamDataPlane> stream;
+};
+
+class SingleReceiverFamily final : public Px4Family {
+public:
+    SingleReceiverFamily(std::unique_ptr<Q3U4Runtime> runtime, bool allow_lnb_power) noexcept
+        : Px4Family(std::move(runtime)),
+          device(runtime_->dev1()), bridge(device, 3U), power(device),
+          frontend(bridge, device, power, time_, runtime_->model(), allow_lnb_power),
+          card_hardware(device), card_session(card_hardware, time_), protocol(card_session)
+    {
+    }
+    TunerServiceBackend& tuner_backend() noexcept override { return frontend; }
+    CardServiceBackend& card_backend() noexcept override { return frontend; }
+    CardProtocolSession& card_protocol() noexcept override { return protocol; }
+    TunerStreamControl* stream_control() noexcept override { return stream.get(); }
+
+    It930xController device;
+    It930xBridgeI2cMaster bridge;
+    It930xSingleReceiverPower power;
+    SingleReceiverFrontend frontend;
+    It930xCardHardware card_hardware;
+    CardSession card_session;
+    NativeCardProtocolSession protocol;
+    std::unique_ptr<Q3U4StreamDataPlane> stream;
+};
+
+// Publishes the control/data endpoints of the owned context and runs the
+// foreground loop until a stop signal or loop failure.  Returns the process
+// exit status, or ends the process when the whole-context cleanup misses its
+// budget.
+int serve(const Px4dArguments& arguments, std::unique_ptr<Px4Family> family) noexcept
+{
+    // The runtime stays owned by the family, which the context owns until its
+    // cleanup has quiesced; it is not used after close().
+    const Q3U4Runtime& runtime = family->runtime();
+    auto assembled = EnclosureContext::assemble(
+        std::move(family),
+        std::unique_ptr<TunerNonceSource>(new (std::nothrow) PlatformTunerNonceSource()));
+    if (!assembled) {
+        std::fprintf(stderr, "strict capabilities: %s\n", error_string(assembled.error()));
+        return exit_status(assembled.error());
+    }
+    EnclosureContext& owned = *assembled.value();
+    const std::string base_serial(runtime.base_serial());
+    std::string resolved_instance;
+    const auto physical_identity = automatic_px4_identity(
+        runtime.model(), runtime.base_serial(),
+        {runtime.bridge_observation(0U), runtime.bridge_observation(1U)},
+        runtime.bridge_count(), runtime.serial_unique_in_scan().value_or(false));
+    if (arguments.instance.empty()) {
+        if (!physical_identity) return exit_status(physical_identity.error());
+        const auto automatic = dtv::userland::identity::auto_instance(physical_identity.value());
+        if (!automatic) return exit_status(automatic.error());
+        resolved_instance.assign(automatic.value().bytes.data(), automatic.value().length);
+    } else {
+        const auto canonical = dtv::userland::identity::canonicalize_instance(
+            arguments.instance);
+        if (!canonical) return exit_status(Error::INVALID_ARGUMENT);
+        resolved_instance.assign(canonical.value().bytes.data(), canonical.value().length);
+    }
+    const char* runtime_directory = arguments.runtime_directory.empty() ?
+                                        nullptr : arguments.runtime_directory.c_str();
+#if !defined(_WIN32)
+    std::array<char, kStoredPathCapacity> automatic_runtime_directory{};
+    if (runtime_directory == nullptr) {
+        const auto selected = select_publish_runtime_root();
+        if (!selected) return exit_status(selected.error());
+        automatic_runtime_directory = selected.value();
+        runtime_directory = automatic_runtime_directory.data();
+    }
+#endif
+    const char* instance = resolved_instance.c_str();
+    std::string lease_identity = base_serial;
+    if (physical_identity &&
+        physical_identity.value().kind == dtv::userland::identity::IdentityKind::usb_topology) {
+        const auto automatic = dtv::userland::identity::auto_instance(physical_identity.value());
+        if (!automatic) return exit_status(automatic.error());
+        lease_identity.assign(automatic.value().bytes.data(), automatic.value().length);
+    } else if (physical_identity &&
+               physical_identity.value().kind == dtv::userland::identity::IdentityKind::serial) {
+        const auto& serial = physical_identity.value().serial;
+        lease_identity.assign(serial.bytes.data(), serial.length);
+    }
+    EnclosurePublication publication{};
+    if (runtime_directory != nullptr) publication.runtime_directory = runtime_directory;
+    publication.instance = instance;
+    publication.lease_identity = lease_identity;
+    publication.access =
+        arguments.group ? EndpointAccess::shared_group : EndpointAccess::private_user;
+    const auto reserved = owned.reserve_namespace(publication);
+    if (!reserved) {
+        std::fprintf(stderr, "serial endpoint: %s\n", error_string(reserved.error()));
+        return exit_status(reserved.error());
+    }
+    // One fresh random epoch per daemon context.
+    PlatformTunerNonceSource epoch_source;
+    const auto epoch = epoch_source.generate();
+    if (!epoch) {
+        std::fprintf(stderr, "context epoch: %s\n", error_string(epoch.error()));
+        return exit_status(epoch.error());
+    }
+    Px4ContextInput context_input{};
+    context_input.model = runtime.model();
+    context_input.base_serial = base_serial;
+    context_input.bridges = {runtime.bridge_observation(0U), runtime.bridge_observation(1U)};
+    context_input.product_version = PX4_USERLAND_PRODUCT_VERSION;
+    context_input.instance = instance;
+    context_input.epoch = epoch.value();
+    context_input.serial_unique_in_scan = runtime.serial_unique_in_scan();
+    std::unique_ptr<ControlContext> context(new (std::nothrow) ControlContext());
+    if (!context) {
+        std::fprintf(stderr, "control context: %s\n", error_string(Error::INTERNAL));
+        return exit_status(Error::INTERNAL);
+    }
+    const auto built = build_px4_control_context(context_input, owned.tuner_service(), *context);
+    if (!built) {
+        std::fprintf(stderr, "control context: %s\n", error_string(built.error()));
+        return exit_status(built.error());
+    }
+    const auto published = owned.publish(*context);
+    if (!published) {
+        std::fprintf(stderr, "control endpoint: %s\n", error_string(published.error()));
+        return exit_status(published.error());
+    }
+    if (!px4::userland::px4d::install_signal_handlers()) {
+        std::fprintf(stderr, "signal setup failed\n");
+        return 70;
+    }
+#if defined(_WIN32)
+    px4::userland::cli::StdinEofMonitor eof_monitor;
+    if (arguments.exit_on_stdin_eof &&
+        !eof_monitor.start(::GetStdHandle(STD_INPUT_HANDLE), &on_stdin_eof, nullptr)) {
+        std::fprintf(stderr, "stdin monitor setup failed\n");
+        return 70;
+    }
+#endif
+
+#if defined(_WIN32)
+    std::fprintf(stderr, "px4d ready: device=%s endpoint=%ls\n",
+                 base_serial.c_str(), owned.endpoint_path());
+#else
+    std::fprintf(stderr, "px4d ready: device=%s endpoint=%s\n",
+                 base_serial.c_str(), owned.endpoint_path());
+#endif
+    Error loop_error = Error::OK;
+    while (!px4::userland::px4d::stop_requested()) {
+        const auto polled = owned.poll_once(Timeout{100U});
+        if (!polled) {
+            loop_error = polled.error();
+            break;
+        }
+    }
+    // Whole-context cleanup: the decision below takes no cleanup lock and does
+    // no I/O.  On an expired budget the graph is still held by the cleanup
+    // thread and the process ends here, without diagnostics or destructors.
+    const ContextCloseResult closed = owned.close(kWholeContextCloseBudget);
+    if (!closed.quiesced) px4::userland::px4d::exit_after_close_deadline(kCloseDeadlineExitStatus);
+    if (closed.error != Error::OK) {
+        std::fprintf(stderr, "shutdown cleanup: %s\n", error_string(closed.error));
+        if (loop_error == Error::OK) loop_error = closed.error;
+    }
+#if defined(_WIN32)
+    eof_monitor.stop();
+    // The serial namespace lease was released by the quiesced cleanup, so a
+    // console/termination handler cannot let the process exit while the
+    // private endpoint namespace is still held.
+    px4::userland::px4d::notify_cleanup_complete();
+#endif
+    if (loop_error != Error::OK) {
+        std::fprintf(stderr, "px4d stopped: %s\n", error_string(loop_error));
+    }
+    return exit_status(loop_error);
+}
+
+int run_q3u4(const Px4dArguments& arguments, std::unique_ptr<Q3U4Runtime> runtime,
+             const FirmwareImage& firmware) noexcept
+{
+    const DeviceModel model = runtime->model();
+    std::unique_ptr<Q3U4Family> family(new (std::nothrow) Q3U4Family(
+        std::move(runtime),
+        arguments.allow_lnb_power && device_profile(model).supports_lnb_15v));
+    if (!family) return exit_status(Error::INTERNAL);
+    const auto initialized1 = family->dev1.initialize_q3u4(
+        firmware, InitializationPolicy::accept_cold_or_warm, model);
+    if (!initialized1) {
+        std::fprintf(stderr, "device 1 initialize: %s\n",
+                     error_string(initialized1.error()));
+        return exit_status(initialized1.error());
+    }
+    const auto initialized2 = family->dev2.initialize_q3u4(
+        firmware, InitializationPolicy::accept_cold_or_warm, model);
+    if (!initialized2) {
+        std::fprintf(stderr, "device 2 initialize: %s\n",
+                     error_string(initialized2.error()));
+        return exit_status(initialized2.error());
+    }
+    auto stream = Q3U4StreamDataPlane::create(family->runtime_dev1(), family->runtime_dev2());
     if (!stream) {
         std::fprintf(stderr, "stream data plane: %s\n", error_string(stream.error()));
         return exit_status(stream.error());
     }
-    TunerService tuner_service(tuner_backend, nonce_source, time, nullptr, nullptr,
-                               stream.value().get());
-    return serve(arguments, base_serial, card_service, tuner_service, *stream.value(),
-                 0x01U, ipc::kW3U4ReceiverCount);
+    family->stream = std::move(stream.value());
+    return serve(arguments, std::move(family));
 }
 
-int run_mlt5pe(const Px4dArguments& arguments, Q3U4Runtime& runtime,
-               const FirmwareImage& firmware, const std::string& base_serial,
+int run_w3u4(const Px4dArguments& arguments, std::unique_ptr<Q3U4Runtime> runtime,
+             const FirmwareImage& firmware) noexcept
+{
+    const DeviceModel model = runtime->model();
+    std::unique_ptr<W3U4Family> family(new (std::nothrow) W3U4Family(
+        std::move(runtime),
+        arguments.allow_lnb_power && device_profile(model).supports_lnb_15v));
+    if (!family) return exit_status(Error::INTERNAL);
+    const auto initialized = family->device.initialize_q3u4(
+        firmware, InitializationPolicy::accept_cold_or_warm, model);
+    if (!initialized) {
+        std::fprintf(stderr, "device initialize: %s\n", error_string(initialized.error()));
+        return exit_status(initialized.error());
+    }
+    auto stream = Q3U4StreamDataPlane::create_w3u4(family->runtime_dev1());
+    if (!stream) {
+        std::fprintf(stderr, "stream data plane: %s\n", error_string(stream.error()));
+        return exit_status(stream.error());
+    }
+    family->stream = std::move(stream.value());
+    return serve(arguments, std::move(family));
+}
+
+int run_mlt5pe(const Px4dArguments& arguments, std::unique_ptr<Q3U4Runtime> runtime,
+               const FirmwareImage& firmware,
                std::uint8_t receiver_count = ipc::kMlt5PeReceiverCount,
                bool satellite_supported = true) noexcept
 {
-    It930xController device(runtime.dev1());
-    const auto initialized = device.initialize_mlt_family(firmware, runtime.model());
+    const DeviceModel model = runtime->model();
+    std::unique_ptr<Mlt5PeFamily> family(new (std::nothrow) Mlt5PeFamily(
+        std::move(runtime),
+        arguments.allow_lnb_power && device_profile(model).supports_lnb_15v, receiver_count,
+        satellite_supported));
+    if (!family) return exit_status(Error::INTERNAL);
+    const auto initialized = family->device.initialize_mlt_family(firmware, model);
     if (!initialized) {
         std::fprintf(stderr, "device initialize: %s\n", error_string(initialized.error()));
         return exit_status(initialized.error());
     }
-
-    DaemonTime time;
-    It930xBridgeI2cMaster bus1(device, 1U);
-    It930xBridgeI2cMaster bus3(device, 3U);
-    It930xBackendPower power(device);
-    It930xPsbPurger purger(device);
-    Mlt5PeFrontend frontend(bus1, bus3, power, time, &purger, receiver_count,
-                           runtime.model());
-    Mlt5PeCardBackend backend(device, frontend);
-    It930xCardHardware card_hardware(device);
-    CardSession card_session(card_hardware, time);
-    NativeCardProtocolSession protocol(card_session);
-    CardService card_service(backend, protocol);
-    It930xLnbPower lnb(device);
-    Mlt5PeLnbPowerCoordinator lnb_power(
-        lnb, arguments.allow_lnb_power && device_profile(runtime.model()).supports_lnb_15v);
-    Mlt5PeTunerBackend tuner_backend(frontend, lnb_power, receiver_count,
-                                     satellite_supported, runtime.model());
-    PlatformTunerNonceSource nonce_source;
-    const auto stream = Q3U4StreamDataPlane::create_mlt_family(runtime.dev1(), runtime.model());
+    auto stream = Q3U4StreamDataPlane::create_mlt_family(family->runtime_dev1(), model);
     if (!stream) {
         std::fprintf(stderr, "stream data plane: %s\n", error_string(stream.error()));
         return exit_status(stream.error());
     }
-    TunerService tuner_service(tuner_backend, nonce_source, time, nullptr, nullptr,
-                               stream.value().get());
-    return serve(arguments, base_serial, card_service, tuner_service, *stream.value(),
-                 0x01U, receiver_count, satellite_supported || receiver_count > 1U);
+    family->stream = std::move(stream.value());
+    return serve(arguments, std::move(family));
 }
 
-int run_single_receiver(const Px4dArguments& arguments, Q3U4Runtime& runtime,
-                        const FirmwareImage& firmware, const std::string& base_serial) noexcept
+int run_single_receiver(const Px4dArguments& arguments, std::unique_ptr<Q3U4Runtime> runtime,
+                        const FirmwareImage& firmware) noexcept
 {
-    It930xController device(runtime.dev1());
-    const auto initialized = device.initialize_single_receiver(firmware, runtime.model());
+    const DeviceModel model = runtime->model();
+    std::unique_ptr<SingleReceiverFamily> family(new (std::nothrow) SingleReceiverFamily(
+        std::move(runtime), arguments.allow_lnb_power));
+    if (!family) return exit_status(Error::INTERNAL);
+    const auto initialized = family->device.initialize_single_receiver(firmware, model);
     if (!initialized) {
         std::fprintf(stderr, "device initialize: %s\n", error_string(initialized.error()));
         return exit_status(initialized.error());
     }
-    DaemonTime time;
-    It930xBridgeI2cMaster bridge(device, 3U);
-    It930xSingleReceiverPower power(device);
-    SingleReceiverFrontend frontend(bridge, device, power, time, runtime.model(),
-                                    arguments.allow_lnb_power);
-    It930xCardHardware card_hardware(device);
-    CardSession card_session(card_hardware, time);
-    NativeCardProtocolSession protocol(card_session);
-    CardService card_service(frontend, protocol);
-    PlatformTunerNonceSource nonce_source;
-    const auto stream = Q3U4StreamDataPlane::create_single_receiver(runtime.dev1(), runtime.model());
+    auto stream = Q3U4StreamDataPlane::create_single_receiver(family->runtime_dev1(), model);
     if (!stream) {
         std::fprintf(stderr, "stream data plane: %s\n", error_string(stream.error()));
         return exit_status(stream.error());
     }
-    TunerService tuner_service(frontend, nonce_source, time, nullptr, nullptr, stream.value().get());
-    const bool dual = device_profile(runtime.model()).dual_system;
-    return serve(arguments, base_serial, card_service, tuner_service, *stream.value(),
-                 0x01U, 1U, dual);
+    family->stream = std::move(stream.value());
+    return serve(arguments, std::move(family));
 }
 
 }  // namespace
@@ -583,12 +779,12 @@ int main(int argc, char** argv)
     if (device_profile(model).bridge_count == 1U &&
         !device_profile(model).dual_system &&
         device_profile(model).receiver_count == ipc::kW3U4ReceiverCount) {
-        return run_w3u4(arguments, *runtime.value(), firmware.value(), base_serial);
+        return run_w3u4(arguments, std::move(runtime.value()), firmware.value());
     }
-    if (!single_bridge) return run_q3u4(arguments, *runtime.value(), firmware.value(), base_serial);
+    if (!single_bridge) return run_q3u4(arguments, std::move(runtime.value()), firmware.value());
     const DeviceProfile& profile = device_profile(model);
     if (profile.receiver_count == 1U)
-        return run_single_receiver(arguments, *runtime.value(), firmware.value(), base_serial);
-    return run_mlt5pe(arguments, *runtime.value(), firmware.value(), base_serial,
+        return run_single_receiver(arguments, std::move(runtime.value()), firmware.value());
+    return run_mlt5pe(arguments, std::move(runtime.value()), firmware.value(),
                       profile.receiver_count, profile.dual_system);
 }

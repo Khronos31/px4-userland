@@ -16,12 +16,15 @@
 #include <fcntl.h>
 #include <filesystem>
 #include <functional>
+#include <grp.h>
 #include <poll.h>
+#include <signal.h>
 #include <string>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
 #include <vector>
@@ -105,11 +108,51 @@ bool test_ownership_group_authorization()
     return true;
 }
 
+bool run_group_client_child(const EndpointConfig& config, bool member)
+{
+    if (::geteuid() != 0) return false;
+    const pid_t child = ::fork();
+    if (child < 0) return false;
+    if (child == 0) {
+        const gid_t group = ::getegid();
+        if ((member && ::setgroups(1U, &group) != 0) ||
+            (!member && ::setgroups(0U, nullptr) != 0) ||
+            ::setgid(65534U) != 0 || ::setuid(65534U) != 0)
+            std::_Exit(10);
+        if (::access(config.runtime_directory, W_OK) == 0) std::_Exit(11);
+        const auto connected = SocketStream::connect(config, Timeout{1000U});
+        if (member) std::_Exit(connected ? 0 : 12);
+        std::_Exit(connected ? 14 : 0);
+    }
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    int status = 0;
+    while (std::chrono::steady_clock::now() < deadline) {
+        const pid_t waited = ::waitpid(child, &status, WNOHANG);
+        if (waited == child) {
+            if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+                std::fprintf(stderr, "group client child failed: member=%d status=%d\n",
+                             member ? 1 : 0, status);
+            return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+        }
+        if (waited < 0) return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    (void)::kill(child, SIGKILL);
+    (void)::waitpid(child, &status, 0);
+    return false;
+}
+
 class TemporaryDirectory final {
 public:
     explicit TemporaryDirectory(mode_t mode)
+        : TemporaryDirectory(mode, {})
+    {}
+
+    TemporaryDirectory(mode_t mode, const std::string& parent)
     {
-        std::string pattern = test::temporary_directory_template("px4-posix-ipc-");
+        std::string pattern = parent.empty() ?
+            test::temporary_directory_template("px4-posix-ipc-") :
+            parent + "/px4-posix-ipc-XXXXXX";
         char* created = ::mkdtemp(pattern.data());
         if (created != nullptr) {
             path_ = created;
@@ -282,7 +325,8 @@ bool test_private_endpoint_and_framing()
     const EndpointConfig config{runtime.path().c_str(), "private", kControlEndpointName,
                                 EndpointAccess::private_user};
     const std::string product = runtime.path() + "/px4-userland";
-    const std::string instance = product + "/private";
+    const std::string version = product + "/v1";
+    const std::string instance = version + "/private";
     const std::string endpoint = instance + "/control.sock";
 
     {
@@ -291,6 +335,7 @@ bool test_private_endpoint_and_framing()
         SocketListener listener = std::move(listener_result.value());
         CHECK(std::strcmp(listener.endpoint_path(), endpoint.c_str()) == 0);
         CHECK(permissions(product) == 0700);
+        CHECK(permissions(version) == 0700);
         CHECK(permissions(instance) == 0700);
         CHECK(permissions(endpoint) == 0600);
         CHECK(is_socket(endpoint));
@@ -381,8 +426,67 @@ bool test_xdg_runtime_default()
     auto listener = SocketListener::listen(config);
     CHECK(listener);
     const std::string expected =
-        runtime.path() + "/px4-userland/xdg-default/control.sock";
+        runtime.path() + "/px4-userland/v1/xdg-default/control.sock";
     CHECK(std::strcmp(listener.value().endpoint_path(), expected.c_str()) == 0);
+    return true;
+}
+
+bool test_auto_runtime_root_fallback()
+{
+    EnvironmentRestore restore_xdg("XDG_RUNTIME_DIR");
+    EnvironmentRestore restore_tmp("TMPDIR");
+    TemporaryDirectory parent(0755, "/run");
+    CHECK(parent.valid());
+    CHECK(::setenv("XDG_RUNTIME_DIR", parent.path().c_str(), 1) == 0);
+    CHECK(::setenv("TMPDIR", parent.path().c_str(), 1) == 0);
+    const std::string expected = parent.path() + "/dtv-userland-" +
+                                 std::to_string(static_cast<unsigned long long>(::geteuid()));
+    const auto selected = select_publish_runtime_root();
+    CHECK(selected && std::string(selected.value().data()) == expected);
+    struct stat status {};
+    CHECK(::lstat(expected.c_str(), &status) == 0 && S_ISDIR(status.st_mode) &&
+          status.st_uid == ::geteuid() && (status.st_mode & 07777) == 0700);
+    const auto roots = client_runtime_roots();
+    CHECK(roots && roots.value().count == 1U &&
+          std::string(roots.value().paths[0].data()) == expected);
+    return true;
+}
+
+bool test_auto_runtime_root_when_xdg_is_unset()
+{
+    EnvironmentRestore restore_xdg("XDG_RUNTIME_DIR");
+    EnvironmentRestore restore_tmp("TMPDIR");
+    TemporaryDirectory parent(0755, "/run");
+    CHECK(parent.valid());
+    CHECK(::unsetenv("XDG_RUNTIME_DIR") == 0);
+    CHECK(::setenv("TMPDIR", parent.path().c_str(), 1) == 0);
+    const std::string expected = parent.path() + "/dtv-userland-" +
+                                 std::to_string(static_cast<unsigned long long>(::geteuid()));
+    const auto selected = select_publish_runtime_root();
+    CHECK(selected && std::string(selected.value().data()) == expected);
+    struct stat status {};
+    CHECK(::lstat(expected.c_str(), &status) == 0 && S_ISDIR(status.st_mode) &&
+          status.st_uid == ::geteuid() && (status.st_mode & 07777) == 0700);
+    return true;
+}
+
+bool test_auto_runtime_root_when_xdg_and_tmpdir_are_unset()
+{
+    EnvironmentRestore restore_xdg("XDG_RUNTIME_DIR");
+    EnvironmentRestore restore_tmp("TMPDIR");
+    TemporaryDirectory parent(0755, "/run");
+    CHECK(parent.valid());
+    CHECK(::unsetenv("XDG_RUNTIME_DIR") == 0);
+    CHECK(::unsetenv("TMPDIR") == 0);
+    const std::string expected = parent.path() + "/dtv-userland-" +
+                                 std::to_string(static_cast<unsigned long long>(::geteuid()));
+    const auto selected =
+        PosixIpcTestAccess::select_publish_runtime_root_with_default_temp_for_test(
+            parent.path().c_str());
+    CHECK(selected && std::string(selected.value().data()) == expected);
+    struct stat status {};
+    CHECK(::lstat(expected.c_str(), &status) == 0 && S_ISDIR(status.st_mode) &&
+          status.st_uid == ::geteuid() && (status.st_mode & 07777) == 0700);
     return true;
 }
 
@@ -511,9 +615,12 @@ bool make_endpoint_directories(const std::string& runtime, mode_t mode,
                                std::string& instance)
 {
     const std::string product = runtime + "/px4-userland";
-    instance = product + "/security";
+    const std::string version = product + "/v1";
+    instance = version + "/security";
     return ::mkdir(product.c_str(), mode) == 0 &&
            ::chmod(product.c_str(), mode) == 0 &&
+           ::mkdir(version.c_str(), mode) == 0 &&
+           ::chmod(version.c_str(), mode) == 0 &&
            ::mkdir(instance.c_str(), mode) == 0 &&
            ::chmod(instance.c_str(), mode) == 0;
 }
@@ -521,17 +628,46 @@ bool make_endpoint_directories(const std::string& runtime, mode_t mode,
 bool test_permissions_and_unsafe_paths()
 {
     {
-        TemporaryDirectory runtime(0750);
+        TemporaryDirectory parent(0777, "/run");
+        CHECK(parent.valid());
+        const std::string runtime = parent.path() + "/runtime";
+        CHECK(::mkdir(runtime.c_str(), 0750) == 0);
+        const EndpointConfig config{runtime.c_str(), "writable-ancestor",
+                                    kControlEndpointName, EndpointAccess::shared_group};
+        const auto listener = SocketListener::listen(config);
+        CHECK(!listener && listener.error() == Error::INVALID_ARGUMENT);
+    }
+    {
+        TemporaryDirectory parent(0755, "/run");
+        CHECK(parent.valid());
+        const std::string real = parent.path() + "/real";
+        const std::string runtime = real + "/runtime";
+        const std::string alias = parent.path() + "/alias";
+        CHECK(::mkdir(real.c_str(), 0755) == 0);
+        CHECK(::mkdir(runtime.c_str(), 0750) == 0);
+        CHECK(::symlink(real.c_str(), alias.c_str()) == 0);
+        const std::string symlink_runtime = alias + "/runtime";
+        const EndpointConfig config{symlink_runtime.c_str(), "symlink-ancestor",
+                                    kControlEndpointName, EndpointAccess::shared_group};
+        const auto listener = SocketListener::listen(config);
+        CHECK(!listener && listener.error() == Error::INVALID_ARGUMENT);
+    }
+    {
+        TemporaryDirectory runtime(0750, "/run");
         CHECK(runtime.valid());
         const EndpointConfig config{runtime.path().c_str(), "group", kControlEndpointName,
                                     EndpointAccess::shared_group};
         auto listener = SocketListener::listen(config);
         CHECK(listener);
         const std::string product = runtime.path() + "/px4-userland";
-        const std::string instance = product + "/group";
+        const std::string version = product + "/v1";
+        const std::string instance = version + "/group";
         CHECK(permissions(product) == 0750);
+        CHECK(permissions(version) == 0750);
         CHECK(permissions(instance) == 0750);
         CHECK(permissions(listener.value().endpoint_path()) == 0660);
+        CHECK(run_group_client_child(config, true));
+        CHECK(run_group_client_child(config, false));
     }
     {
         TemporaryDirectory runtime(0755);
@@ -707,7 +843,7 @@ bool test_stale_active_and_cleanup_identity()
         auto listener_result = SocketListener::listen(config);
         CHECK(listener_result);
         SocketListener listener = std::move(listener_result.value());
-        const std::string instance = runtime.path() + "/px4-userland/contents";
+        const std::string instance = runtime.path() + "/px4-userland/v1/contents";
         const std::string unrelated = instance + "/keep";
         const int file = ::open(unrelated.c_str(), O_CREAT | O_WRONLY | O_CLOEXEC, 0600);
         CHECK(file >= 0);
@@ -787,7 +923,7 @@ bool test_serial_endpoint_interlock_and_cleanup()
     CHECK(std::filesystem::is_empty(runtime.path()));
     CHECK(::rmdir(runtime.path().c_str()) == 0);
 
-    TemporaryDirectory group_runtime(0750);
+    TemporaryDirectory group_runtime(0750, "/run");
     CHECK(group_runtime.valid());
     const EndpointConfig group_endpoint{group_runtime.path().c_str(), "q3-port1",
                                         kControlEndpointName, EndpointAccess::shared_group};
@@ -838,6 +974,9 @@ bool run_posix_ipc_tests()
     return test_ownership_group_authorization() &&
            test_private_endpoint_and_framing() &&
            test_xdg_runtime_default() &&
+           test_auto_runtime_root_fallback() &&
+           test_auto_runtime_root_when_xdg_is_unset() &&
+           test_auto_runtime_root_when_xdg_and_tmpdir_are_unset() &&
            test_rejects_overlong_unix_endpoint() &&
            test_partial_write_and_write_timeout() &&
            test_permissions_and_unsafe_paths() &&

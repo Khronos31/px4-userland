@@ -157,8 +157,19 @@ std::uint8_t reverse_bits(std::uint8_t value) noexcept
     return static_cast<std::uint8_t>((value << 4U) | (value >> 4U));
 }
 
+// R3 unit rule: every frequency-valued legacy constant is the old kHz value
+// multiplied by 1000 at its original comparison, with the original strict or
+// inclusive comparison.  Selector and register values are not frequencies.
+constexpr std::uint64_t khz_to_hz(std::uint32_t value) noexcept
+{
+    return static_cast<std::uint64_t>(value) * 1000U;
+}
+
+// Zero min/max/IF are wildcard sentinels, not converted bounds; first match
+// wins.  The inclusive maxima stay literal (for example 487999000 Hz), so the
+// next Hz after a maximum can select the wildcard row.
 const R850FrequencyParameters* find_frequency_parameters(
-    std::uint32_t if_frequency_khz, std::uint32_t rf_frequency_khz,
+    std::uint32_t if_frequency_khz, std::uint64_t rf_frequency_hz,
     std::uint8_t* row_index) noexcept
 {
     for (std::size_t index = 0U; index < kIsdbTFrequencyParameters.size(); ++index) {
@@ -166,9 +177,9 @@ const R850FrequencyParameters* find_frequency_parameters(
         if ((parameters.if_frequency == 0U ||
              parameters.if_frequency == if_frequency_khz) &&
             (parameters.rf_minimum == 0U ||
-             parameters.rf_minimum <= rf_frequency_khz) &&
+             khz_to_hz(parameters.rf_minimum) <= rf_frequency_hz) &&
             (parameters.rf_maximum == 0U ||
-             parameters.rf_maximum >= rf_frequency_khz)) {
+             khz_to_hz(parameters.rf_maximum) >= rf_frequency_hz)) {
             if (row_index != nullptr) {
                 *row_index = static_cast<std::uint8_t>(index);
             }
@@ -183,8 +194,14 @@ const R850FrequencyParameters* find_frequency_parameters(
 Result<R850FrequencySelection> r850_select_isdb_t_frequency(
     std::uint32_t if_frequency_khz, std::uint32_t rf_frequency_khz) noexcept
 {
+    return r850_select_isdb_t_frequency_hz(if_frequency_khz, khz_to_hz(rf_frequency_khz));
+}
+
+Result<R850FrequencySelection> r850_select_isdb_t_frequency_hz(
+    std::uint32_t if_frequency_khz, std::uint64_t rf_frequency_hz) noexcept
+{
     std::uint8_t row_index = 0U;
-    if (find_frequency_parameters(if_frequency_khz, rf_frequency_khz, &row_index) == nullptr) {
+    if (find_frequency_parameters(if_frequency_khz, rf_frequency_hz, &row_index) == nullptr) {
         return Result<R850FrequencySelection>::failure(Error::INVALID_ARGUMENT);
     }
     return Result<R850FrequencySelection>::success(R850FrequencySelection{row_index});
@@ -412,11 +429,11 @@ Result<void> R850::set_system_params() noexcept
     return Result<void>::success();
 }
 
-Result<void> R850::set_system_frequency(std::uint32_t rf_frequency_khz) noexcept
+Result<void> R850::set_system_frequency(std::uint64_t rf_frequency_hz) noexcept
 {
     std::uint8_t row_index = 0U;
     const auto* selected = find_frequency_parameters(
-        current_.if_frequency_khz, rf_frequency_khz, &row_index);
+        current_.if_frequency_khz, rf_frequency_hz, &row_index);
     (void)row_index;
     if (selected == nullptr) {
         return Result<void>::failure(Error::INVALID_ARGUMENT);
@@ -426,8 +443,10 @@ Result<void> R850::set_system_frequency(std::uint32_t rf_frequency_khz) noexcept
     if (chip_variant_) {
         parameters.filter_top = 6U;
     }
-    const std::uint32_t lo_frequency_khz =
-        rf_frequency_khz - current_.if_frequency_khz;
+    // The admitted RF range starts above the configured IF, so the
+    // subtraction cannot wrap.
+    const std::uint64_t if_frequency_hz = khz_to_hz(current_.if_frequency_khz);
+    const std::uint64_t lo_frequency_hz = rf_frequency_hz - if_frequency_hz;
 
     registers_[0x13U] &= 0xefU;
     registers_[0x13U] |= 0x10U;
@@ -548,7 +567,10 @@ Result<void> R850::set_system_frequency(std::uint32_t rf_frequency_khz) noexcept
     registers_[0x15U] = static_cast<std::uint8_t>(
         (registers_[0x15U] & 0xefU) |
         ((parameters.first_feedback_resistor << 4U) & 0x10U));
-    if ((rf_frequency_khz - 478000U) <= 3999U) {
+    // Outer RF special guard: inclusive [478000000, 481999000] Hz, distinct
+    // from the PLL reference window below.
+    if (rf_frequency_hz >= khz_to_hz(478000U) &&
+        (rf_frequency_hz - khz_to_hz(478000U)) <= khz_to_hz(3999U)) {
         registers_[0x2fU] &= 0xf3U;
     }
     registers_[0x19U] &= 0xdfU;
@@ -562,40 +584,42 @@ Result<void> R850::set_system_frequency(std::uint32_t rf_frequency_khz) noexcept
     }
     registers_[0x22U] |= 0x04U;
 
-    const auto mux = set_mux(rf_frequency_khz, lo_frequency_khz);
+    const auto mux = set_mux(rf_frequency_hz, lo_frequency_hz);
     if (!mux) {
         return mux;
     }
-    return set_pll(lo_frequency_khz, current_.if_frequency_khz);
+    return set_pll(lo_frequency_hz, if_frequency_hz);
 }
 
-Result<void> R850::set_mux(std::uint32_t rf_frequency_khz,
-                            std::uint32_t lo_frequency_khz) noexcept
+Result<void> R850::set_mux(std::uint64_t rf_frequency_hz,
+                            std::uint64_t lo_frequency_hz) noexcept
 {
-    (void)rf_frequency_khz;
-    const std::uint8_t diplexer = lo_frequency_khz < 330000U ? 2U : 0U;
-    const std::uint8_t bpf = lo_frequency_khz < 580000U ? 7U :
-                             lo_frequency_khz < 660000U ? 1U :
-                             lo_frequency_khz < 780000U ? 6U :
-                             lo_frequency_khz < 900000U ? 4U : 0U;
-    const std::uint8_t rf_poly = lo_frequency_khz < 133000U ? 2U :
-                                 lo_frequency_khz < 221000U ? 1U :
-                                 lo_frequency_khz < 760000U ? 0U : 3U;
-    const std::uint8_t cnr = lo_frequency_khz < 480000U ? 3U :
-                             lo_frequency_khz < 550000U ? 2U :
-                             lo_frequency_khz < 700000U ? 1U : 0U;
-    const std::uint8_t lpf_notch = lo_frequency_khz < 73000U ? 10U :
-                                   lo_frequency_khz < 81000U ? 4U :
-                                   lo_frequency_khz < 89000U ? 3U :
-                                   lo_frequency_khz < 121000U ? 1U : 0U;
-    const std::uint8_t lpf_cap = lo_frequency_khz < 73000U ? 8U :
-                                 lo_frequency_khz < 81000U ? 8U :
-                                 lo_frequency_khz < 89000U ? 8U :
-                                 lo_frequency_khz < 121000U ? 6U :
-                                 lo_frequency_khz < 145000U ? 4U :
-                                 lo_frequency_khz < 153000U ? 3U :
-                                 lo_frequency_khz < 177000U ? 2U :
-                                 lo_frequency_khz < 201000U ? 1U : 0U;
+    (void)rf_frequency_hz;
+    // These selections compare the LO (RF minus IF), not the RF.
+    const std::uint64_t lo = lo_frequency_hz;
+    const std::uint8_t diplexer = lo < khz_to_hz(330000U) ? 2U : 0U;
+    const std::uint8_t bpf = lo < khz_to_hz(580000U) ? 7U :
+                             lo < khz_to_hz(660000U) ? 1U :
+                             lo < khz_to_hz(780000U) ? 6U :
+                             lo < khz_to_hz(900000U) ? 4U : 0U;
+    const std::uint8_t rf_poly = lo < khz_to_hz(133000U) ? 2U :
+                                 lo < khz_to_hz(221000U) ? 1U :
+                                 lo < khz_to_hz(760000U) ? 0U : 3U;
+    const std::uint8_t cnr = lo < khz_to_hz(480000U) ? 3U :
+                             lo < khz_to_hz(550000U) ? 2U :
+                             lo < khz_to_hz(700000U) ? 1U : 0U;
+    const std::uint8_t lpf_notch = lo < khz_to_hz(73000U) ? 10U :
+                                   lo < khz_to_hz(81000U) ? 4U :
+                                   lo < khz_to_hz(89000U) ? 3U :
+                                   lo < khz_to_hz(121000U) ? 1U : 0U;
+    const std::uint8_t lpf_cap = lo < khz_to_hz(73000U) ? 8U :
+                                 lo < khz_to_hz(81000U) ? 8U :
+                                 lo < khz_to_hz(89000U) ? 8U :
+                                 lo < khz_to_hz(121000U) ? 6U :
+                                 lo < khz_to_hz(145000U) ? 4U :
+                                 lo < khz_to_hz(153000U) ? 3U :
+                                 lo < khz_to_hz(177000U) ? 2U :
+                                 lo < khz_to_hz(201000U) ? 1U : 0U;
 
     registers_[0x0eU] = static_cast<std::uint8_t>(
         (registers_[0x0eU] & 0x03U) | ((diplexer << 2U) & 0x0cU) |
@@ -612,13 +636,20 @@ Result<void> R850::set_mux(std::uint32_t rf_frequency_khz,
     return Result<void>::success();
 }
 
-Result<void> R850::set_pll(std::uint32_t lo_frequency_khz,
-                           std::uint32_t if_frequency_khz) noexcept
+// Native-Hz PLL planner (accepted R3 scalar rule).  RF/LO/VCO keep their full
+// Hz remainder.  Every reference-derived threshold is the OLD rounded kHz
+// expression (same division order) multiplied by 1000, comparisons keep their
+// strictness, and the SDM loop keeps its old software encoding cutoff of a
+// residual above 1 kHz.  That cutoff and the scaled constants are a software
+// lattice, not a hardware precision claim.  For an integral-kHz input every
+// threshold, residual and termination equals the old kHz arithmetic.
+Result<void> R850::set_pll(std::uint64_t lo_frequency_hz,
+                           std::uint64_t if_frequency_hz) noexcept
 {
-    std::uint32_t xtal = 24000U;
-    const std::uint32_t vco_min = chip_variant_ ? 2200000U : 2270000U;
-    const std::uint32_t vco_max = vco_min * 2U;
-    std::uint32_t vco_frequency = lo_frequency_khz * 2U;
+    std::uint32_t xtal_khz = 24000U;
+    const std::uint64_t vco_min = khz_to_hz(chip_variant_ ? 2200000U : 2270000U);
+    const std::uint64_t vco_max = vco_min * 2U;
+    std::uint64_t vco_frequency = lo_frequency_hz * 2U;
     std::uint16_t nsdm = 2U;
     std::uint16_t sdm = 0U;
     std::uint8_t mix_div = 2U;
@@ -634,9 +665,9 @@ Result<void> R850::set_pll(std::uint32_t lo_frequency_khz,
     registers_[0x25U] = static_cast<std::uint8_t>((registers_[0x25U] & 0xefU) | 0x20U);
 
     std::uint8_t xtal_power = 0U;
-    if (lo_frequency_khz < 100000U) {
+    if (lo_frequency_hz < khz_to_hz(100000U)) {
         xtal_power = xtal_power_ > 1U ? static_cast<std::uint8_t>(3U - xtal_power_) : 2U;
-    } else if (lo_frequency_khz < 130000U) {
+    } else if (lo_frequency_hz < khz_to_hz(130000U)) {
         xtal_power = xtal_power_ > 2U ? static_cast<std::uint8_t>(3U - xtal_power_) : 1U;
     }
     registers_[0x22U] = static_cast<std::uint8_t>(
@@ -649,8 +680,11 @@ Result<void> R850::set_pll(std::uint32_t lo_frequency_khz,
     registers_[0x22U] = static_cast<std::uint8_t>(
         (registers_[0x22U] & 0xf7U) | ((cap_value << 3U) & 0x08U));
 
+    // Explicit old MHz bucket: floor(RF in MHz) / 12, never a fractional
+    // division.
+    const std::uint64_t rf_frequency_hz = lo_frequency_hz + if_frequency_hz;
     const std::uint16_t divider_judge = static_cast<std::uint16_t>(
-        (lo_frequency_khz + if_frequency_khz) / 1000U / 12U);
+        rf_frequency_hz / 1000000U / 12U);
     registers_[0x1eU] &= 0x1fU;
     registers_[0x25U] &= 0xfdU;
     if (divider_judge == 4U || divider_judge == 10U || divider_judge == 22U ||
@@ -660,16 +694,18 @@ Result<void> R850::set_pll(std::uint32_t lo_frequency_khz,
     registers_[0x2fU] &= chip_variant_ ? 0xfdU : 0xfcU;
     while (divider < 6U && !(vco_min <= vco_frequency && vco_frequency < vco_max)) {
         mix_div = static_cast<std::uint8_t>(mix_div * 2U);
-        vco_frequency = lo_frequency_khz * mix_div;
+        vco_frequency = lo_frequency_hz * mix_div;
         ++divider;
     }
 
-    if (lo_frequency_khz < 380500U && (divider_judge & 1U) == 0U) {
-        xtal /= 2U;
+    if (lo_frequency_hz < khz_to_hz(380500U) && (divider_judge & 1U) == 0U) {
+        xtal_khz /= 2U;
         registers_[0x22U] = static_cast<std::uint8_t>((registers_[0x22U] & 0xfcU) | 0x02U);
         xtal_div = 1U;
-    } else if ((lo_frequency_khz + if_frequency_khz - 478000U) < 4000U) {
-        xtal /= 4U;
+    } else if (rf_frequency_hz >= khz_to_hz(478000U) &&
+               (rf_frequency_hz - khz_to_hz(478000U)) < khz_to_hz(4000U)) {
+        // PLL reference window: half-open [478000000, 482000000) Hz.
+        xtal_khz /= 4U;
         registers_[0x22U] = static_cast<std::uint8_t>((registers_[0x22U] & 0xfcU) | 0x03U);
         xtal_div = 3U;
     } else {
@@ -699,27 +735,33 @@ Result<void> R850::set_pll(std::uint32_t lo_frequency_khz,
     registers_[0x1eU] = static_cast<std::uint8_t>(
         (registers_[0x1eU] & 0xe3U) | ((divider << 2U) & 0x1cU));
 
+    const std::uint64_t xtal = khz_to_hz(xtal_khz);
     std::uint16_t nint = static_cast<std::uint16_t>((vco_frequency / 2U) / xtal);
-    std::uint16_t vco_fraction = static_cast<std::uint16_t>(
-        vco_frequency - (xtal * 2U * nint));
-    if (vco_fraction < (xtal / 64U)) {
+    // The fraction is below 2 * xtal (at most 48 MHz), which no longer fits the
+    // old 16-bit kHz field, so it is held in 64 bits.
+    std::uint64_t vco_fraction = vco_frequency - (xtal * 2U * nint);
+    if (vco_fraction < khz_to_hz(xtal_khz / 64U)) {
         vco_fraction = 0U;
-    } else if (vco_fraction > (xtal * 127U / 64U)) {
+    } else if (vco_fraction > khz_to_hz(xtal_khz * 127U / 64U)) {
         vco_fraction = 0U;
         ++nint;
-    } else if (vco_fraction > (xtal * 127U / 128U) && xtal > vco_fraction) {
-        vco_fraction = static_cast<std::uint16_t>(xtal * 127U / 128U);
-    } else if (xtal < vco_fraction && vco_fraction < (xtal * 129U / 128U)) {
-        vco_fraction = static_cast<std::uint16_t>(xtal * 129U / 128U);
+    } else if (vco_fraction > khz_to_hz(xtal_khz * 127U / 128U) && xtal > vco_fraction) {
+        vco_fraction = khz_to_hz(xtal_khz * 127U / 128U);
+    } else if (xtal < vco_fraction && vco_fraction < khz_to_hz(xtal_khz * 129U / 128U)) {
+        vco_fraction = khz_to_hz(xtal_khz * 129U / 128U);
     }
     const std::uint8_t ni = static_cast<std::uint8_t>((nint - 13U) / 4U);
     const std::uint8_t si = static_cast<std::uint8_t>(nint - 13U - ni * 4U);
     registers_[0x1bU] = static_cast<std::uint8_t>((registers_[0x1bU] & 0x80U) | (ni & 0x7fU));
     registers_[0x1eU] = static_cast<std::uint8_t>((registers_[0x1eU] & 0xfcU) | (si & 0x03U));
     registers_[0x20U] &= 0x3fU;
-    while (vco_fraction > 1U) {
-        if ((xtal * 2U / nsdm) < vco_fraction) {
-            vco_fraction = static_cast<std::uint16_t>(vco_fraction - (xtal * 2U / nsdm));
+    // At nsdm 0x8000 the threshold is at most 1000 Hz while the residual is
+    // above it, so the subtract-and-break below always ends the loop before
+    // nsdm can wrap, as in the old kHz loop.
+    while (vco_fraction > khz_to_hz(1U)) {
+        const std::uint64_t threshold = khz_to_hz(xtal_khz * 2U / nsdm);
+        if (threshold < vco_fraction) {
+            vco_fraction -= threshold;
             sdm = static_cast<std::uint16_t>(sdm + 0x8000U / (nsdm / 2U));
             if ((nsdm & 0x8000U) != 0U) {
                 break;
@@ -745,14 +787,20 @@ Result<void> R850::set_pll(std::uint32_t lo_frequency_khz,
 
 Result<void> R850::set_frequency(std::uint32_t frequency_khz) noexcept
 {
-    if (!initialized_ || frequency_khz < 40000U || frequency_khz > 1002000U) {
+    return set_frequency_hz(khz_to_hz(frequency_khz));
+}
+
+Result<void> R850::set_frequency_hz(std::uint64_t frequency_hz) noexcept
+{
+    if (!initialized_ || frequency_hz < khz_to_hz(40000U) ||
+        frequency_hz > khz_to_hz(1002000U)) {
         return Result<void>::failure(Error::INVALID_ARGUMENT);
     }
     const auto system = set_system_params();
     if (!system) {
         return system;
     }
-    return set_system_frequency(frequency_khz);
+    return set_system_frequency(frequency_hz);
 }
 
 Result<bool> R850::is_pll_locked() noexcept

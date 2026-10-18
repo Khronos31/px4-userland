@@ -122,6 +122,22 @@ Result<void> Mlt5PeFrontend::close_receiver(std::uint8_t receiver) noexcept
 Result<void> Mlt5PeFrontend::tune(std::uint8_t receiver, Cxd2856erSystem system,
                                  std::uint32_t frequency_khz) noexcept
 {
+    return tune_sequence(receiver, system, false, frequency_khz, nullptr);
+}
+
+Result<std::uint64_t> Mlt5PeFrontend::tune_hz(std::uint8_t receiver, Cxd2856erSystem system,
+                                              std::uint64_t frequency_hz) noexcept
+{
+    std::uint64_t programmed_hz = 0U;
+    const auto tuned = tune_sequence(receiver, system, true, frequency_hz, &programmed_hz);
+    if (!tuned) return Result<std::uint64_t>::failure(tuned.error());
+    return Result<std::uint64_t>::success(programmed_hz);
+}
+
+Result<void> Mlt5PeFrontend::tune_sequence(std::uint8_t receiver, Cxd2856erSystem system,
+                                           bool hz_entrance, std::uint64_t frequency,
+                                           std::uint64_t* programmed_hz) noexcept
+{
     if (!valid_receiver(receiver) ||
         (system != Cxd2856erSystem::isdb_t && system != Cxd2856erSystem::isdb_s))
         return Result<void>::failure(Error::INVALID_ARGUMENT);
@@ -137,9 +153,16 @@ Result<void> Mlt5PeFrontend::tune(std::uint8_t receiver, Cxd2856erSystem system,
         target.system = Cxd2856erSystem::unspecified;
     }
     auto result = target.demod.wakeup(system);
-    if (result) {
+    if (result && !hz_entrance) {
+        const auto frequency_khz = static_cast<std::uint32_t>(frequency);
         result = system == Cxd2856erSystem::isdb_t ? target.tuner.set_params_t(frequency_khz)
                                                    : target.tuner.set_params_s(frequency_khz);
+    } else if (result) {
+        const auto field = system == Cxd2856erSystem::isdb_t
+            ? target.tuner.set_params_t_hz(frequency)
+            : target.tuner.set_params_s_hz(frequency);
+        if (field && programmed_hz != nullptr) *programmed_hz = field.value();
+        result = field ? Result<void>::success() : Result<void>::failure(field.error());
     }
     if (result) result = target.demod.post_tune();
     if (result) {

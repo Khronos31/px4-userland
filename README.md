@@ -502,6 +502,7 @@ PX-Q3U4 内蔵の IC カードリーダーは `px4d` が管理します。本ソ
 - スレッドライブラリ（Threads）
 - libusb 1.0.23 以上
 - PC/SC IFD Handler をビルドする場合は pcsc-lite の開発ヘッダー（`ifdhandler.h`）
+- MIT の共通基盤 `dtv-userland-core`（`cmake/dtv-userland-core.revision` に固定した commit。CMake が取得します）
 
 ### 手順
 
@@ -547,12 +548,21 @@ WinSCard DLLはapplication-local配置用であり、System32のDLL置換やMicr
 - `-DPX4_BUILD_PCSC_IFD=ON|OFF`（既定値: ON）: PC/SC IFD Handler のビルド
 - `-DPX4_BUILD_TESTS=ON|OFF`（既定値: OFF）: テストのビルド
 
+共通基盤 `dtv-userland-core` は `cmake/dtv-userland-core.revision` の commit を FetchContent で取得します。対応
+source archive には `repository/third_party/dtv-userland-core` が同梱され、オフラインの CMake ビルドではそれを
+使います。ローカルや改変版の共通ソースでビルドする場合は
+`-DFETCHCONTENT_SOURCE_DIR_DTV_USERLAND_CORE=<path>` を指定します（この場合は固定 commit ではなく指定ツリーを
+使うため、固定ビルドではない旨が警告されます）。source archive を再作成する場合は、固定 commit を含む Git
+チェックアウトを `scripts/package-source.py --common-core-source-root` で渡すか、固定リポジトリからの取得に
+任せます（同梱ツリーは Git の固定ソースとしては扱いません）。
+
 ## リリース作業
 
 検証する candidate と公開する tag CI の成果物を区別し、必要試験、依頼後のノート作成、別の「タグ＋リリース」依頼の順に進めます。[公開手順](docs/releasing.md)、[実機検証手順](docs/release-validation.md)、[matrix・記録形式](docs/release-record.md)、[コミット済みノートの方針](release-notes/README.md)を参照してください。公開workflowの成功は新しい機種・環境の実機認定を意味しません。
 
 ## ライセンス
 
-本ソフトウェアは [GPL-2.0-only](LICENSE) の下で公開されています。
+本ソフトウェアは [GPL-2.0-only](LICENSE) の下で公開されています。共通基盤 `dtv-userland-core` は MIT ライセンスで、
+製品本体のライセンスとは別です。
 
 コードの由来、派生元、および第三者コンポーネントのライセンス通知については、[`PROVENANCE.md`](PROVENANCE.md) および [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) を参照してください。

@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <vector>
 
@@ -41,9 +42,14 @@ public:
     const Transport& dev2() const noexcept;
     // The selected enclosure's instance identifier (see identity.h).
     std::string_view base_serial() const noexcept;
+    std::optional<bool> serial_unique_in_scan() const noexcept;
     DeviceModel model() const noexcept;
     std::size_t bridge_count() const noexcept;
     bool quarantined() const noexcept;
+    // Observation of the bridge this runtime claimed (descriptor, serial and
+    // location read during selection), or null for a bridge index it does not
+    // own.  It is not re-read from the device.
+    const DeviceObservation* bridge_observation(std::size_t bridge) const noexcept;
 
 private:
     struct Impl;

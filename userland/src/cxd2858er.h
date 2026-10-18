@@ -41,6 +41,14 @@ public:
     // ISDB-T is always 6 MHz; frequencies are in kHz.
     Result<void> set_params_t(std::uint32_t frequency_khz) noexcept;
     Result<void> set_params_s(std::uint32_t frequency_khz) noexcept;
+    // R3 native-Hz entrances.  They program the same 20-bit command field as
+    // the kHz entrances: T field = floor(hz / 1000), S field =
+    // floor((hz + 2000) / 4000) (nearest 4000 Hz, ties upward), and require
+    // the field in 1..0xfffff.  On success they return the field-equivalent
+    // command value (field*1000 or field*4000 Hz), which is a command
+    // representation, not a measured RF frequency.
+    Result<std::uint64_t> set_params_t_hz(std::uint64_t frequency_hz) noexcept;
+    Result<std::uint64_t> set_params_s_hz(std::uint64_t frequency_hz) noexcept;
 
     Cxd2858erSystem system() const noexcept { return system_; }
 
@@ -68,8 +76,9 @@ private:
     Result<void> power_on() noexcept;
     Result<void> stop_t() noexcept;
     Result<void> stop_s() noexcept;
-    Result<void> set_params_t_gated(std::uint32_t frequency_khz) noexcept;
-    Result<void> set_params_s_gated(std::uint32_t frequency_khz) noexcept;
+    // Both take the final 20-bit command field.
+    Result<void> set_params_t_gated(std::uint32_t field) noexcept;
+    Result<void> set_params_s_gated(std::uint32_t field) noexcept;
     // Runs one gated sequence and always attempts to close the gate.
     template <typename Operation>
     Result<void> gated(Operation operation) noexcept

@@ -3,22 +3,25 @@
 This corresponding-source archive records repository commit `@COMMIT@` and
 tree `@TREE@`. The `repository/` directory is the exact tracked source tree;
 `third_party/libusb-1.0.30/` and its original verified source archive are the
-libusb sources used for the static Linux, macOS, and Android binaries.
+libusb 1.0.30 sources provided for rebuilding the static Linux, macOS,
+Android, and Windows binaries.
 
 ## Linux static build and IFD variants
 
 Build the production executables in Alpine/musl, then build the matching PC/SC
 IFD in a host-libc environment. The glibc IFD must be built in Debian 11 or an
 equivalent glibc 2.31 baseline; the musl IFD must be built in the matching
-Alpine environment:
+Alpine environment. From the corresponding-source archive root, enter
+`repository/` for all commands in this Linux section:
 
 ```sh
+cd repository
 scripts/build-linux-static.sh --output build-linux-static \
-  --libusb-source-archive third_party/libusb-1.0.30.tar.bz2
+  --libusb-source-archive ../third_party/libusb-1.0.30.tar.bz2
 scripts/build-linux-ifd.sh --libc glibc --output build-linux-ifd-glibc
 scripts/build-linux-ifd.sh --libc musl --output build-linux-ifd-musl
 scripts/test-static-relink.sh \
-  --libusb-source-archive third_party/libusb-1.0.30.tar.bz2
+  --libusb-source-archive ../third_party/libusb-1.0.30.tar.bz2
 ```
 
 Package each libc-qualified archive with the same static executable directory:
@@ -28,11 +31,11 @@ version=$(tr -d '\n' < VERSION)
 scripts/package-artifact.py --platform linux-glibc-x86_64 --version "$version" \
   --static-build-dir build-linux-static --ifd-library build-linux-ifd-glibc/px4-userland-ifd.so \
   --reader-template packaging/pcsc/reader.conf.d/px4-userland.conf.in \
-  --source-ref SOURCE_COMMIT --output-dir dist
+  --source-ref @COMMIT@ --output-dir dist
 scripts/package-artifact.py --platform linux-musl-x86_64 --version "$version" \
   --static-build-dir build-linux-static --ifd-library build-linux-ifd-musl/px4-userland-ifd.so \
   --reader-template packaging/pcsc/reader.conf.d/px4-userland.conf.in \
-  --source-ref SOURCE_COMMIT --output-dir dist
+  --source-ref @COMMIT@ --output-dir dist
 ```
 
 The aarch64 commands are identical on a native aarch64 build host. The four

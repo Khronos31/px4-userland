@@ -466,7 +466,7 @@ Result<void> Q3U4FrontendBank::open_satellite(
 }
 
 Result<void> Q3U4FrontendBank::tune_receiver(std::uint8_t local_receiver,
-                                              std::uint32_t frequency_khz,
+                                              std::uint64_t frequency_hz,
                                               Tc90522System system,
                                               std::uint32_t timeout_ms) noexcept
 {
@@ -503,7 +503,7 @@ Result<void> Q3U4FrontendBank::tune_receiver(std::uint8_t local_receiver,
         }
         if (result) {
             attempt(DiagnosticStage::r850_set_frequency);
-            result = tuner.set_frequency(frequency_khz);
+            result = tuner.set_frequency_hz(frequency_hz);
             if (!result) remember_failure(result);
         }
         if (!result) return result;
@@ -562,7 +562,7 @@ Result<void> Q3U4FrontendBank::tune_receiver(std::uint8_t local_receiver,
     if (!result) remember_failure(result);
     if (result) {
         attempt(DiagnosticStage::satellite_set_params);
-        result = tuner.set_params(frequency_khz, 28860U, 4U);
+        result = tuner.set_params_hz(frequency_hz, 28860U, 4U);
         if (!result) remember_failure(result);
     }
     if (!result) return result;
@@ -607,7 +607,15 @@ Result<void> Q3U4FrontendBank::tune_terrestrial_with_timeout(
     std::uint8_t local_receiver, std::uint32_t frequency_khz,
     std::uint32_t timeout_ms) noexcept
 {
-    return tune_receiver(local_receiver, frequency_khz, Tc90522System::isdb_t,
+    return tune_terrestrial_hz_with_timeout(
+        local_receiver, static_cast<std::uint64_t>(frequency_khz) * 1000U, timeout_ms);
+}
+
+Result<void> Q3U4FrontendBank::tune_terrestrial_hz_with_timeout(
+    std::uint8_t local_receiver, std::uint64_t frequency_hz,
+    std::uint32_t timeout_ms) noexcept
+{
+    return tune_receiver(local_receiver, frequency_hz, Tc90522System::isdb_t,
                          timeout_ms);
 }
 
@@ -621,7 +629,15 @@ Result<void> Q3U4FrontendBank::tune_satellite_with_timeout(
     std::uint8_t local_receiver, std::uint32_t frequency_khz,
     std::uint32_t timeout_ms) noexcept
 {
-    return tune_receiver(local_receiver, frequency_khz, Tc90522System::isdb_s,
+    return tune_satellite_hz_with_timeout(
+        local_receiver, static_cast<std::uint64_t>(frequency_khz) * 1000U, timeout_ms);
+}
+
+Result<void> Q3U4FrontendBank::tune_satellite_hz_with_timeout(
+    std::uint8_t local_receiver, std::uint64_t frequency_hz,
+    std::uint32_t timeout_ms) noexcept
+{
+    return tune_receiver(local_receiver, frequency_hz, Tc90522System::isdb_s,
                          timeout_ms);
 }
 
@@ -1023,6 +1039,16 @@ Q3U4_ENC_ROUTE_VOID(tune_satellite_with_timeout,
                      std::uint32_t timeout_ms),
                     tune_satellite_with_timeout(mapping.value().local_receiver,
                                                 frequency_khz, timeout_ms))
+Q3U4_ENC_ROUTE_VOID(tune_terrestrial_hz_with_timeout,
+                    (std::uint8_t global_receiver, std::uint64_t frequency_hz,
+                     std::uint32_t timeout_ms),
+                    tune_terrestrial_hz_with_timeout(mapping.value().local_receiver,
+                                                     frequency_hz, timeout_ms))
+Q3U4_ENC_ROUTE_VOID(tune_satellite_hz_with_timeout,
+                    (std::uint8_t global_receiver, std::uint64_t frequency_hz,
+                     std::uint32_t timeout_ms),
+                    tune_satellite_hz_with_timeout(mapping.value().local_receiver,
+                                                   frequency_hz, timeout_ms))
 Q3U4_ENC_ROUTE_VOID(select_satellite_slot,
                     (std::uint8_t global_receiver, std::uint8_t slot),
                     select_satellite_slot(mapping.value().local_receiver, slot))

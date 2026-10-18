@@ -43,6 +43,10 @@ struct R850FrequencySelection final {
 
 Result<R850FrequencySelection> r850_select_isdb_t_frequency(
     std::uint32_t if_frequency_khz, std::uint32_t rf_frequency_khz) noexcept;
+// R3 continuous-Hz form of the same first-match table selection.  The kHz
+// function above is this selection at rf_frequency_khz * 1000.
+Result<R850FrequencySelection> r850_select_isdb_t_frequency_hz(
+    std::uint32_t if_frequency_khz, std::uint64_t rf_frequency_hz) noexcept;
 
 class R850 final {
 public:
@@ -56,7 +60,12 @@ public:
     Result<void> sleep() noexcept;
     Result<void> wakeup() noexcept;
     Result<void> set_system(const R850SystemConfig& system) noexcept;
+    // The original kHz entrance is a wrapper over set_frequency_hz() at
+    // frequency_khz * 1000; both share one programming algorithm.
     Result<void> set_frequency(std::uint32_t frequency_khz) noexcept;
+    // R3 native-Hz entrance.  The full requested RF/LO/VCO remainder reaches
+    // the PLL planner; nothing is rounded to kHz first.
+    Result<void> set_frequency_hz(std::uint64_t frequency_hz) noexcept;
     Result<bool> is_pll_locked() noexcept;
 
     bool initialized() const noexcept { return initialized_; }
@@ -70,11 +79,11 @@ private:
     Result<void> write_regs(std::uint8_t reg, ByteView values) noexcept;
     Result<void> check_xtal_power() noexcept;
     Result<void> set_system_params() noexcept;
-    Result<void> set_system_frequency(std::uint32_t rf_frequency_khz) noexcept;
-    Result<void> set_mux(std::uint32_t rf_frequency_khz,
-                         std::uint32_t lo_frequency_khz) noexcept;
-    Result<void> set_pll(std::uint32_t lo_frequency_khz,
-                         std::uint32_t if_frequency_khz) noexcept;
+    Result<void> set_system_frequency(std::uint64_t rf_frequency_hz) noexcept;
+    Result<void> set_mux(std::uint64_t rf_frequency_hz,
+                         std::uint64_t lo_frequency_hz) noexcept;
+    Result<void> set_pll(std::uint64_t lo_frequency_hz,
+                         std::uint64_t if_frequency_hz) noexcept;
 
     Tc90522& demod_;
     R850Delay& delay_;

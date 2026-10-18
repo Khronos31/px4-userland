@@ -64,10 +64,15 @@ bool test_valid_modes()
     PX4D_CHECK(px4d_open_mode(descriptors) == Px4dOpenMode::file_descriptors);
 
     Arguments filtered = fd_arguments();
-    filtered.insert(filtered.end(), {"--device", "00001205000960", "--group"});
+    filtered.insert(filtered.end(), {"--device", "00001205000960", "--runtime-dir",
+                                     "/tmp/px4d-group", "--group"});
     const Px4dArguments filtered_result = parse(filtered);
     PX4D_CHECK(filtered_result.valid && filtered_result.group &&
                filtered_result.device == "00001205000960");
+
+    Arguments group_without_root = fd_arguments();
+    group_without_root.push_back("--group");
+    PX4D_CHECK(!parse(group_without_root).valid);
 
     Arguments lnb = native_arguments();
     lnb.push_back("--allow-lnb-power");

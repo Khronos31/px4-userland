@@ -642,6 +642,7 @@ LibusbSession::~LibusbSession() noexcept
 void DeviceDiscovery::clear() noexcept
 {
     candidates_.clear();
+    scan_complete_ = true;
     if (api_ != nullptr && list_ != nullptr) {
         api_->free_device_list(list_);
     }
@@ -693,6 +694,7 @@ Result<void> NativeEnumerator::discover(DeviceDiscovery& discovery) noexcept
         std::uint8_t serial_index = 0U;
         const int info_result = api_.get_device_info(device, &observation, &serial_index);
         if (info_result != 0) {
+            discovery.scan_complete_ = false;
             continue;
         }
         if (device_profile_for_usb_id(observation.vendor_id, observation.product_id) ==
@@ -706,6 +708,7 @@ Result<void> NativeEnumerator::discover(DeviceDiscovery& discovery) noexcept
             candidate.discovery_error = Error::INVALID_ARGUMENT;
             candidate.status = ObservationStatus::invalid_serial;
             discovery.candidates_.push_back(std::move(candidate));
+            discovery.scan_complete_ = false;
             continue;
         }
         const auto topology = observe_topology(api_, device);
@@ -713,6 +716,7 @@ Result<void> NativeEnumerator::discover(DeviceDiscovery& discovery) noexcept
             candidate.discovery_error = topology.error();
             candidate.status = ObservationStatus::open_failed;
             discovery.candidates_.push_back(std::move(candidate));
+            discovery.scan_complete_ = false;
             continue;
         }
         candidate.observation.topology = topology.value();
@@ -737,6 +741,8 @@ Result<void> NativeEnumerator::discover(DeviceDiscovery& discovery) noexcept
             }
         }
         discovery.candidates_.push_back(std::move(candidate));
+        if (discovery.candidates_.back().status != ObservationStatus::usable)
+            discovery.scan_complete_ = false;
     }
     return Result<void>::success();
 }
@@ -1673,6 +1679,11 @@ std::string_view Q3U4Runtime::base_serial() const noexcept
     return impl_->base_serial_;
 }
 
+std::optional<bool> Q3U4Runtime::serial_unique_in_scan() const noexcept
+{
+    return impl_->serial_unique_in_scan_;
+}
+
 DeviceModel Q3U4Runtime::model() const noexcept
 {
     return impl_->model_;
@@ -1689,6 +1700,14 @@ bool Q3U4Runtime::quarantined() const noexcept
         return false;
     }
     return impl_->state_->abandoned.load();
+}
+
+const DeviceObservation* Q3U4Runtime::bridge_observation(std::size_t bridge) const noexcept
+{
+    if (impl_ == nullptr || bridge >= impl_->observations_.size() ||
+        bridge >= bridge_count() || !impl_->observed_[bridge])
+        return nullptr;
+    return &impl_->observations_[bridge];
 }
 
 Result<std::unique_ptr<Q3U4Runtime::Impl>> Q3U4Runtime::Impl::create(
@@ -1859,6 +1878,21 @@ Result<void> Q3U4Runtime::Impl::acquire_native(
     }
     const Q3U4Group& group = grouping.value().groups[
         usb_paths == nullptr ? selected_legacy.value() : selected.value().group_index];
+    std::size_t matching_groups = 0U;
+    bool duplicate_serial = group.status == GroupStatus::duplicate;
+    for (const Q3U4Group& candidate : grouping.value().groups) {
+        if (candidate.base_serial == group.base_serial) {
+            ++matching_groups;
+            duplicate_serial = duplicate_serial || candidate.status == GroupStatus::duplicate;
+        }
+    }
+    if (matching_groups > 1U || duplicate_serial) {
+        serial_unique_in_scan_ = false;
+    } else if (discovery.scan_complete() && group.status == GroupStatus::ready) {
+        serial_unique_in_scan_ = true;
+    } else {
+        serial_unique_in_scan_.reset();
+    }
     const std::size_t bridge_count = device_profile(group.model).bridge_count;
     std::array<const DeviceCandidate*, 2U> candidates{nullptr, nullptr};
     for (std::size_t slot = 0U; slot < bridge_count; ++slot) {
@@ -1927,6 +1961,10 @@ Result<void> Q3U4Runtime::Impl::acquire_native(
     }
     base_serial_ = group.base_serial;
     model_ = group.model;
+    for (std::size_t slot = 0U; slot < bridge_count; ++slot) {
+        observations_[slot] = candidates[slot]->observation;
+        observed_[slot] = true;
+    }
     transports_[0U] = std::move(transports[0U]);
     transports_[1U] = std::move(transports[1U]);
     cleanup();
@@ -2019,6 +2057,7 @@ Result<void> Q3U4Runtime::Impl::acquire_fds(const std::vector<int>& fds,
         return Result<void>::failure(selected.error());
     }
     const Q3U4Group& group = grouping.value().groups[selected.value()];
+    if (group.status == GroupStatus::duplicate) serial_unique_in_scan_ = false;
     const std::size_t bridge_count = device_profile(group.model).bridge_count;
     std::array<std::size_t, 2U> selected_indices{
         std::numeric_limits<std::size_t>::max(), std::numeric_limits<std::size_t>::max()};
@@ -2055,6 +2094,10 @@ Result<void> Q3U4Runtime::Impl::acquire_fds(const std::vector<int>& fds,
     }
     base_serial_ = group.base_serial;
     model_ = group.model;
+    for (std::size_t slot = 0U; slot < bridge_count; ++slot) {
+        observations_[slot] = pending[selected_indices[slot]].observation;
+        observed_[slot] = true;
+    }
     transports_[0U] = std::move(transports[0U]);
     transports_[1U] = std::move(transports[1U]);
     cleanup();

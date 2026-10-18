@@ -69,6 +69,7 @@ bool channel_failure(Error error) noexcept
     case Error::PROTOCOL_ERROR:
     case Error::FIRMWARE_REJECTED:
     case Error::SLOW_CONSUMER:
+    case Error::RESOURCE_LIMIT:
     case Error::INTERNAL:
         return true;
     case Error::OK:
@@ -342,6 +343,7 @@ IfdResult map_ifd_error(Error error, IfdOperation operation) noexcept
     case Error::USB_IO:
     case Error::PROTOCOL_ERROR:
     case Error::SLOW_CONSUMER:
+    case Error::RESOURCE_LIMIT:
     case Error::INTERNAL:
         return IfdResult::communication_error;
     }

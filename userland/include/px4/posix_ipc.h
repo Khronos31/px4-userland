@@ -38,7 +38,7 @@ enum class EndpointAccess : std::uint8_t {
 
 // A null runtime_directory selects $XDG_RUNTIME_DIR. instance and endpoint_name
 // are single path components. The resulting endpoint is:
-//   <runtime_directory>/px4-userland/<instance>/<endpoint_name>
+//   <runtime_directory>/px4-userland/v1/<instance>/<endpoint_name>
 // This adapter selects permissions only. Group identity selection/chown remains
 // the responsibility of the process launcher.
 struct EndpointConfig final {
@@ -47,6 +47,25 @@ struct EndpointConfig final {
     const char* endpoint_name;
     EndpointAccess access = EndpointAccess::private_user;
 };
+
+struct RuntimeRootCandidates final {
+    std::array<std::array<char, kStoredPathCapacity>, 3U> paths{};
+    std::array<bool, 3U> create_if_missing{};
+    std::size_t count = 0U;
+};
+
+struct RuntimeInstanceDiscovery final {
+    std::array<std::array<char, 65U>, 256U> instances{};
+    std::size_t count = 0U;
+    bool canonical_collision = false;
+};
+
+Result<RuntimeRootCandidates> client_runtime_roots() noexcept;
+Result<RuntimeInstanceDiscovery> discover_runtime_instances(
+    const char* runtime_directory, EndpointAccess access) noexcept;
+#if !defined(_WIN32)
+Result<std::array<char, kStoredPathCapacity>> select_publish_runtime_root() noexcept;
+#endif
 
 // Holds the serial endpoint namespace while a daemon publishes its sockets.
 // A serial-named endpoint is exclusive; custom instances of that observed
@@ -115,6 +134,11 @@ public:
     // within one monotonic absolute deadline.
     Result<void> write_frame(ByteView frame, Timeout timeout) noexcept;
 
+    // Sends every byte within one monotonic absolute deadline, without
+    // interpreting them.  This is the byte transport under write_frame for
+    // callers that frame with another codec.
+    Result<void> write_all(ByteView bytes, Timeout timeout) noexcept;
+
 private:
     explicit SocketStream(NativeHandle fd) noexcept : fd_(fd) {}
     friend class SocketListener;
@@ -158,14 +182,17 @@ private:
 
     NativeHandle fd_ = kInvalidHandle;
     std::array<PathChar, kStoredPathCapacity> product_directory_{};
+    std::array<PathChar, kStoredPathCapacity> version_directory_{};
     std::array<PathChar, kStoredPathCapacity> instance_directory_{};
     std::array<PathChar, kStoredPathCapacity> endpoint_path_{};
     FileIdentity product_identity_{};
+    FileIdentity version_identity_{};
     FileIdentity instance_identity_{};
     FileIdentity endpoint_identity_{};
     std::uint16_t directory_mode_ = 0U;
     std::uint16_t socket_mode_ = 0U;
     bool created_product_directory_ = false;
+    bool created_version_directory_ = false;
     bool created_instance_directory_ = false;
     bool created_endpoint_ = false;
 };

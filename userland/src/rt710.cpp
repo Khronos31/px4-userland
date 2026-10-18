@@ -65,29 +65,39 @@ std::uint8_t reverse_bits(std::uint8_t value) noexcept
     return static_cast<std::uint8_t>((value << 4U) | (value >> 4U));
 }
 
+// R3 unit rule: frequency-valued legacy constants are the old kHz value times
+// 1000 at the original comparison.  Symbol-rate/rolloff/bandwidth arithmetic
+// is a separate unit domain and is not scaled.
+constexpr std::uint64_t khz_to_hz(std::uint32_t value) noexcept
+{
+    return static_cast<std::uint64_t>(value) * 1000U;
+}
+
 }  // namespace
 
-Result<void> Rt710::validate_params(std::uint32_t frequency_khz,
+Result<void> Rt710::validate_params(std::uint64_t frequency_hz,
                                     std::uint32_t symbol_rate,
                                     std::uint32_t rolloff) const noexcept
 {
-    if (frequency_khz < 146875U || frequency_khz > 2350000U ||
+    if (frequency_hz < khz_to_hz(146875U) || frequency_hz > khz_to_hz(2350000U) ||
         symbol_rate == 0U || rolloff > 5U) {
         return Result<void>::failure(Error::INVALID_ARGUMENT);
     }
     // The fixed Q3U4 PLL uses 24 MHz and a /2, /4, /8, or /16 mixer
     // divider.  Validate the complete divider/fraction domain before the
-    // initial register image is sent.
+    // initial register image is sent.  A 4.7 GHz VCO needs 64-bit Hz.
     std::uint8_t mix_div = 2U;
-    std::uint32_t vco_frequency = frequency_khz * mix_div;
-    while (mix_div <= 16U && !(vco_frequency >= 2350000U && vco_frequency <= 4700000U)) {
+    std::uint64_t vco_frequency = frequency_hz * mix_div;
+    while (mix_div <= 16U && !(vco_frequency >= khz_to_hz(2350000U) &&
+                               vco_frequency <= khz_to_hz(4700000U))) {
         mix_div = static_cast<std::uint8_t>(mix_div * 2U);
-        if (mix_div <= 16U) vco_frequency = frequency_khz * mix_div;
+        if (mix_div <= 16U) vco_frequency = frequency_hz * mix_div;
     }
-    if (mix_div > 16U || vco_frequency < 2350000U || vco_frequency > 4700000U) {
+    if (mix_div > 16U || vco_frequency < khz_to_hz(2350000U) ||
+        vco_frequency > khz_to_hz(4700000U)) {
         return Result<void>::failure(Error::INVALID_ARGUMENT);
     }
-    const std::uint32_t nint = (vco_frequency / 2U) / kXtalKHz;
+    const std::uint64_t nint = (vco_frequency / 2U) / khz_to_hz(kXtalKHz);
     if (nint < 13U || nint > 268U) return Result<void>::failure(Error::INVALID_ARGUMENT);
 
     std::uint32_t effective_symbol_rate = symbol_rate;
@@ -204,7 +214,7 @@ Result<void> Rt710::initialize() noexcept
 {
     initialized_ = false;
     chip_ = Rt710Chip::unknown;
-    frequency_khz_ = 0U;
+    frequency_hz_ = 0U;
     const auto value = read_regs(0x03U, 1U);
     if (!value) {
         return Result<void>::failure(value.error());
@@ -219,7 +229,7 @@ Result<void> Rt710::terminate() noexcept
 {
     initialized_ = false;
     chip_ = Rt710Chip::unknown;
-    frequency_khz_ = 0U;
+    frequency_hz_ = 0U;
     return Result<void>::success();
 }
 
@@ -236,27 +246,31 @@ Result<void> Rt710::sleep() noexcept
     return write_regs(0U, ByteView{regs.data(), regs.size()});
 }
 
+// Native-Hz PLL planner (accepted R3 scalar rule): full Hz VCO remainder, old
+// rounded 24 MHz thresholds scaled by 1000 with their strictness, and the old
+// residual cutoff above 1 kHz.  For integral-kHz input every decision equals
+// the old kHz arithmetic.
 Result<void> Rt710::set_pll(std::array<std::uint8_t, kRegisterCount>& regs,
-                            std::uint32_t frequency_khz) noexcept
+                            std::uint64_t frequency_hz) noexcept
 {
     // Matches rt710_set_pll: once PLL programming is entered, the previous
     // frequency is invalidated even if a later I2C write fails.
-    frequency_khz_ = 0U;
+    frequency_hz_ = 0U;
     // The kernel implementation lets an invalid frequency fall through with
     // an unsupported divider (and can wrap its arithmetic).  The portable
     // API rejects that state before any register write; all Q3U4 BS/CS
     // frequencies are inside this validated PLL domain.
-    if (frequency_khz == 0U) {
+    if (frequency_hz == 0U) {
         return Result<void>::failure(Error::INVALID_ARGUMENT);
     }
-    constexpr std::uint32_t vco_min = 2350000U;
-    constexpr std::uint32_t vco_max = 4700000U;
+    constexpr std::uint64_t vco_min = khz_to_hz(2350000U);
+    constexpr std::uint64_t vco_max = khz_to_hz(4700000U);
     std::uint8_t mix_div = 2U;
-    std::uint32_t vco_frequency = frequency_khz * mix_div;
+    std::uint64_t vco_frequency = frequency_hz * mix_div;
     while (mix_div <= 16U && !(vco_frequency >= vco_min && vco_frequency <= vco_max)) {
         mix_div = static_cast<std::uint8_t>(mix_div * 2U);
         if (mix_div <= 16U) {
-            vco_frequency = frequency_khz * mix_div;
+            vco_frequency = frequency_hz * mix_div;
         }
     }
     if (mix_div > 16U || vco_frequency < vco_min || vco_frequency > vco_max) {
@@ -287,15 +301,16 @@ Result<void> Rt710::set_pll(std::array<std::uint8_t, kRegisterCount>& regs,
         if (!result) return result;
     }
 
-    const std::uint32_t twice_xtal = kXtalKHz * 2U;
-    const std::uint32_t nint = (vco_frequency / 2U) / kXtalKHz;
+    const std::uint64_t twice_xtal = khz_to_hz(kXtalKHz * 2U);
+    const std::uint32_t nint =
+        static_cast<std::uint32_t>((vco_frequency / 2U) / khz_to_hz(kXtalKHz));
     if (nint < 13U || nint > 268U) {
         return Result<void>::failure(Error::INVALID_ARGUMENT);
     }
-    std::uint32_t fraction = vco_frequency - (twice_xtal * nint);
-    if (fraction < kXtalKHz / 64U) {
+    std::uint64_t fraction = vco_frequency - (twice_xtal * nint);
+    if (fraction < khz_to_hz(kXtalKHz / 64U)) {
         fraction = 0U;
-    } else if (fraction > kXtalKHz * 127U / 64U) {
+    } else if (fraction > khz_to_hz(kXtalKHz * 127U / 64U)) {
         fraction = 0U;
         // The legacy code increments nint here.  The Q3U4 range cannot overflow
         // this validated divider, and the resulting value remains representable.
@@ -306,14 +321,14 @@ Result<void> Rt710::set_pll(std::array<std::uint8_t, kRegisterCount>& regs,
     }
     std::uint32_t effective_nint = nint;
     if (fraction == 0U && vco_frequency - (twice_xtal * nint) >
-                           kXtalKHz * 127U / 64U) {
+                           khz_to_hz(kXtalKHz * 127U / 64U)) {
         effective_nint = nint + 1U;
     }
-    if (fraction > kXtalKHz * 127U / 128U && fraction < kXtalKHz) {
-        fraction = kXtalKHz * 127U / 128U;
-    } else if (fraction > kXtalKHz &&
-               fraction < kXtalKHz * 129U / 128U) {
-        fraction = kXtalKHz * 129U / 128U;
+    if (fraction > khz_to_hz(kXtalKHz * 127U / 128U) && fraction < khz_to_hz(kXtalKHz)) {
+        fraction = khz_to_hz(kXtalKHz * 127U / 128U);
+    } else if (fraction > khz_to_hz(kXtalKHz) &&
+               fraction < khz_to_hz(kXtalKHz * 129U / 128U)) {
+        fraction = khz_to_hz(kXtalKHz * 129U / 128U);
     }
     const std::uint8_t ni = static_cast<std::uint8_t>((effective_nint - 13U) / 4U);
     const std::uint8_t si = static_cast<std::uint8_t>(effective_nint - ni * 4U - 13U);
@@ -326,8 +341,8 @@ Result<void> Rt710::set_pll(std::array<std::uint8_t, kRegisterCount>& regs,
 
     std::uint16_t nsdm = 2U;
     std::uint16_t sdm = 0U;
-    while (fraction > 1U) {
-        const std::uint32_t threshold = (kXtalKHz * 2U) / nsdm;
+    while (fraction > khz_to_hz(1U)) {
+        const std::uint64_t threshold = khz_to_hz((kXtalKHz * 2U) / nsdm);
         if (fraction > threshold) {
             sdm = static_cast<std::uint16_t>(sdm + (0x8000U / (nsdm / 2U)));
             fraction -= threshold;
@@ -341,7 +356,7 @@ Result<void> Rt710::set_pll(std::array<std::uint8_t, kRegisterCount>& regs,
     if (!result) return result;
     result = write_regs(0x06U, ByteView{&regs[0x06U], 1U});
     if (!result) return result;
-    frequency_khz_ = frequency_khz;
+    frequency_hz_ = frequency_hz;
     return Result<void>::success();
 }
 
@@ -349,8 +364,15 @@ Result<void> Rt710::set_params(std::uint32_t frequency_khz,
                                std::uint32_t symbol_rate,
                                std::uint32_t rolloff) noexcept
 {
+    return set_params_hz(khz_to_hz(frequency_khz), symbol_rate, rolloff);
+}
+
+Result<void> Rt710::set_params_hz(std::uint64_t frequency_hz,
+                                  std::uint32_t symbol_rate,
+                                  std::uint32_t rolloff) noexcept
+{
     if (!initialized_) return Result<void>::failure(Error::NOT_READY);
-    const auto valid = validate_params(frequency_khz, symbol_rate, rolloff);
+    const auto valid = validate_params(frequency_hz, symbol_rate, rolloff);
     if (!valid) return valid;
     auto regs = chip_ == Rt710Chip::rt710 ? kRt710Init : kRt720Init;
     // Q3U4: no loop-through, no clock output, differential output, positive
@@ -368,7 +390,7 @@ Result<void> Rt710::set_params(std::uint32_t frequency_khz,
     }
     auto result = write_regs(0U, ByteView{regs.data(), regs.size()});
     if (!result) return result;
-    result = set_pll(regs, frequency_khz);
+    result = set_pll(regs, frequency_hz);
     if (!result) return result;
     delay_.sleep_ms(10U);
 
@@ -377,10 +399,14 @@ Result<void> Rt710::set_params(std::uint32_t frequency_khz,
     std::uint8_t coarse = 0U;
     std::uint8_t fine = 0U;
     if (chip_ == Rt710Chip::rt710) {
-        if (static_cast<std::uint32_t>(frequency_khz - 1600000U) >= 350000U) {
+        // Band decisions are keyed on the input frequency: the old unsigned
+        // window [1600000, 1950000) kHz becomes [1600000000, 1950000000) Hz.
+        const bool mid_band = frequency_hz >= khz_to_hz(1600000U) &&
+                              frequency_hz - khz_to_hz(1600000U) < khz_to_hz(350000U);
+        if (!mid_band) {
             regs[0x02U] &= 0xbfU;
             regs[0x08U] &= 0x7fU;
-            if (frequency_khz >= 1950000U) regs[0x0aU] = 0x38U;
+            if (frequency_hz >= khz_to_hz(1950000U)) regs[0x0aU] = 0x38U;
         } else {
             regs[0x02U] |= 0x40U;
             regs[0x08U] |= 0x80U;
@@ -389,7 +415,7 @@ Result<void> Rt710::set_params(std::uint32_t frequency_khz,
         result = write_regs(0x02U, ByteView{&regs[0x02U], 1U}); if (!result) return result;
         result = write_regs(0x08U, ByteView{&regs[0x08U], 1U}); if (!result) return result;
         regs[0x0eU] &= 0xf3U;
-        if (frequency_khz >= 2000000U) regs[0x0eU] |= 0x08U;
+        if (frequency_hz >= khz_to_hz(2000000U)) regs[0x0eU] |= 0x08U;
         result = write_regs(0x0eU, ByteView{&regs[0x0eU], 1U}); if (!result) return result;
     } else {
         // Q3U4 uses the RT720 manual-scan path.
@@ -479,7 +505,8 @@ Result<std::int32_t> Rt710::get_rf_signal_strength() noexcept
     std::int32_t base = 70;
     std::uint16_t correction = 0U;
     if (chip_ == Rt710Chip::rt710) {
-        base = frequency_khz_ < 1200000U ? 190 : frequency_khz_ < 1800000U ? 170 : 140;
+        base = frequency_hz_ < khz_to_hz(1200000U) ? 190
+             : frequency_hz_ < khz_to_hz(1800000U) ? 170 : 140;
         if (gain.value() >= kRt710Gain.size()) return Result<std::int32_t>::failure(Error::PROTOCOL_ERROR);
         correction = kRt710Gain[gain.value()];
     } else {

@@ -33,6 +33,16 @@ public:
                                   std::uint32_t timeout_ms) noexcept override;
     Result<void> tune_satellite(std::uint8_t receiver, std::uint32_t frequency_khz,
                                 std::uint32_t timeout_ms) noexcept override;
+    // Native-Hz entrances; programmed_hz is the CXD2858ER field-equivalent
+    // command value (T field*1000, S IF field*4000), not a measured RF value.
+    Result<TunerHzProgramming> tune_terrestrial_hz(std::uint8_t receiver,
+                                                   std::uint64_t frequency_hz,
+                                                   std::uint32_t timeout_ms) noexcept override;
+    Result<TunerHzProgramming> tune_satellite_hz(std::uint8_t receiver,
+                                                 std::uint64_t frequency_hz,
+                                                 std::uint32_t timeout_ms) noexcept override;
+    TunerStrictProfile strict_profile(std::uint8_t receiver,
+                                      ipc::System system) const noexcept override;
     Result<bool> is_locked(std::uint8_t receiver, ipc::System system) noexcept override;
     Result<void> select_satellite_slot(std::uint8_t receiver, std::uint8_t slot,
                                        std::uint32_t timeout_ms) noexcept override;

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "px4/card_service.h"
 #include "px4/control_client.h"
+#include "px4/control_context.h"
 #include "px4/control_server.h"
 #include "px4/tuner_service.h"
 #include "card_client_contract_tests.h"
@@ -761,6 +762,31 @@ Result<ControlResponse> empty_request(PosixControlClient& client,
     return client.request(type, ByteView{nullptr, 0U}, Timeout{2000U}, sink);
 }
 
+ControlContext make_test_control_context(const TunerService& tuner_service,
+                                        const char* serial) noexcept
+{
+    Px4ContextInput input{};
+    input.model = DeviceModel::px_q3u4;
+    input.base_serial = serial;
+    input.product_version = "1.0.0-test";
+    input.instance = serial;
+    for (std::size_t index = 0U; index < input.epoch.size(); ++index)
+        input.epoch[index] = static_cast<std::uint8_t>(index + 1U);
+    ControlContext context{};
+    if (!build_px4_control_context(input, tuner_service, context)) return ControlContext{};
+    return context;
+}
+
+Result<std::unique_ptr<PosixControlServer>> create_test_control_server(
+    const EndpointConfig& endpoint, CardService& card_service,
+    TunerService& tuner_service, const char* serial,
+    TunerStreamControl* stream_control = nullptr) noexcept
+{
+    const ControlContext context = make_test_control_context(tuner_service, serial);
+    return PosixControlServer::create(endpoint, card_service, tuner_service, context,
+                                      stream_control);
+}
+
 bool test_control_server_card_flow_and_shutdown()
 {
     TempRuntime runtime;
@@ -775,8 +801,7 @@ bool test_control_server_card_flow_and_shutdown()
     TunerNonce tuner_nonce;
     TunerTime tuner_time;
     TunerService tuner_service(tuner_backend, tuner_nonce, tuner_time);
-    auto server_result = PosixControlServer::create(
-        endpoint, service, tuner_service, serial);
+    auto server_result = create_test_control_server(endpoint, service, tuner_service, serial);
     CHECK(server_result);
     std::unique_ptr<PosixControlServer> server = std::move(server_result.value());
     const std::string socket_path = server->endpoint_path();
@@ -919,7 +944,7 @@ bool test_card_client_ownership_contract()
     TunerNonce tuner_nonce;
     TunerTime tuner_time;
     TunerService tuner_service(tuner_backend, tuner_nonce, tuner_time);
-    auto server = PosixControlServer::create(
+    auto server = create_test_control_server(
         endpoint, service, tuner_service, "00001205000960");
     CHECK(server);
     std::atomic<bool> stop{false};
@@ -960,8 +985,7 @@ bool test_no_hello_timeout_and_malformed_disconnect()
     ControlStream stream_control;
     TunerService tuner_service(tuner_backend, tuner_nonce, tuner_time,
                                nullptr, nullptr, &stream_control);
-    auto server_result = PosixControlServer::create(
-        endpoint, service, tuner_service, serial);
+    auto server_result = create_test_control_server(endpoint, service, tuner_service, serial);
     CHECK(server_result);
     std::unique_ptr<PosixControlServer> server = std::move(server_result.value());
 
@@ -1009,7 +1033,7 @@ bool test_control_server_tuner_flow()
     ControlStream stream_control;
     TunerService tuner_service(tuner_backend, tuner_nonce, tuner_time,
                                nullptr, nullptr, &stream_control);
-    auto server_result = PosixControlServer::create(
+    auto server_result = create_test_control_server(
         endpoint, card_service, tuner_service, serial);
     CHECK(server_result);
     std::unique_ptr<PosixControlServer> server = std::move(server_result.value());
@@ -1259,7 +1283,7 @@ bool test_control_server_lanes_are_independent()
     TunerNonce tuner_nonce;
     TunerTime tuner_time;
     TunerService tuner_service(tuner_backend, tuner_nonce, tuner_time);
-    auto server_result = PosixControlServer::create(
+    auto server_result = create_test_control_server(
         endpoint, card_service, tuner_service, serial);
     CHECK(server_result);
     std::unique_ptr<PosixControlServer> server = std::move(server_result.value());
@@ -1356,7 +1380,7 @@ bool test_control_server_disconnect_during_blocked_acquire()
     TunerNonce tuner_nonce;
     TunerTime tuner_time;
     TunerService tuner_service(tuner_backend, tuner_nonce, tuner_time);
-    auto server_result = PosixControlServer::create(
+    auto server_result = create_test_control_server(
         endpoint, card_service, tuner_service, serial);
     CHECK(server_result);
     std::unique_ptr<PosixControlServer> server = std::move(server_result.value());
@@ -1453,7 +1477,7 @@ bool test_control_server_disconnect_during_blocked_tune()
     TunerNonce tuner_nonce;
     TunerTime tuner_time;
     TunerService tuner_service(tuner_backend, tuner_nonce, tuner_time);
-    auto server_result = PosixControlServer::create(
+    auto server_result = create_test_control_server(
         endpoint, card_service, tuner_service, serial);
     CHECK(server_result);
     std::unique_ptr<PosixControlServer> server = std::move(server_result.value());
@@ -1564,9 +1588,8 @@ bool test_stream_endpoint_attach_and_stream_end()
     ControlStream stream_control;
     TunerService tuner_service(tuner_backend, tuner_nonce, tuner_time,
                                nullptr, nullptr, &stream_control);
-    auto server_result = PosixControlServer::create(
-        endpoint, card_service, tuner_service, serial, true, 0x03U,
-        &stream_control);
+    auto server_result = create_test_control_server(
+        endpoint, card_service, tuner_service, serial, &stream_control);
     CHECK(server_result);
     std::unique_ptr<PosixControlServer> server = std::move(server_result.value());
     const std::string stream_path = server->stream_endpoint_path();
@@ -1749,9 +1772,8 @@ bool test_stream_endpoint_terminal_mapping()
         ControlStream stream_control;
         TunerService tuner_service(tuner_backend, tuner_nonce, tuner_time,
                                    nullptr, nullptr, &stream_control);
-        auto server_result = PosixControlServer::create(
-            endpoint, card_service, tuner_service, serial, true, 0x03U,
-            &stream_control);
+        auto server_result = create_test_control_server(
+            endpoint, card_service, tuner_service, serial, &stream_control);
         CHECK(server_result);
         std::unique_ptr<PosixControlServer> server = std::move(server_result.value());
         std::atomic<bool> stop{false};
@@ -1869,9 +1891,8 @@ bool test_stream_attach_submit_failure_cleanup()
     ControlWorkerStartupOptions worker_options{};
     worker_options.fail_tuner_attach_submit = true;
     ControlWorkerLanes::set_test_startup_options(&worker_options);
-    auto server_result = PosixControlServer::create(
-        endpoint, card_service, tuner_service, serial, true, 0x03U,
-        &stream_control);
+    auto server_result = create_test_control_server(
+        endpoint, card_service, tuner_service, serial, &stream_control);
     CHECK(server_result);
     std::unique_ptr<PosixControlServer> server = std::move(server_result.value());
     std::atomic<bool> stop{false};
@@ -1964,9 +1985,8 @@ bool test_stream_hup_before_attach_completion_cleanup()
         &AttachCompletionBarrier::before_completion;
     worker_options.before_tuner_attach_completion_context = &completion_barrier;
     ControlWorkerLanes::set_test_startup_options(&worker_options);
-    auto server_result = PosixControlServer::create(
-        endpoint, card_service, tuner_service, serial, true, 0x03U,
-        &stream_control);
+    auto server_result = create_test_control_server(
+        endpoint, card_service, tuner_service, serial, &stream_control);
     CHECK(server_result);
     std::unique_ptr<PosixControlServer> server = std::move(server_result.value());
     std::atomic<bool> stop{false};
@@ -2058,9 +2078,8 @@ bool test_stream_endpoint_fragmented_and_duplicate()
                                nullptr, nullptr, &stream_control);
     StreamServerObservation observation;
     StreamServerHookGuard hook_guard(observation);
-    auto server_result = PosixControlServer::create(
-        endpoint, card_service, tuner_service, serial, true, 0x03U,
-        &stream_control);
+    auto server_result = create_test_control_server(
+        endpoint, card_service, tuner_service, serial, &stream_control);
     CHECK(server_result);
     std::unique_ptr<PosixControlServer> server = std::move(server_result.value());
     std::atomic<bool> stop{false};
@@ -2165,9 +2184,8 @@ bool test_stream_endpoint_capacity_and_retired_reaping()
                                nullptr, nullptr, &stream_control);
     StreamServerObservation observation;
     StreamServerHookGuard hook_guard(observation);
-    auto server_result = PosixControlServer::create(
-        endpoint, card_service, tuner_service, serial, true, 0x03U,
-        &stream_control);
+    auto server_result = create_test_control_server(
+        endpoint, card_service, tuner_service, serial, &stream_control);
     CHECK(server_result);
     std::unique_ptr<PosixControlServer> server = std::move(server_result.value());
     std::atomic<bool> stop{false};
@@ -2291,9 +2309,8 @@ bool test_stream_endpoint_nonreading_peer_isolated()
                                nullptr, nullptr, &stream_control);
     StreamServerObservation observation;
     StreamServerHookGuard hook_guard(observation);
-    auto server_result = PosixControlServer::create(
-        endpoint, card_service, tuner_service, serial, true, 0x03U,
-        &stream_control);
+    auto server_result = create_test_control_server(
+        endpoint, card_service, tuner_service, serial, &stream_control);
     CHECK(server_result);
     std::unique_ptr<PosixControlServer> server = std::move(server_result.value());
     std::atomic<bool> stop{false};

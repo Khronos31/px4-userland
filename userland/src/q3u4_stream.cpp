@@ -2,6 +2,8 @@
 #include "px4/q3u4_stream.h"
 #include "px4/ts_continuity.h"
 
+#include "dtv/userland/detail/packet_stream_session.h"
+
 #include "tagged_ts_demux.h"
 #include "mlt5pe_frontend.h"
 
@@ -19,6 +21,50 @@
 namespace px4::userland {
 
 namespace {
+
+// The generic packet-session storage is shared with the common core.  Product
+// policy keeps the hardware, demux, startup and continuity fields and maps its
+// legacy attachment/counter/terminal vocabulary onto the neutral types at this
+// boundary; the nonce is carried as the neutral token and both enums share the
+// legacy numbering, so the mapping is value-preserving.
+using SessionStore = dtv::userland::detail::PacketStreamSession;
+using SessionAttachment = dtv::userland::detail::Attachment;
+using SessionCounters = dtv::userland::detail::StreamCounters;
+using SessionFinalSnapshot = dtv::userland::detail::StreamFinalSnapshot;
+using SessionReadResult = dtv::userland::detail::StreamReadResult;
+using SessionTerminal = dtv::userland::detail::StreamTerminal;
+
+SessionAttachment to_session(const TunerAttachment& attachment) noexcept
+{
+    SessionAttachment converted{};
+    converted.owner_client_id = attachment.owner_client_id;
+    converted.lease_id = attachment.lease_id;
+    converted.attachment_id = attachment.attachment_id;
+    converted.receiver = static_cast<dtv::userland::detail::ReceiverId>(attachment.receiver);
+    converted.system =
+        static_cast<dtv::userland::detail::ReceiverSystem>(attachment.system);
+    converted.token = attachment.nonce;
+    converted.evict_oldest = attachment.evict_oldest;
+    return converted;
+}
+
+TunerStreamCounters to_product(const SessionCounters& counters) noexcept
+{
+    return TunerStreamCounters{counters.packets, counters.bytes, counters.sync_errors,
+                               counters.tei_packets, counters.continuity_errors,
+                               counters.queue_drops, counters.usb_errors,
+                               counters.empty_intervals};
+}
+
+TunerStreamFinalSnapshot to_product(const SessionFinalSnapshot& snapshot) noexcept
+{
+    return TunerStreamFinalSnapshot{to_product(snapshot.counters), snapshot.terminal};
+}
+
+TunerStreamTerminal to_product(SessionTerminal terminal) noexcept
+{
+    return static_cast<TunerStreamTerminal>(terminal);
+}
 
 constexpr std::size_t kBridgeCount = 2U;
 constexpr std::size_t kPidCount = 8192U;
@@ -97,41 +143,20 @@ struct StartupContinuity final {
 // the other bridge owns the event loop, keeping stop latency bounded.
 constexpr std::uint32_t kPumpWaitMs = 1U;
 
-bool same_attachment(const TunerAttachment& left,
-                     const TunerAttachment& right) noexcept
+SessionTerminal terminal_for_error(Error error) noexcept
 {
-    return left.owner_client_id == right.owner_client_id &&
-           left.lease_id == right.lease_id &&
-           left.attachment_id == right.attachment_id &&
-           left.receiver == right.receiver && left.system == right.system &&
-           left.nonce == right.nonce;
-}
-
-StreamTerminal terminal_for_error(Error error) noexcept
-{
-    return error == Error::DISCONNECTED ? StreamTerminal::disconnected
-                                        : StreamTerminal::usb_error;
+    return error == Error::DISCONNECTED ? SessionTerminal::disconnected
+                                        : SessionTerminal::usb_error;
 }
 
 }  // namespace
 
 class Q3U4StreamDataPlane::Impl final {
 public:
-    struct Session final {
-        mutable std::mutex mutex;
-        std::condition_variable changed;
-        std::unique_ptr<std::uint8_t[]> packets;
-        std::size_t capacity = 0U;
-        std::size_t head = 0U;
-        std::size_t count = 0U;
-        bool attached = false;
-        bool draining = false;
-        TunerAttachment identity{};
-        bool final_snapshot_valid = false;
-        TunerAttachment final_identity{};
-        TunerStreamFinalSnapshot final_snapshot{};
-        StreamTerminal terminal = StreamTerminal::none;
-        StreamCounters counters{};
+    // The generic queue/read/drain/final state and its single mutex/condition
+    // variable come from the common packet-session store.  Only the product's
+    // startup-stabilization and continuity observation fields stay here.
+    struct Session final : SessionStore {
         TsContinuityChecker continuity_checker;
         std::array<StartupContinuity, kPidCount> continuity{};
         bool stabilizing = true;
@@ -207,8 +232,8 @@ public:
                 demux_counters = current;
                 if (!pushed) {
                     owner.mark_bridge_terminal(*this, pushed.error() == Error::SLOW_CONSUMER
-                                                    ? StreamTerminal::sync_error
-                                                    : StreamTerminal::bridge_fatal);
+                                                    ? SessionTerminal::sync_error
+                                                    : SessionTerminal::bridge_fatal);
                     owner.finish_pump(*this);
                     break;
                 }
@@ -339,7 +364,7 @@ public:
             bridge.state_changed.notify_all();
             if (!cancelled || !stopped) {
                 enclosure_fatal_.store(true);
-                mark_all_terminal(StreamTerminal::bridge_fatal);
+                mark_all_terminal(SessionTerminal::bridge_fatal);
             }
             if (!cancelled) return cancelled;
             if (!stopped) return stopped;
@@ -404,7 +429,7 @@ public:
         lifecycle.unlock();
         if (first != Error::OK) {
             enclosure_fatal_.store(true);
-            mark_all_terminal(StreamTerminal::bridge_fatal);
+            mark_all_terminal(SessionTerminal::bridge_fatal);
             return Result<void>::failure(first);
         }
         return Result<void>::success();
@@ -433,7 +458,7 @@ public:
         bridge.state = Bridge::State::fatal;
         if (first != Error::OK) {
             enclosure_fatal_.store(true);
-            mark_all_terminal(StreamTerminal::bridge_fatal);
+            mark_all_terminal(SessionTerminal::bridge_fatal);
         }
         // The owner claims and joins this thread after cleanup is complete.
         // Nothing may access owner or bridge state after waking waiters.
@@ -464,28 +489,12 @@ public:
                       std::numeric_limits<std::size_t>::max() / kPacketSize);
         {
             std::lock_guard<std::mutex> lock(session.mutex);
-            if (session.attached || session.draining)
-                return Result<void>::failure(Error::BUSY);
-            if (session.packets == nullptr) {
-                if (queue_packets_ > std::numeric_limits<std::size_t>::max() /
-                                    kPacketSize)
-                    return Result<void>::failure(Error::INTERNAL);
-                session.packets.reset(new (std::nothrow)
-                                         std::uint8_t[queue_packets_ * kPacketSize]);
-                if (!session.packets)
-                    return Result<void>::failure(Error::INTERNAL);
-                session.capacity = queue_packets_;
-            }
-            session.head = 0U;
-            session.count = 0U;
-            session.attached = true;
-            session.draining = false;
-            session.identity = attachment;
-            session.final_snapshot_valid = false;
-            session.final_identity = TunerAttachment{};
-            session.final_snapshot = TunerStreamFinalSnapshot{};
-            session.terminal = StreamTerminal::none;
-            session.counters = StreamCounters{};
+            const auto published = session.begin_attach_locked(
+                to_session(attachment), queue_packets_,
+                attachment.evict_oldest
+                    ? dtv::userland::detail::StreamQueuePolicy::evict_oldest
+                    : dtv::userland::detail::StreamQueuePolicy::legacy);
+            if (!published) return Result<void>::failure(published.error());
             session.continuity_checker.reset();
             session.continuity.fill(StartupContinuity{});
             session.stabilizing = stabilization_.enabled();
@@ -500,10 +509,7 @@ public:
             const auto started = start_bridge_locked(bridge);
             if (!started) {
                 std::lock_guard<std::mutex> lock(session.mutex);
-                session.attached = false;
-                session.terminal = StreamTerminal::stopped;
-                session.count = 0U;
-                session.changed.notify_all();
+                session.abandon_attach_locked();
                 return started;
             }
         }
@@ -521,26 +527,10 @@ public:
                bridge.state == Bridge::State::stopping)
             bridge.state_changed.wait(lifecycle);
         Session& session = sessions_[attachment.receiver];
-        TunerStreamFinalSnapshot snapshot{};
         {
             std::lock_guard<std::mutex> lock(session.mutex);
-            if (!session.attached || !same_attachment(session.identity, attachment))
-                return Result<void>::failure(Error::NOT_FOUND);
-            const StreamTerminal final_terminal =
-                session.terminal == StreamTerminal::none
-                    ? StreamTerminal::stopped : session.terminal;
-            snapshot.counters = session.counters;
-            snapshot.terminal = static_cast<std::uint8_t>(final_terminal);
-            session.final_identity = session.identity;
-            session.final_snapshot = snapshot;
-            session.final_snapshot_valid = true;
-            session.attached = false;
-            session.terminal = final_terminal;
-            // Keep already queued packets readable by the data endpoint.  A
-            // later release_final() or the final EOF read retires this
-            // drain-only session before the receiver can be reopened.
-            session.draining = session.count != 0U;
-            session.changed.notify_all();
+            const auto detached = session.detach_locked(to_session(attachment));
+            if (!detached) return Result<void>::failure(detached.error());
         }
         if (bridge.attached_count != 0U) --bridge.attached_count;
         if (bridge.attached_count == 0U) {
@@ -556,11 +546,8 @@ public:
                 // its retained final snapshot honest when physical bridge
                 // cleanup fails after that linearization point.
                 std::lock_guard<std::mutex> lock(session.mutex);
-                if (session.final_snapshot_valid &&
-                    same_attachment(session.final_identity, attachment)) {
-                    session.final_snapshot.terminal = static_cast<std::uint8_t>(
-                        StreamTerminal::bridge_fatal);
-                }
+                session.amend_final_terminal_locked(
+                    to_session(attachment), SessionTerminal::bridge_fatal);
             } else {
                 std::lock_guard<std::mutex> lock(bridge.lifecycle);
                 if (bridge.state == Bridge::State::fatal &&
@@ -583,13 +570,9 @@ public:
             return Result<StreamReadResult>::failure(Error::INVALID_ARGUMENT);
         Session& session = sessions_[attachment.receiver];
         std::unique_lock<std::mutex> lock(session.mutex);
-        const bool identity_active = session.attached &&
-                                     same_attachment(session.identity, attachment);
-        const bool identity_draining = session.draining &&
-                                       same_attachment(session.final_identity, attachment);
-        if (!identity_active && !identity_draining)
-            return Result<StreamReadResult>::failure(Error::NOT_FOUND);
-        if (session.count == 0U && session.terminal == StreamTerminal::none &&
+        const auto ticket = session.begin_read_locked(to_session(attachment));
+        if (!ticket) return Result<StreamReadResult>::failure(ticket.error());
+        if (session.count == 0U && session.terminal == SessionTerminal::none &&
             timeout.milliseconds != 0U) {
 #if defined(PX4_Q3U4_STREAM_TEST_ACCESS)
             if (read_wait_observer != nullptr)
@@ -597,37 +580,25 @@ public:
 #endif
             (void)session.changed.wait_for(
                 lock, std::chrono::milliseconds(timeout.milliseconds), [&]() noexcept {
-                    return session.count != 0U || session.terminal != StreamTerminal::none;
+                    return session.read_wake_locked(ticket.value());
                 });
         }
-        if (session.count == 0U) {
-            if (session.terminal != StreamTerminal::none)
-            {
-                const StreamTerminal terminal = session.terminal;
-                session.draining = false;
-                session.changed.notify_all();
-                return Result<StreamReadResult>::success(
-                    StreamReadResult{0U, true, false, terminal});
-            }
-            return Result<StreamReadResult>::success(
-                StreamReadResult{0U, false, true, StreamTerminal::none});
+#if defined(PX4_Q3U4_STREAM_TEST_ACCESS)
+        if (read_resume_observer != nullptr) {
+            // Test-only scheduling seam: release the session lock so a finite
+            // external gate can delay this reader before its post-wait state
+            // decision, exactly like a legal scheduler delay.
+            lock.unlock();
+            read_resume_observer(read_resume_observer_context, attachment.receiver);
+            lock.lock();
         }
-        std::size_t packets = output.size / kPacketSize;
-        packets = packets > session.count ? session.count : packets;
-        const std::size_t first = session.head;
-        const std::size_t first_count =
-            packets > session.capacity - first ? session.capacity - first : packets;
-        if (first_count != 0U)
-            std::memcpy(output.data, session.packets.get() + first * kPacketSize,
-                        first_count * kPacketSize);
-        if (packets > first_count)
-            std::memcpy(output.data + first_count * kPacketSize, session.packets.get(),
-                        (packets - first_count) * kPacketSize);
-        session.head = (session.head + packets) % session.capacity;
-        session.count -= packets;
-        return Result<StreamReadResult>::success(
-            StreamReadResult{packets * kPacketSize, false, false,
-                             StreamTerminal::none});
+#endif
+        const auto finished = session.finish_read_locked(
+            to_session(attachment), ticket.value(), output);
+        if (!finished) return Result<StreamReadResult>::failure(finished.error());
+        return Result<StreamReadResult>::success(StreamReadResult{
+            finished.value().bytes, finished.value().eof, finished.value().timed_out,
+            to_product(finished.value().terminal)});
     }
 
     Result<StreamCounters> stats(const TunerAttachment& attachment) const noexcept
@@ -635,10 +606,9 @@ public:
         if (!valid_receiver(attachment.receiver))
             return Result<StreamCounters>::failure(Error::NOT_FOUND);
         const Session& session = sessions_[attachment.receiver];
-        std::lock_guard<std::mutex> lock(session.mutex);
-        if (!session.attached || !same_attachment(session.identity, attachment))
-            return Result<StreamCounters>::failure(Error::NOT_FOUND);
-        return Result<StreamCounters>::success(session.counters);
+        const auto counters = session.stats(to_session(attachment));
+        if (!counters) return Result<StreamCounters>::failure(counters.error());
+        return Result<StreamCounters>::success(to_product(counters.value()));
     }
 
     Result<TunerStreamFinalSnapshot> final_snapshot(
@@ -647,11 +617,10 @@ public:
         if (!valid_receiver(attachment.receiver))
             return Result<TunerStreamFinalSnapshot>::failure(Error::NOT_FOUND);
         const Session& session = sessions_[attachment.receiver];
-        std::lock_guard<std::mutex> lock(session.mutex);
-        if (!session.final_snapshot_valid ||
-            !same_attachment(session.final_identity, attachment))
-            return Result<TunerStreamFinalSnapshot>::failure(Error::NOT_FOUND);
-        return Result<TunerStreamFinalSnapshot>::success(session.final_snapshot);
+        const auto snapshot = session.final_snapshot_query(to_session(attachment));
+        if (!snapshot)
+            return Result<TunerStreamFinalSnapshot>::failure(snapshot.error());
+        return Result<TunerStreamFinalSnapshot>::success(to_product(snapshot.value()));
     }
 
     Result<void> release_final(const TunerAttachment& attachment) noexcept
@@ -659,14 +628,7 @@ public:
         if (!valid_receiver(attachment.receiver))
             return Result<void>::failure(Error::NOT_FOUND);
         Session& session = sessions_[attachment.receiver];
-        std::lock_guard<std::mutex> lock(session.mutex);
-        if (!session.final_snapshot_valid ||
-            !same_attachment(session.final_identity, attachment))
-            return Result<void>::failure(Error::NOT_FOUND);
-        session.draining = false;
-        session.count = 0U;
-        session.changed.notify_all();
-        return Result<void>::success();
+        return session.release_final(to_session(attachment));
     }
 
 #if defined(PX4_Q3U4_STREAM_TEST_ACCESS)
@@ -675,6 +637,14 @@ public:
     {
         read_wait_observer = observer;
         read_wait_observer_context = context;
+    }
+
+    void set_read_resume_observer(
+        Q3U4StreamDataPlane::ReadResumeObserver observer,
+        void* context) noexcept
+    {
+        read_resume_observer = observer;
+        read_resume_observer_context = context;
     }
 
     void set_packet_enqueue_observer(
@@ -691,10 +661,9 @@ public:
         if (!valid_receiver(attachment.receiver))
             return Result<StreamTerminal>::failure(Error::NOT_FOUND);
         const Session& session = sessions_[attachment.receiver];
-        std::lock_guard<std::mutex> lock(session.mutex);
-        if (!session.attached || !same_attachment(session.identity, attachment))
-            return Result<StreamTerminal>::failure(Error::NOT_FOUND);
-        return Result<StreamTerminal>::success(session.terminal);
+        const auto terminal = session.terminal_query(to_session(attachment));
+        if (!terminal) return Result<StreamTerminal>::failure(terminal.error());
+        return Result<StreamTerminal>::success(to_product(terminal.value()));
     }
 
     void count_empty(std::size_t base) noexcept
@@ -702,7 +671,7 @@ public:
         for (std::size_t offset = 0U; offset < layout_.receivers_per_bridge; ++offset) {
             Session& session = sessions_[base + offset];
             std::lock_guard<std::mutex> lock(session.mutex);
-            if (session.attached && session.terminal == StreamTerminal::none)
+            if (session.attached && session.terminal == SessionTerminal::none)
                 ++session.counters.empty_intervals;
         }
     }
@@ -731,7 +700,7 @@ public:
             for (std::size_t offset = 0U; offset < layout_.receivers_per_bridge; ++offset) {
                 Session& session = sessions_[base + offset];
                 std::lock_guard<std::mutex> lock(session.mutex);
-                if (!session.attached || session.terminal != StreamTerminal::none)
+                if (!session.attached || session.terminal != SessionTerminal::none)
                     continue;
                 if (session.stabilizing) {
                     session.startup_faults.sync_errors += losses;
@@ -754,7 +723,7 @@ public:
     {
         Session& session = sessions_[receiver];
         std::lock_guard<std::mutex> lock(session.mutex);
-        if (!session.attached || session.terminal != StreamTerminal::none) return;
+        if (!session.attached || session.terminal != SessionTerminal::none) return;
         session.continuity_checker.observe_untrusted_packet();
         if (session.stabilizing) {
             ++session.startup_packets;
@@ -772,7 +741,7 @@ public:
         Session& session = sessions_[receiver];
         {
             std::lock_guard<std::mutex> lock(session.mutex);
-            if (!session.attached || session.terminal != StreamTerminal::none)
+            if (!session.attached || session.terminal != SessionTerminal::none)
                 return Result<void>::success();
             if (session.stabilizing) {
                 ++session.startup_packets;
@@ -804,18 +773,7 @@ public:
                 return Result<void>::success();
             if (observation == ContinuityObservation::fault)
                 ++session.counters.continuity_errors;
-            ++session.counters.packets;
-            session.counters.bytes += kPacketSize;
-            if (session.count == session.capacity) {
-                ++session.counters.queue_drops;
-                session.terminal = StreamTerminal::slow_consumer;
-                session.changed.notify_all();
-                return Result<void>::success();
-            }
-            const std::size_t tail = (session.head + session.count) % session.capacity;
-            std::memcpy(session.packets.get() + tail * kPacketSize, packet.data, kPacketSize);
-            ++session.count;
-            session.changed.notify_all();
+            session.append_locked(packet);
         }
 #if defined(PX4_Q3U4_STREAM_TEST_ACCESS)
         if (packet_enqueue_observer != nullptr)
@@ -872,7 +830,7 @@ public:
 
     void finish_startup_packet_locked(Session& session) noexcept
     {
-        if (!session.stabilizing || session.terminal != StreamTerminal::none) return;
+        if (!session.stabilizing || session.terminal != SessionTerminal::none) return;
         session.stabilization_ready =
             session.startup_continuity_established &&
             session.startup_packets >= stabilization_.minimum_packets &&
@@ -893,7 +851,7 @@ public:
             session.counters.tei_packets == 0U &&
             session.counters.continuity_errors == 0U)
             session.counters.sync_errors = 1U;
-        session.terminal = StreamTerminal::sync_error;
+        session.terminal = SessionTerminal::sync_error;
         session.changed.notify_all();
     }
 
@@ -902,7 +860,7 @@ public:
         for (std::size_t offset = 0U; offset < layout_.receivers_per_bridge; ++offset) {
             Session& session = sessions_[base + offset];
             std::lock_guard<std::mutex> lock(session.mutex);
-            if (!session.attached || session.terminal != StreamTerminal::none ||
+            if (!session.attached || session.terminal != SessionTerminal::none ||
                 !session.stabilizing || !session.stabilization_ready)
                 continue;
             session.stabilizing = false;
@@ -918,14 +876,14 @@ public:
         }
     }
 
-    void mark_bridge_terminal(Bridge& bridge, StreamTerminal reason) noexcept
+    void mark_bridge_terminal(Bridge& bridge, SessionTerminal reason) noexcept
     {
         for (std::size_t offset = 0U; offset < layout_.receivers_per_bridge; ++offset) {
             Session& session = sessions_[bridge.receiver_base + offset];
             std::lock_guard<std::mutex> lock(session.mutex);
-            if (session.attached && session.terminal == StreamTerminal::none) {
-                if (reason == StreamTerminal::usb_error ||
-                    reason == StreamTerminal::disconnected)
+            if (session.attached && session.terminal == SessionTerminal::none) {
+                if (reason == SessionTerminal::usb_error ||
+                    reason == SessionTerminal::disconnected)
                     ++session.counters.usb_errors;
                 session.terminal = reason;
                 session.changed.notify_all();
@@ -933,11 +891,11 @@ public:
         }
     }
 
-    void mark_all_terminal(StreamTerminal reason) noexcept
+    void mark_all_terminal(SessionTerminal reason) noexcept
     {
         for (Session& session : sessions_) {
             std::lock_guard<std::mutex> lock(session.mutex);
-            if (session.attached && session.terminal == StreamTerminal::none) {
+            if (session.attached && session.terminal == SessionTerminal::none) {
                 session.terminal = reason;
                 session.changed.notify_all();
             }
@@ -964,21 +922,7 @@ public:
                      ++offset) {
                     Session& session = sessions_[bridge.receiver_base + offset];
                     std::lock_guard<std::mutex> session_lock(session.mutex);
-                    if (session.attached) {
-                        const StreamTerminal final_terminal =
-                            session.terminal == StreamTerminal::none
-                                ? StreamTerminal::stopped : session.terminal;
-                        session.final_identity = session.identity;
-                        session.final_snapshot.counters = session.counters;
-                        session.final_snapshot.terminal = static_cast<std::uint8_t>(
-                            final_terminal);
-                        session.final_snapshot_valid = true;
-                        session.attached = false;
-                        session.terminal = final_terminal;
-                        session.draining = false;
-                        session.count = 0U;
-                        session.changed.notify_all();
-                    }
+                    session.shutdown_detach_locked();
                 }
                 bridge.attached_count = 0U;
                 if (bridge.state == Bridge::State::running) {
@@ -999,9 +943,8 @@ public:
                          ++offset) {
                         Session& session = sessions_[bridge.receiver_base + offset];
                         std::lock_guard<std::mutex> session_lock(session.mutex);
-                        if (session.final_snapshot_valid)
-                            session.final_snapshot.terminal = static_cast<std::uint8_t>(
-                                StreamTerminal::bridge_fatal);
+                        session.amend_final_terminal_any_locked(
+                            SessionTerminal::bridge_fatal);
                     }
                 }
             } else {
@@ -1027,6 +970,8 @@ public:
 #if defined(PX4_Q3U4_STREAM_TEST_ACCESS)
     Q3U4StreamDataPlane::ReadWaitObserver read_wait_observer = nullptr;
     void* read_wait_observer_context = nullptr;
+    Q3U4StreamDataPlane::ReadResumeObserver read_resume_observer = nullptr;
+    void* read_resume_observer_context = nullptr;
     Q3U4StreamDataPlane::PacketEnqueueObserver packet_enqueue_observer = nullptr;
     void* packet_enqueue_observer_context = nullptr;
 #endif
@@ -1202,6 +1147,12 @@ void Q3U4StreamDataPlane::set_read_wait_observer_for_test(
     ReadWaitObserver observer, void* context) noexcept
 {
     if (impl_ != nullptr) impl_->set_read_wait_observer(observer, context);
+}
+
+void Q3U4StreamDataPlane::set_read_resume_observer_for_test(
+    ReadResumeObserver observer, void* context) noexcept
+{
+    if (impl_ != nullptr) impl_->set_read_resume_observer(observer, context);
 }
 
 void Q3U4StreamDataPlane::set_packet_enqueue_observer_for_test(

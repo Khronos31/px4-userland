@@ -83,6 +83,11 @@ public:
     Result<void> close_receiver(std::uint8_t receiver) noexcept;
     Result<void> tune(std::uint8_t receiver, Cxd2856erSystem system,
                       std::uint32_t frequency_khz) noexcept;
+    // R3 native-Hz entrance to the same sequence.  On success it returns the
+    // CXD2858ER field-equivalent command value in Hz (T field*1000, S IF
+    // field*4000); that is a command representation, not measured RF.
+    Result<std::uint64_t> tune_hz(std::uint8_t receiver, Cxd2856erSystem system,
+                                  std::uint64_t frequency_hz) noexcept;
     // px4_drv selects the ISDB-S stream before tuning on this board.
     Result<void> select_satellite_slot(std::uint8_t receiver, std::uint8_t slot) noexcept;
     Result<void> select_satellite_tsid(std::uint8_t receiver, std::uint16_t tsid) noexcept;
@@ -121,6 +126,10 @@ private:
     }
     std::mutex& bus_mutex(std::uint8_t receiver) noexcept;
     void terminate_receiver(Receiver& receiver) noexcept;
+    // The one tune sequence; hz_entrance selects the tuner entrance only.
+    Result<void> tune_sequence(std::uint8_t receiver, Cxd2856erSystem system,
+                               bool hz_entrance, std::uint64_t frequency,
+                               std::uint64_t* programmed_hz) noexcept;
 
     Mlt5PePowerCoordinator power_;
     Q3U4PsbPurger* purger_;

@@ -54,6 +54,12 @@ LINUX_TARGETS = {
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 LIBUSB_SHA256 = "fea36f34f9156400209595e300840767ab1a385ede1dc7ee893015aea9c6dbaf"
 LIBUSB_COPYING_SHA256 = "5df07007198989c622f5d41de8d703e7bef3d0e79d62e24332ee739a452af62a"
+LINUX_RUNTIME_LICENSE_SHA256 = {
+    "toolchain/gcc-COPYING3": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+    "toolchain/gcc-COPYING.RUNTIME": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
+    "toolchain/musl-1.2.5-COPYRIGHT": "f9bc4423732350eb0b3f7ed7e91d530298476f8fec0c6c427a1c04ade22655af",
+}
+LINUX_RUNTIME_LICENSE_MEMBERS = frozenset(LINUX_RUNTIME_LICENSE_SHA256)
 COMMON = {
     "LICENSE",
     "README.md",
@@ -1393,6 +1399,57 @@ def verify_linux_mdev_modes(modes: dict[str, int], platform: str) -> None:
             fail(f"Linux mdev file has mode {actual_mode!r}, expected {expected_mode:o}: {name}")
 
 
+def verify_linux_runtime_licenses(payloads: dict[str, bytes], modes: dict[str, int]) -> None:
+    for name, expected_hash in LINUX_RUNTIME_LICENSE_SHA256.items():
+        if name not in payloads or hashlib.sha256(payloads[name]).hexdigest() != expected_hash:
+            fail(f"Linux runtime license is missing or altered: {name}")
+        if modes.get(name) != 0o644:
+            fail(f"Linux runtime license mode mismatch: {name}")
+
+
+def verify_linux_toolchain_properties(properties: dict[str, str], name: str, platform: str) -> None:
+    for key in ("compiler", "compiler_sha256", "compiler_version", "compiler_target",
+                "libc", "libc_version", "runtime", "linkage"):
+        if not properties.get(key) or properties[key] == "unknown":
+            fail(f"Linux toolchain metadata is missing an actual value: {name}:{key}")
+    if not properties["compiler"].startswith("/"):
+        fail(f"Linux toolchain compiler path is not absolute: {name}")
+    if properties["runtime"] != "libgcc+libstdc++" or \
+            not re.fullmatch(r"[0-9a-f]{64}", properties["compiler_sha256"]):
+        fail(f"Linux toolchain metadata does not bind the selected driver and static runtimes: {name}")
+    expected_target = "aarch64" if platform.endswith("aarch64") else "x86_64"
+    if expected_target not in properties["compiler_target"]:
+        fail(f"Linux compiler target does not match archive platform: {name}")
+    runtime_inputs = (
+        ("libc_archive", "libc_archive_sha256", "libc_archive_owner"),
+        ("libgcc_archive", "libgcc_archive_sha256", "libgcc_archive_owner"),
+        ("libstdcxx_archive", "libstdcxx_archive_sha256", "libstdcxx_archive_owner"),
+    ) if "static" in name else (
+        ("libc_input", "libc_input_sha256", "libc_input_owner"),
+        ("libgcc_archive", "libgcc_archive_sha256", "libgcc_archive_owner"),
+        ("libstdcxx_archive", "libstdcxx_archive_sha256", "libstdcxx_archive_owner"),
+    )
+    for path_key, hash_key, owner_key in runtime_inputs:
+        if not properties.get(path_key, "").startswith("/") or not properties.get(owner_key):
+            fail(f"Linux runtime input provenance is incomplete: {name}:{path_key}")
+        if not re.fullmatch(r"[0-9a-f]{64}", properties.get(hash_key, "")):
+            fail(f"Linux runtime input hash is invalid: {name}:{hash_key}")
+    if "ifd" in name and any(not properties.get(key) for key in (
+            "libgcc_package_version", "libstdcxx_package_version", "libc_input_package_version")):
+        fail(f"Linux IFD input package versions are incomplete: {name}")
+    if name.endswith("toolchain-static.properties"):
+        if not properties["libc_version"].startswith("musl-1.2.5-r") or \
+                not properties["libc_archive_owner"].startswith("musl-dev-1.2.5-r"):
+            fail("Linux executable musl input does not match the distributed copyright")
+    elif properties["libc"] == "musl":
+        if not properties["libc_version"].startswith("musl-1.2.5-r") or \
+                not properties["libc_input_owner"].startswith("musl-1.2.5-r") or \
+                properties["libc_input_package_version"] != properties["libc_input_owner"]:
+            fail("Linux musl IFD input does not match the distributed copyright")
+    elif properties["libc_version"] != "glibc 2.31" or not properties.get("libc_input_package_version"):
+        fail("Linux glibc IFD metadata does not match the supported baseline")
+
+
 def audit_binary_archive(args: argparse.Namespace) -> dict:
     validate_platform(args.platform)
     if args.platform == WINDOWS_PLATFORM:
@@ -1400,7 +1457,9 @@ def audit_binary_archive(args: argparse.Namespace) -> dict:
     members = archive_members(args.archive.resolve())
     expected = set(COMMON) | set(PROGRAMS)
     if args.platform.startswith("linux-"):
-        expected |= {"ifd/px4-userland-ifd.so", "reader.conf.d/px4-userland.conf"} | LINUX_MDEV
+        expected |= {"ifd/px4-userland-ifd.so", "reader.conf.d/px4-userland.conf",
+                     "evidence/toolchain-static.properties", "evidence/toolchain-ifd.properties"} | LINUX_MDEV
+        expected |= LINUX_RUNTIME_LICENSE_MEMBERS
     elif args.platform == "darwin-arm64":
         expected |= {
             "ifd/px4-userland-ifd.bundle/Contents/Info.plist",
@@ -1419,6 +1478,20 @@ def audit_binary_archive(args: argparse.Namespace) -> dict:
     if hashlib.sha256(read_archive_file(args.archive.resolve(), "libusb/COPYING")).hexdigest() != LIBUSB_COPYING_SHA256:
         fail("binary archive libusb/COPYING does not match the verified libusb 1.0.30 license")
     verify_linux_mdev_modes({name: member.mode for name, member in members.items()}, args.platform)
+    if args.platform.startswith("linux-"):
+        verify_linux_runtime_licenses(
+            {name: read_archive_file(args.archive.resolve(), name) for name in LINUX_RUNTIME_LICENSE_MEMBERS},
+            {name: member.mode for name, member in members.items()})
+        for name in ("evidence/toolchain-static.properties", "evidence/toolchain-ifd.properties"):
+            properties = {}
+            for line in read_archive_file(args.archive.resolve(), name).decode("utf-8").splitlines():
+                if "=" not in line:
+                    fail(f"invalid Linux toolchain metadata: {name}")
+                key, value = line.split("=", 1)
+                if key in properties:
+                    fail(f"duplicate Linux toolchain metadata key: {name}:{key}")
+                properties[key] = value
+            verify_linux_toolchain_properties(properties, name, args.platform)
     if args.platform.startswith("android"):
         audit_termux_launcher(read_archive_file(args.archive.resolve(), TERMUX_LAUNCHER),
                               members[TERMUX_LAUNCHER].mode)
@@ -1463,6 +1536,11 @@ def audit_binary_archive(args: argparse.Namespace) -> dict:
         if args.platform.startswith("linux-") and \
                 fields.get("dependency.libc") != ("glibc" if args.platform.startswith("linux-glibc") else "musl"):
             fail("Linux dependency notice libc mismatch")
+        if args.platform.startswith("linux-") and (
+                fields.get("runtime-license-members") != ",".join(sorted(LINUX_RUNTIME_LICENSE_MEMBERS)) or
+                fields.get("runtime-build-metadata") !=
+                "evidence/toolchain-static.properties,evidence/toolchain-ifd.properties"):
+            fail("Linux dependency notice does not identify runtime license and build metadata members")
         if fields.get("corresponding-source-archive") != f"px4-userland-{manifest['version']}-source.tar.gz":
             fail("native dependency notice must point to the separately published source archive")
     verify_checksums(args.archive.resolve(), members)
@@ -1478,6 +1556,12 @@ def audit_source_archive(args: argparse.Namespace) -> dict:
             fail(f"forbidden source archive member: {name}")
         if SOURCE_WINDOWS_TOKEN.search(name) and not WINDOWS_SOURCE_ALLOWED.fullmatch(name):
             fail(f"forbidden source archive member: {name}")
+    # The shared foundation dependency is declared by the selected product
+    # snapshot's lock file.  Historical snapshots that predate the dependency
+    # are audited without it; a snapshot that declares it must ship the exact
+    # pinned common source and metadata.
+    common_lock = "repository/cmake/dtv-userland-core.revision"
+    common_prefix = "repository/third_party/dtv-userland-core/"
     required = {
         "BUILD-RELINK.md",
         "source-manifest.json",
@@ -1495,7 +1579,41 @@ def audit_source_archive(args: argparse.Namespace) -> dict:
         "repository/scripts/build-macos-static.sh",
         "repository/scripts/test-static-relink.sh",
         "repository/packaging/REBUILD.md.in",
+        "repository/distribution/licenses/gcc-COPYING3",
+        "repository/distribution/licenses/gcc-COPYING.RUNTIME",
+        "repository/distribution/licenses/musl-1.2.5-COPYRIGHT",
     }
+    if common_lock in members:
+        # The declared dependency must ship the build closure of the pinned
+        # foundation project (its CMake entry points, public headers, and
+        # sources), not just a license and provenance stub.
+        required |= {common_lock, common_prefix + "LICENSE", common_prefix + "PROVENANCE.json"}
+        required |= {
+            common_prefix + "CMakeLists.txt",
+            common_prefix + "cmake/dtv_userland_coreConfig.cmake.in",
+            common_prefix + "include/dtv/userland/error.h",
+            common_prefix + "include/dtv/userland/logging.h",
+            common_prefix + "include/dtv/userland/transport.h",
+            common_prefix + "include/dtv/userland/mock_transport.h",
+            common_prefix + "include/dtv/userland/wire.h",
+            common_prefix + "src/error.cpp",
+            common_prefix + "src/logging.cpp",
+            common_prefix + "src/mock_transport.cpp",
+            common_prefix + "src/wire.cpp",
+        }
+        # A product that links the receiver engine needs its sources as well.
+        if "repository/CMakeLists.txt" in members and "dtv::receiver" in read_archive_file(
+                args.archive.resolve(), "repository/CMakeLists.txt").decode("utf-8"):
+            required |= {
+                common_prefix + "include/dtv/userland/detail/receiver_engine.h",
+                common_prefix + "src/receiver_engine.cpp",
+            }
+        if "repository/CMakeLists.txt" in members and "dtv::card" in read_archive_file(
+                args.archive.resolve(), "repository/CMakeLists.txt").decode("utf-8"):
+            required |= {
+                common_prefix + "include/dtv/userland/detail/card_ownership_engine.h",
+                common_prefix + "include/dtv/userland/detail/card_ownership_engine.tpp",
+            }
     if any(name.startswith("repository/userland/src/windows/") for name in members):
         # A committed Windows tree must ship the complete adapter,
         # test, build script, and header coverage; a partial tree is rejected.
@@ -1504,8 +1622,15 @@ def audit_source_archive(args: argparse.Namespace) -> dict:
         required |= WINDOWS_WINSCARD_SOURCE_REQUIRED
     if not required.issubset(members):
         fail(f"source archive is missing: {sorted(required-set(members))}")
+    for name, member in (
+            ("repository/distribution/licenses/gcc-COPYING3", "toolchain/gcc-COPYING3"),
+            ("repository/distribution/licenses/gcc-COPYING.RUNTIME", "toolchain/gcc-COPYING.RUNTIME"),
+            ("repository/distribution/licenses/musl-1.2.5-COPYRIGHT", "toolchain/musl-1.2.5-COPYRIGHT")):
+        if hashlib.sha256(read_archive_file(args.archive.resolve(), name)).hexdigest() != LINUX_RUNTIME_LICENSE_SHA256[member]:
+            fail(f"source archive runtime license is altered: {name}")
     for name in members:
-        if name not in required and not name.startswith("repository/") and not name.startswith("third_party/libusb-1.0.30/"):
+        if name not in required and not name.startswith("repository/") \
+                and not name.startswith("third_party/libusb-1.0.30/"):
             fail(f"unexpected source archive member: {name}")
     manifest = json.loads(read_archive_file(args.archive.resolve(), "source-manifest.json"))
     if manifest.get("schema") != 1 or manifest.get("libusb_version") != "1.0.30":
@@ -1535,6 +1660,28 @@ def audit_source_archive(args: argparse.Namespace) -> dict:
                 fail(f"source manifest file record mismatch: {name}")
     if manifest.get("libusb_archive_sha256") != LIBUSB_SHA256:
         fail("source manifest does not record the pinned libusb checksum")
+    common_commit = manifest.get("dtv_userland_core_commit")
+    if common_lock in members:
+        lock_revision = read_archive_file(args.archive.resolve(), common_lock).decode("utf-8").strip()
+        if not re.fullmatch(r"[0-9a-f]{40}", lock_revision) or lock_revision == "0" * 40:
+            fail("product snapshot does not pin a verified dtv-userland-core commit")
+        if not isinstance(common_commit, str) or common_commit != lock_revision:
+            fail("source manifest dtv-userland-core commit does not match the product lock")
+        if manifest.get("dtv_userland_core_license") != "MIT":
+            fail("source manifest does not record the dtv-userland-core license")
+        common_license = read_archive_file(
+            args.archive.resolve(), common_prefix + "LICENSE").decode("utf-8")
+        if "MIT License" not in common_license:
+            fail("bundled dtv-userland-core LICENSE is not MIT")
+        common_provenance = read_archive_file(
+            args.archive.resolve(), common_prefix + "PROVENANCE.json").decode("utf-8")
+        if not common_provenance.strip():
+            fail("bundled dtv-userland-core PROVENANCE.json is empty")
+    else:
+        if common_commit is not None or manifest.get("dtv_userland_core_license") is not None:
+            fail("source manifest declares dtv-userland-core without a product lock")
+        if any(name.startswith(common_prefix) for name in members):
+            fail("source archive bundles dtv-userland-core without a product lock")
     if "COPYING" not in "\n".join(members):
         fail("libusb COPYING is missing from source archive")
     embedded = read_archive_file(args.archive.resolve(), "third_party/libusb-1.0.30.tar.bz2")
@@ -1561,6 +1708,10 @@ def audit_source_archive(args: argparse.Namespace) -> dict:
     if source_fields.get("dependency.libusb.version") != "1.0.30" or \
             source_fields.get("corresponding-source-archive") != "present":
         fail("source dependency notice is missing stable dependency fields")
+    if common_lock in members:
+        if source_fields.get("dependency.dtv-userland-core.license") != "MIT" or \
+                source_fields.get("dependency.dtv-userland-core.commit") != common_commit:
+            fail("source dependency notice is missing the dtv-userland-core fields")
     verify_checksums(args.archive.resolve(), members)
     return {"archive": str(args.archive.resolve()), "kind": "source", "members": sorted(members), "manifest": manifest}
 
@@ -1606,8 +1757,57 @@ def self_test() -> int:
                 b"dependency.libusb.license=LGPL-2.1-or-later\n"
                 b"dependency.libc=musl\n"
                 b"dependency.executables=static-musl\n"
+                b"runtime-license-members=toolchain/gcc-COPYING.RUNTIME,toolchain/gcc-COPYING3,toolchain/musl-1.2.5-COPYRIGHT\n"
+                b"runtime-build-metadata=evidence/toolchain-static.properties,evidence/toolchain-ifd.properties\n"
                 b"corresponding-source-archive=px4-userland-0.1.0-source.tar.gz\n"
             ),
+            "evidence/toolchain-static.properties": (
+                b"compiler=/usr/bin/g++\n"
+                b"compiler_sha256=" + b"c" * 64 + b"\n"
+                b"compiler_version=14.2.0\n"
+                b"compiler_target=x86_64-alpine-linux-musl\n"
+                b"libc=musl\n"
+                b"libc_version=musl-1.2.5-r0\n"
+                b"runtime=libgcc+libstdc++\n"
+                b"linkage=static\n"
+                b"libc_archive=/usr/lib/libc.a\n"
+                b"libc_archive_sha256=" + b"a" * 64 + b"\n"
+                b"libc_archive_owner=musl-dev-1.2.5-r0\n"
+                b"libgcc_archive=/usr/lib/gcc/x86_64-alpine-linux-musl/14.2.0/libgcc.a\n"
+                b"libgcc_archive_sha256=" + b"b" * 64 + b"\n"
+                b"libgcc_archive_owner=gcc-14.2.0-r0\n"
+                b"libstdcxx_archive=/usr/lib/gcc/x86_64-alpine-linux-musl/14.2.0/libstdc++.a\n"
+                b"libstdcxx_archive_sha256=" + b"d" * 64 + b"\n"
+                b"libstdcxx_archive_owner=libstdc++-14.2.0-r0\n"
+            ),
+            "evidence/toolchain-ifd.properties": (
+                b"compiler=/usr/bin/g++\n"
+                b"compiler_sha256=" + b"c" * 64 + b"\n"
+                b"compiler_version=14.2.0\n"
+                b"compiler_target=x86_64-alpine-linux-musl\n"
+                b"libc=musl\n"
+                b"libc_version=musl-1.2.5-r0\n"
+                b"runtime=libgcc+libstdc++\n"
+                b"linkage=shared-ifd-static-gcc-runtime\n"
+                b"libc_input=/lib/ld-musl-x86_64.so.1\n"
+                b"libc_input_sha256=" + b"a" * 64 + b"\n"
+                b"libc_input_owner=musl-1.2.5-r12\n"
+                b"libc_input_package_version=musl-1.2.5-r12\n"
+                b"libgcc_archive=/usr/lib/gcc/x86_64-alpine-linux-musl/14.2.0/libgcc.a\n"
+                b"libgcc_archive_sha256=" + b"b" * 64 + b"\n"
+                b"libgcc_archive_owner=gcc-14.2.0-r0\n"
+                b"libgcc_package_version=gcc-14.2.0-r0\n"
+                b"libstdcxx_archive=/usr/lib/gcc/x86_64-alpine-linux-musl/14.2.0/libstdc++.a\n"
+                b"libstdcxx_archive_sha256=" + b"d" * 64 + b"\n"
+                b"libstdcxx_archive_owner=libstdc++-14.2.0-r0\n"
+                b"libstdcxx_package_version=libstdc++-14.2.0-r0\n"
+            ),
+            **{
+                f"toolchain/{name}": (
+                    Path(__file__).resolve().parents[1] / "distribution/licenses" / name
+                ).read_bytes()
+                for name in ("gcc-COPYING3", "gcc-COPYING.RUNTIME", "musl-1.2.5-COPYRIGHT")
+            },
             "reader.conf.d/px4-userland.conf": (
                 b"DEVICENAME px4-userland:runtime=@PX4_RUNTIME_DIR@:"
                 b"device=@PX4_BASE_SERIAL@:access=@PX4_ACCESS@\n"
@@ -1763,6 +1963,15 @@ def self_test() -> int:
                 return
             fail(f"self-test accepted {description}")
 
+        def expect_archive_error(path: Path, expected: str, description: str) -> None:
+            try:
+                audit_test_archive(path)
+            except AuditError as error:
+                if expected not in str(error):
+                    fail(f"self-test rejected {description} for the wrong reason: {error}")
+                return
+            fail(f"self-test accepted {description}")
+
         tampered_evidence = dict(valid_evidence)
         tampered_evidence["platform"] = "darwin-arm64"
         tampered_evidence_archive = root / "tampered-evidence" / archive_name
@@ -1786,14 +1995,41 @@ def self_test() -> int:
 
         missing_license_archive = root / "missing-license" / archive_name
         missing_license_archive.parent.mkdir()
-        write_test_archive(missing_license_archive, valid_evidence, file_overrides={"libusb/COPYING": None})
+        write_test_archive(missing_license_archive, valid_evidence,
+                           file_overrides={"libusb/COPYING": None})
         expect_archive_rejected(missing_license_archive, "archive missing libusb/COPYING")
+
+        missing_runtime_license_archive = root / "missing-runtime-license" / archive_name
+        missing_runtime_license_archive.parent.mkdir()
+        write_test_archive(missing_runtime_license_archive, valid_evidence,
+                           file_overrides={"toolchain/gcc-COPYING.RUNTIME": None})
+        expect_archive_error(missing_runtime_license_archive, "archive member allowlist mismatch",
+                             "missing Linux runtime license")
 
         tampered_license_archive = root / "tampered-license" / archive_name
         tampered_license_archive.parent.mkdir()
         write_test_archive(tampered_license_archive, valid_evidence,
                            file_overrides={"libusb/COPYING": base_files["libusb/COPYING"] + b"tampered\n"})
         expect_archive_rejected(tampered_license_archive, "tampered libusb/COPYING")
+        tampered_runtime_license = root / "tampered-runtime-license" / archive_name
+        tampered_runtime_license.parent.mkdir()
+        write_test_archive(tampered_runtime_license, valid_evidence, file_overrides={
+            "toolchain/gcc-COPYING.RUNTIME": base_files["toolchain/gcc-COPYING.RUNTIME"] + b"tampered\n"
+        })
+        expect_archive_error(tampered_runtime_license, "Linux runtime license is missing or altered",
+                             "tampered Linux runtime license")
+
+        malformed_metadata = root / "malformed-metadata" / archive_name
+        malformed_metadata.parent.mkdir()
+        write_test_archive(malformed_metadata, valid_evidence, file_overrides={
+            "evidence/toolchain-static.properties": base_files["evidence/toolchain-static.properties"].replace(
+                b"libgcc_archive_sha256=" + b"b" * 64,
+                b"libgcc_archive_sha256=synthetic-invalid-hash"
+            )
+        })
+        expect_archive_error(malformed_metadata,
+                             "Linux runtime input hash is invalid: evidence/toolchain-static.properties:libgcc_archive_sha256",
+                             "malformed Linux runtime metadata")
     print("artifact audit self-test: traversal, evidence, missing license, and license tampering rejected")
     return 0
 

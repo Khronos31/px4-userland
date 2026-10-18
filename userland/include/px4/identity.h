@@ -61,6 +61,7 @@ struct DeviceProfile final {
     std::uint8_t receiver_count;
     bool dual_system;
     bool supports_lnb_15v;
+    bool serial_identity_supported;
 };
 
 const DeviceProfile* device_profile_for_usb_id(std::uint16_t vendor_id,

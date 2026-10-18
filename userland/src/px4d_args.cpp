@@ -204,6 +204,9 @@ Px4dArguments parse_px4d_arguments(int argc,
     if (have_runtime && result.runtime_directory.empty()) {
         return invalid("--runtime-dir must not be empty");
     }
+    if (result.group && !have_runtime) {
+        return invalid("--group requires --runtime-dir");
+    }
     result.valid = true;
     return result;
 }

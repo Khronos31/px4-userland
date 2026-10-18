@@ -27,6 +27,10 @@ elif command -v samurai >/dev/null; then make_program=$(command -v samurai)
 else printf '%s\n' 'ninja or samurai is required' >&2; exit 1
 fi
 command -v gcc >/dev/null || { printf '%s\n' 'a musl gcc is required' >&2; exit 1; }
+cxx_compiler=${CXX:-c++}
+cxx_compiler=$(command -v "$cxx_compiler" || true)
+[ -n "$cxx_compiler" ] || { printf '%s\n' 'the selected C++ compiler is unavailable' >&2; exit 1; }
+cxx_compiler=$(readlink -f "$cxx_compiler")
 nm_tool=$(command -v nm || command -v llvm-nm || true)
 strip_tool=$(command -v strip || command -v llvm-strip || true)
 [ -n "$nm_tool" ] || { printf '%s\n' 'target-native nm is required' >&2; exit 1; }
@@ -68,6 +72,7 @@ mkdir -p "$work/libusb" "$work/prefix"
 [ -f "$work/prefix/lib/libusb-1.0.a" ] || { printf '%s\n' 'static libusb was not built' >&2; exit 1; }
 build=$work/build
 cmake -S "$root" -B "$build" -G Ninja -DCMAKE_MAKE_PROGRAM="$make_program" -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_CXX_COMPILER="$cxx_compiler" \
     -DPX4_BUILD_TESTS=OFF -DPX4_BUILD_PCSC_IFD=OFF -DPX4_ENABLE_LIBUSB=ON \
     -DPX4_RELEASE_PX4D_NO_BUILD_ID=ON \
     -DPX4_LIBUSB_INCLUDE_DIR="$work/prefix/include/libusb-1.0" \
@@ -75,6 +80,19 @@ cmake -S "$root" -B "$build" -G Ninja -DCMAKE_MAKE_PROGRAM="$make_program" -DCMA
     -DCMAKE_CXX_FLAGS='-static -static-libstdc++ -static-libgcc' \
     -DCMAKE_EXE_LINKER_FLAGS='-static -static-libstdc++ -static-libgcc'
 cmake --build "$build" --target px4d px4-ts px4ctl
+
+runtime_input()
+{
+    input=$($cxx_compiler -print-file-name="$1")
+    [ -f "$input" ] || { printf '%s\n' "selected compiler has no $1 input: $input" >&2; exit 1; }
+    input=$(readlink -f "$input")
+    owner=$(apk info -W "$input" 2>/dev/null | sed -n 's/.* is owned by //p' | head -n 1)
+    [ -n "$owner" ] || { printf '%s\n' "runtime input has no Alpine package owner: $input" >&2; exit 1; }
+    printf '%s|%s|%s\n' "$input" "$(sha256sum "$input" | awk '{print $1}')" "$owner"
+}
+libc_input=$(runtime_input libc.a)
+libgcc_input=$(runtime_input libgcc.a)
+libstdcxx_input=$(runtime_input libstdc++.a)
 
 # Verify static libusb provenance before removing the symbol table.  The
 # release artifacts must retain runtime code, but never their build symbols.
@@ -95,3 +113,23 @@ for program in px4d px4-ts px4ctl; do
     cp "$build/$program" "$output/$program"
     chmod 0755 "$output/$program"
 done
+mkdir -p "$output/evidence"
+cat > "$output/evidence/toolchain-static.properties" <<EOF
+compiler=$cxx_compiler
+compiler_sha256=$(sha256sum "$cxx_compiler" | awk '{print $1}')
+compiler_version=$($cxx_compiler -dumpfullversion -dumpversion)
+compiler_target=$($cxx_compiler -dumpmachine)
+libc=musl
+libc_version=$(apk info -v musl 2>/dev/null | head -n 1)
+libc_archive=$(printf '%s' "$libc_input" | cut -d '|' -f 1)
+libc_archive_sha256=$(printf '%s' "$libc_input" | cut -d '|' -f 2)
+libc_archive_owner=$(printf '%s' "$libc_input" | cut -d '|' -f 3)
+libgcc_archive=$(printf '%s' "$libgcc_input" | cut -d '|' -f 1)
+libgcc_archive_sha256=$(printf '%s' "$libgcc_input" | cut -d '|' -f 2)
+libgcc_archive_owner=$(printf '%s' "$libgcc_input" | cut -d '|' -f 3)
+libstdcxx_archive=$(printf '%s' "$libstdcxx_input" | cut -d '|' -f 1)
+libstdcxx_archive_sha256=$(printf '%s' "$libstdcxx_input" | cut -d '|' -f 2)
+libstdcxx_archive_owner=$(printf '%s' "$libstdcxx_input" | cut -d '|' -f 3)
+runtime=libgcc+libstdc++
+linkage=static
+EOF

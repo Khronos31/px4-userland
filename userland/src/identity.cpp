@@ -16,22 +16,22 @@ namespace px4::userland {
 namespace {
 
 constexpr std::array<DeviceProfile, 16U> kDeviceProfiles{{
-    {DeviceModel::px_q3u4, kQ3U4ProductId, "PX-Q3U4", 2U, 8U, false, true},
-    {DeviceModel::px_w3u4, kW3U4ProductId, "PX-W3U4", 1U, 4U, false, true},
-    {DeviceModel::px_mlt5pe, kPxMlt5PeProductId, "PX-MLT5PE", 1U, 5U, true, true},
-    {DeviceModel::dtv02a_5ts_p, kDtv02a5TsPProductId, "DTV02A-5TS-P", 1U, 5U, true, true},
-    {DeviceModel::px_w3pe4, kPxW3Pe4ProductId, "PX-W3PE4", 1U, 4U, false, true},
-    {DeviceModel::px_w3pe5, kPxW3Pe5ProductId, "PX-W3PE5", 1U, 4U, false, true},
-    {DeviceModel::px_q3pe4, kPxQ3Pe4ProductId, "PX-Q3PE4", 2U, 8U, false, true},
-    {DeviceModel::px_q3pe5, kPxQ3Pe5ProductId, "PX-Q3PE5", 2U, 8U, false, true},
-    {DeviceModel::px_mlt8pe3, kPxMlt8Pe3ProductId, "PX-MLT8PE3", 1U, 3U, true, true},
-    {DeviceModel::px_mlt8pe5, kPxMlt8Pe5ProductId, "PX-MLT8PE5", 1U, 5U, true, true},
-    {DeviceModel::dtv02a_4ts_p, kDtv02a4TsPProductId, "DTV02A-4TS-P", 1U, 4U, true, true},
-    {DeviceModel::px_m1ur, kPxM1UrProductId, "PX-M1UR", 1U, 1U, true, false},
-    {DeviceModel::px_s1ur, kPxS1UrProductId, "PX-S1UR", 1U, 1U, false, false},
-    {DeviceModel::dtv03a_1tu, kDtv03a1TuProductId, "DTV03A-1TU", 1U, 1U, false, false},
-    {DeviceModel::dtv02_1t1s_u, kDtv021T1SuProductId, "DTV02-1T1S-U", 1U, 1U, true, false},
-    {DeviceModel::dtv02a_1t1s_u, kDtv02a1T1SuProductId, "DTV02A-1T1S-U", 1U, 1U, true, false},
+    {DeviceModel::px_q3u4, kQ3U4ProductId, "PX-Q3U4", 2U, 8U, false, true, true},
+    {DeviceModel::px_w3u4, kW3U4ProductId, "PX-W3U4", 1U, 4U, false, true, true},
+    {DeviceModel::px_mlt5pe, kPxMlt5PeProductId, "PX-MLT5PE", 1U, 5U, true, true, true},
+    {DeviceModel::dtv02a_5ts_p, kDtv02a5TsPProductId, "DTV02A-5TS-P", 1U, 5U, true, true, false},
+    {DeviceModel::px_w3pe4, kPxW3Pe4ProductId, "PX-W3PE4", 1U, 4U, false, true, true},
+    {DeviceModel::px_w3pe5, kPxW3Pe5ProductId, "PX-W3PE5", 1U, 4U, false, true, true},
+    {DeviceModel::px_q3pe4, kPxQ3Pe4ProductId, "PX-Q3PE4", 2U, 8U, false, true, true},
+    {DeviceModel::px_q3pe5, kPxQ3Pe5ProductId, "PX-Q3PE5", 2U, 8U, false, true, true},
+    {DeviceModel::px_mlt8pe3, kPxMlt8Pe3ProductId, "PX-MLT8PE3", 1U, 3U, true, true, true},
+    {DeviceModel::px_mlt8pe5, kPxMlt8Pe5ProductId, "PX-MLT8PE5", 1U, 5U, true, true, true},
+    {DeviceModel::dtv02a_4ts_p, kDtv02a4TsPProductId, "DTV02A-4TS-P", 1U, 4U, true, true, false},
+    {DeviceModel::px_m1ur, kPxM1UrProductId, "PX-M1UR", 1U, 1U, true, false, false},
+    {DeviceModel::px_s1ur, kPxS1UrProductId, "PX-S1UR", 1U, 1U, false, false, false},
+    {DeviceModel::dtv03a_1tu, kDtv03a1TuProductId, "DTV03A-1TU", 1U, 1U, false, false, false},
+    {DeviceModel::dtv02_1t1s_u, kDtv021T1SuProductId, "DTV02-1T1S-U", 1U, 1U, true, false, false},
+    {DeviceModel::dtv02a_1t1s_u, kDtv02a1T1SuProductId, "DTV02A-1T1S-U", 1U, 1U, true, false, false},
 }};
 
 constexpr std::size_t kQ3U4BaseSerialLength = 14U;
