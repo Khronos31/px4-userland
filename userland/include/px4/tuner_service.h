@@ -25,6 +25,10 @@ struct TunerStrictProfile final {
     // The backend implements the strict Hz programming entrance for this
     // receiver/system.  Without it the receiver keeps the R2 kHz entrance.
     bool native_hz = false;
+    // Readiness policy of the native Hz entrance.  The default preserves the
+    // polling behaviour of every existing product backend.
+    dtv::userland::detail::TuneReadiness readiness =
+        dtv::userland::detail::TuneReadiness::lock_poll;
     // Inclusive admitted requested-Hz domain (satellite: IF).
     std::uint64_t min_hz = 0U;
     std::uint64_t max_hz = 0U;

@@ -1,8 +1,8 @@
 {
-  "kind": "reviewed-increment-source-checkpoint",
+  "kind": "work-in-progress-source-checkpoint-review-pending",
   "branch": "wip/userland-common-20261017",
   "upstream_main": "90f08a594487e2603bd5c09f778a0b3b64ac9a4d",
-  "snapshot_source": "/config/.work/userland-common-20261017/implementation/px4-wire-idle-policy",
+  "snapshot_source": "/config/.work/userland-common-20261017/implementation/px4-runtime-seams-idle",
   "snapshot_file_count": 293,
   "snapshot_file_sha256": {
     ".editorconfig": "a38dc184aabf62d6bea89d602420a10eb74d0cf4c464968cf6b597670752e669",
@@ -128,7 +128,7 @@
     "userland/include/px4/q3u4_stream.h": "8f7e2722c2e3273516d7e71e312cdda603058aa8bff12a04b77458e7a97e595e",
     "userland/include/px4/transport.h": "70da3cefa60bf0a85a940c00409c5e6d510499fcc86b21b17c3fc711a2de21f5",
     "userland/include/px4/ts_continuity.h": "dec396cf3a759c71c4f336ea8e9f384f18cff4941cab23178855c2ad92b6963b",
-    "userland/include/px4/tuner_service.h": "0425090fd4c02177f82f67ba15fab2f0fce07efa5943384af5cf16166cc6fc29",
+    "userland/include/px4/tuner_service.h": "1e93b764e696a16d21748383ab1c2efca88ebfe5e9b4b112773a22a9b5862e61",
     "userland/include/px4/windows_tuner_nonce.h": "4b64d6ab7d279ca12b6acb77f3ad9af9370ab0d53b1077a456752942cc3c798f",
     "userland/src/bridge_i2c.cpp": "b01abb8bbcf147239fff37c0594fc153571d5fd2c994cf434d2c4e3bea553d1c",
     "userland/src/bridge_i2c.h": "4b04267c4d0e03fd4227c84d68768c4c8237bc765c6867d57718d599e0f7de66",
@@ -172,7 +172,7 @@
     "userland/src/mock_transport.cpp": "9abadf6337034bc4143f952a8ae583075e9434e01dc0978eb559df78b8e97906",
     "userland/src/pcsc_ifd.cpp": "abcc43f7d4eb180db6db7aa348424f4600a3f492fb69df5741c6716f1fa19146",
     "userland/src/pcsc_ifd_adapter.cpp": "faafddd7a6019825d4901e2695de1b51722b87fe4d0e14820433a43bc8426e7c",
-    "userland/src/posix_ipc.cpp": "03b6eca9a004e2092f04ae6329976dc343d51f8a7fcdb4a1929409cb7fd32434",
+    "userland/src/posix_ipc.cpp": "b7f9100af49311ed79d0cbd6cd866c0b7c6c140194678f0712570f4d04805a8e",
     "userland/src/posix_ipc_test_access.h": "ed986d3b96ad913f93ef6e65fe7e1294e49141d361b381c4c97a0220f8330950",
     "userland/src/posix_tuner_nonce.cpp": "89b4dd8d0ce4b7ebe550e37e4c52e1c70d213b150ba005441848e47e454d8dd3",
     "userland/src/posix_tuner_nonce_internal.h": "b09f6b8af8393c5ebf9fcc98269a042c1c478502c8a750f4e3aaa98267a8f45b",
@@ -203,7 +203,7 @@
     "userland/src/tc90522.h": "e8fef6c0d97b4ee4d7a29289bde33dae0b3f28bc6b1b55accd3d765d682e1b7b",
     "userland/src/ts_probe_support.cpp": "1ec1adc630fe3daf622d70cc5a73e268365b42afae3148286e4df35c34f8526f",
     "userland/src/ts_probe_support.h": "ac1026b6097c7641cdcad66d1d97ccb8629b47b403e54fb2bf4043a549a2ec26",
-    "userland/src/tuner_service.cpp": "7b9039dfe6e2a73343dd2f94c36a9909b5bda8921bca1d7765363af859b48977",
+    "userland/src/tuner_service.cpp": "d199ecd183d3adcb141701735b5bc774a55e9da94ffdb95cce6f727ce80add03",
     "userland/src/windows/libusb_stream_policy.cpp": "79c70b455c229df5740100dca565e2d780b954c5eda755b28b80c3b3160ece8c",
     "userland/src/windows/libusb_stream_policy.h": "db26d46fe744ae7ad6b2bf9315bba5dddd38941b046cb1c0d95a64be892069fb",
     "userland/src/windows/windows_ipc.cpp": "22e1b5b5a9d39da7278c95febc171fd7f4c5c16d4fdd790674b6bc7b506a35bf",
@@ -278,8 +278,8 @@
     "userland/tools/frontend_probe.cpp": "61cf35c40e986279da4352c563d037b87e566dc5e7379434e8472a7fc648eccf",
     "userland/tools/it930x_probe.cpp": "6b821c2d2a73ac5f7f06618b4823ae589d87c797f393cce90b671e24e8d1bdf5",
     "userland/tools/px4_ts.cpp": "acdb9246eb15064368224d5ae5f99eb9a41515945ca014f8178306639d922dc0",
-    "userland/tools/px4_ts_core.cpp": "fd4733e838054b1264f56deeb057577e8b2ca1ef804825f84863c46a4c6cc975",
-    "userland/tools/px4_ts_core.h": "b6fbae5a2da8f8531fae3b0a9d8cfff36ab15a01fdf715230bea77ce4f7895ce",
+    "userland/tools/px4_ts_core.cpp": "5b0220c7a6723d479c0e7334e71104152597c7703cab1719a83ebf13020c1e99",
+    "userland/tools/px4_ts_core.h": "00c48c828af885e4c7deadc1dc176e1ad064e412cd182b67acf48fb5f2cee933",
     "userland/tools/px4_ts_posix.cpp": "bcfbe08772c9e48d586fdb432e71ce2a7352466c0895cd81f9c602fef3da6ac2",
     "userland/tools/px4_ts_posix.h": "b63e61601432d770ae2c6e6b476911508211cd97db3a3a8144dbdf06c190d24e",
     "userland/tools/px4_ts_windows.cpp": "d2ee784e7dc5d0a3545c3f6dd205fdf547b79af53a156959259c2ab01b936d07",
@@ -300,14 +300,16 @@
     "userland/tools/usb_probe.cpp": "4e23145c862f8d96b00089bccd4770d411b8e65f61c83f097f9ac99aa7c93933"
   },
   "retained_upstream_files_outside_snapshot": [],
-  "overlay_policy": "最新mainへ受入スナップショットの内容を重ねた。manifest外の既存upstream fileは保持した。このmetadata file自体は受入sourceスナップショットの範囲外。",
+  "overlay_policy": "専用branchへ固定済みの作業中sourceを保全。manifest外のupstream fileは保持。独立review待ちで、releaseや最終受入を表さない。metadata自体はsnapshot外。",
   "acceptance_scope": [
-    "P normal/ASan+UBSan runtime26件とidle4件を個別受入。今回保全用overlay tree全体を再buildした証拠とは分ける。",
-    "Windows旧runの移行と全CLI統一、RC認定は後続。"
+    "既受入idle修正と新P seam5pathを競合なく三者統合。親normal関連3試験とactual libusb daemon/client/ctl buildは成功。",
+    "seam自体の独立reviewはS公開runtime reviewで進行中。全CLI/全OS/RCは後続。"
   ],
   "acceptance_index": "https://github.com/Khronos31/agent-workspace/blob/design/userland-common-contract-20261017/implementation/accepted-source-index.md",
   "ci_policy": "このソース保全コミットは[skip ci]を含む。リリース・tag・mainへの反映は別の判断とする。",
   "known_followups": [
     "https://github.com/Khronos31/px4-userland/issues/68"
-  ]
+  ],
+  "previous_checkpoint_commit": "8cded89082a9723b8396594fccd3624dd55fb20f",
+  "common_source_commit": "80ccc7b7e9ccad7c9b3656f02a28d12f003c45a0"
 }

@@ -523,6 +523,12 @@ Result<void> TunerService::configure_strict_capabilities() noexcept
         if (!valid_strict_profile(profiles[receiver][0]) ||
             !valid_strict_profile(profiles[receiver][1]))
             return Result<void>::failure(Error::INVALID_ARGUMENT);
+        // Carry the backend's readiness policy through the facade.  The
+        // default (lock_poll) reproduces the pre-seam behaviour.
+        capabilities[index].readiness =
+            (capabilities[index].supports_terrestrial ? profiles[receiver][0]
+                                                      : profiles[receiver][1])
+                .readiness;
         if (!native) profiles[receiver] = {};
         capabilities[index].native_hz = native;
     }

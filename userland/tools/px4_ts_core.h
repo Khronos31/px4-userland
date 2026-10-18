@@ -53,6 +53,10 @@ struct Px4TsArguments final {
     std::uint8_t receiver = 0U;
     ipc::System system = ipc::System::ISDB_T;
     std::uint64_t frequency_khz = 0U;
+    // Exact canonical Hz entrance used by products that resolve the frequency
+    // in the shared tuning authority.  Exactly one of frequency_khz and
+    // frequency_hz is set.
+    std::uint64_t frequency_hz = 0U;
     std::uint16_t stream_id = 0xffffU;
     std::uint16_t slot = 0xffffU;
     std::uint32_t bandwidth_hz = 6000000U;

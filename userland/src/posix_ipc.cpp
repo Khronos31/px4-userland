@@ -28,6 +28,10 @@
 #include <unistd.h>
 #include <utility>
 
+#ifndef PX4_USERLAND_RUNTIME_PRODUCT
+#define PX4_USERLAND_RUNTIME_PRODUCT "px4-userland"
+#endif
+
 namespace px4::userland::ipc::posix {
 namespace {
 
@@ -35,7 +39,7 @@ constexpr mode_t kPrivateDirectoryMode = 0700;
 constexpr mode_t kPrivateSocketMode = 0600;
 constexpr mode_t kGroupDirectoryMode = 0750;
 constexpr mode_t kGroupSocketMode = 0660;
-constexpr const char* kProductDirectoryName = "px4-userland";
+constexpr const char* kProductDirectoryName = PX4_USERLAND_RUNTIME_PRODUCT;
 constexpr const char* kRuntimeNamespaceVersion = "v1";
 // Keep credential queries bounded even if a platform reports an unexpectedly
 // large supplementary-group count.  This covers the supported POSIX targets;
@@ -1022,7 +1026,7 @@ Result<SerialEndpointLease> SerialEndpointLease::acquire(
 
     SerialEndpointLease lease;
     const int length = std::snprintf(lease.filename_.data(), lease.filename_.size(),
-                                     ".px4-userland-%.*s.lock",
+                                     "." PX4_USERLAND_RUNTIME_PRODUCT "-%.*s.lock",
                                      static_cast<int>(observed_serial.size()),
                                      observed_serial.data());
     if (length <= 0 || static_cast<std::size_t>(length) >= lease.filename_.size())

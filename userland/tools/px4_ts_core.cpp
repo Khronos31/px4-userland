@@ -130,11 +130,17 @@ bool valid_frequency(System system, std::uint64_t frequency) noexcept
 
 bool valid_arguments(const Px4TsArguments& arguments) noexcept
 {
+    const bool have_khz = arguments.frequency_khz != 0U;
+    const bool have_hz = arguments.frequency_hz != 0U;
+    constexpr std::uint64_t kMaxRequestedHz = (std::uint64_t{1U} << 53U) - 1U;
+    const bool valid_frequency_entrance =
+        have_khz != have_hz &&
+        (have_khz ? valid_frequency(arguments.system, arguments.frequency_khz)
+                  : arguments.frequency_hz <= kMaxRequestedHz);
     if ((arguments.instance.empty() ? !valid_serial(arguments.device) :
                                       (!arguments.device.empty() ||
                                        !valid_instance(arguments.instance))) ||
-        arguments.frequency_khz == 0U ||
-        !valid_frequency(arguments.system, arguments.frequency_khz) ||
+        !valid_frequency_entrance ||
         arguments.tune_timeout_ms < 100U || arguments.tune_timeout_ms > 30000U ||
         (arguments.duration_set && arguments.duration_seconds == 0U) ||
         (arguments.duration_set &&
@@ -887,8 +893,9 @@ Result<Px4TsRunResult> Px4TsRunner::run_wire(
         return Result<Px4TsRunResult>::failure(Error::INVALID_ARGUMENT);
     }
     options.tune.system = system;
-    options.tune.frequency_hz =
-        static_cast<std::uint64_t>(arguments.frequency_khz) * 1000U;
+    options.tune.frequency_hz = arguments.frequency_hz != 0U
+                                    ? arguments.frequency_hz
+                                    : static_cast<std::uint64_t>(arguments.frequency_khz) * 1000U;
     if (arguments.stream_id != 0xffffU) {
         options.tune.selection = wire::Selection::tsid;
         options.tune.selection_value = arguments.stream_id;
@@ -1106,6 +1113,11 @@ Result<Px4TsRunResult> Px4TsRunner::run(
     Px4TsFailureKind& result_failure_kind = failure_kind != nullptr ?
                                                  *failure_kind : local_failure_kind;
     if (!arguments.valid || !valid_arguments(arguments)) {
+        return Result<Px4TsRunResult>::failure(Error::INVALID_ARGUMENT);
+    }
+    // The legacy internal-IPC runner has no exact-Hz entrance; the kHz field
+    // stays authoritative there.
+    if (arguments.frequency_hz != 0U) {
         return Result<Px4TsRunResult>::failure(Error::INVALID_ARGUMENT);
     }
     const char* runtime_directory = arguments.runtime_directory.empty() ?
