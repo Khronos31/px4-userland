@@ -25,6 +25,19 @@ namespace wire = dtv::userland::wire;
 namespace identity = dtv::userland::identity;
 using CommonError = dtv::userland::Error;
 
+#ifndef PX4CTL_TOOL_NAME
+#define PX4CTL_TOOL_NAME "px4ctl"
+#endif
+#ifndef PX4CTL_PRODUCT_SLUG
+#define PX4CTL_PRODUCT_SLUG "px4-userland"
+#endif
+#ifndef PX4CTL_PRODUCT_ENUM
+#define PX4CTL_PRODUCT_ENUM px4
+#endif
+#ifndef PX4CTL_PRODUCT_VERSION
+#define PX4CTL_PRODUCT_VERSION PX4_USERLAND_PRODUCT_VERSION
+#endif
+
 struct Arguments final {
     bool valid = false;
     bool help = false;
@@ -111,9 +124,9 @@ Arguments parse_arguments(int argc, const char* const* argv) noexcept
 void usage(FILE* output) noexcept
 {
     std::fprintf(output,
-                 "usage: px4ctl [--device serial:SERIAL|usb:BUS-PORT[,BUS-PORT...]] "
+                 "usage: %s [--device serial:SERIAL|usb:BUS-PORT[,BUS-PORT...]] "
                  "[--instance TOKEN] [--runtime-dir PATH] [--group] status\n"
-                 "       px4ctl --help | --version\n");
+                 "       %s --help | --version\n", PX4CTL_TOOL_NAME, PX4CTL_TOOL_NAME);
 }
 
 class SocketTransport final : public wire::ClientTransport {
@@ -159,7 +172,8 @@ dtv::userland::Result<identity::ResolvedIdentity> resolved_device(std::string_vi
 {
     const auto selector = identity::parse_device_selector(value);
     if (!selector) return dtv::userland::Result<identity::ResolvedIdentity>::failure(selector.error());
-    return identity::resolve_selector(identity::Product::px4, selector.value());
+    return identity::resolve_selector(identity::Product::PX4CTL_PRODUCT_ENUM,
+                                      selector.value());
 }
 
 bool matches_device(const wire::ListResponse& list,
@@ -171,6 +185,7 @@ bool matches_device(const wire::ListResponse& list,
         if (identity.uniqueness != wire::Uniqueness::unique_in_scan ||
             list.functions.count == 0U)
             return false;
+#if defined(PX4CTL_PX4_IDENTITY)
         const px4::userland::DeviceProfile* profile =
             px4::userland::device_profile_for_usb_id(
             list.functions.items[0].vid, list.functions.items[0].pid);
@@ -186,6 +201,14 @@ bool matches_device(const wire::ListResponse& list,
                serial.present && serial.value.length == expected.serial.length &&
                std::memcmp(serial.value.bytes.data(), expected.serial.bytes.data(),
                            expected.serial.length) == 0;
+#else
+        const auto& serial = list.enclosure.value.identity.serial;
+        return identity.serial_state == wire::IdentitySerialState::present &&
+               identity.uniqueness == wire::Uniqueness::unique_in_scan &&
+               serial.present && serial.value.length == expected.serial.length &&
+               std::memcmp(serial.value.bytes.data(), expected.serial.bytes.data(),
+                           expected.serial.length) == 0;
+#endif
     }
     for (std::size_t i = 0U; i < expected.topology.count; ++i) {
         bool found = false;
@@ -234,7 +257,7 @@ int main(int argc, char** argv)
 {
 #if defined(_WIN32)
     if (argc == 2 && std::strcmp(argv[1], "--version") == 0) {
-        std::printf("px4-userland %s\n", PX4_USERLAND_PRODUCT_VERSION);
+        std::printf("%s %s\n", PX4CTL_PRODUCT_SLUG, PX4CTL_PRODUCT_VERSION);
         return 0;
     }
     const std::vector<std::string> owned_argv =
@@ -245,14 +268,15 @@ int main(int argc, char** argv)
         parse_arguments(static_cast<int>(argv_views.size()), argv_views.data());
 #else
     if (argc == 2 && std::strcmp(argv[1], "--version") == 0) {
-        std::printf("px4-userland %s\n", PX4_USERLAND_PRODUCT_VERSION);
+        std::printf("%s %s\n", PX4CTL_PRODUCT_SLUG, PX4CTL_PRODUCT_VERSION);
         return 0;
     }
     const Arguments arguments =
         parse_arguments(argc, const_cast<const char* const*>(argv));
 #endif
     if (!arguments.valid) {
-        std::fprintf(stderr, "px4ctl: %.*s\n", static_cast<int>(arguments.error.size()),
+        std::fprintf(stderr, "%s: %.*s\n", PX4CTL_TOOL_NAME,
+                     static_cast<int>(arguments.error.size()),
                      arguments.error.data());
         usage(stderr);
         return 2;
@@ -263,7 +287,7 @@ int main(int argc, char** argv)
     }
 #if defined(_WIN32)
     if (arguments.group) {
-        std::fprintf(stderr, "px4ctl: --group is unsupported on Windows\n");
+        std::fprintf(stderr, "%s: --group is unsupported on Windows\n", PX4CTL_TOOL_NAME);
         return 3;
     }
 #endif
@@ -274,7 +298,7 @@ int main(int argc, char** argv)
     if (has_device) {
         const auto resolved = resolved_device(arguments.device);
         if (!resolved) {
-            std::fprintf(stderr, "px4ctl: invalid --device selector\n");
+            std::fprintf(stderr, "%s: invalid --device selector\n", PX4CTL_TOOL_NAME);
             return 2;
         }
         expected = resolved.value();
@@ -319,7 +343,7 @@ int main(int argc, char** argv)
                 return exit_status(discovered.error());
             }
             if (discovered.value().canonical_collision) {
-                std::fprintf(stderr, "px4ctl: ambiguous runtime instances\n");
+                std::fprintf(stderr, "%s: ambiguous runtime instances\n", PX4CTL_TOOL_NAME);
                 return 3;
             }
             for (std::size_t index = 0U; index < discovered.value().count; ++index)
@@ -347,43 +371,46 @@ int main(int argc, char** argv)
                 (stream.error() == CommonError::NOT_FOUND ||
                  stream.error() == CommonError::NOT_READY))
                 continue;
-            std::fprintf(stderr, "px4ctl: connect failed (%u)\n",
+            std::fprintf(stderr, "%s: connect failed (%u)\n", PX4CTL_TOOL_NAME,
                          static_cast<unsigned int>(stream.error()));
             return exit_status(stream.error());
         }
         SocketTransport transport(std::move(stream.value()));
         auto current = wire::fetch_status(transport, dtv::userland::Timeout{5000U});
         if (!current) {
-            std::fprintf(stderr, "px4ctl: status failed (%u, remote=%u)\n",
+            std::fprintf(stderr, "%s: status failed (%u, remote=%u)\n", PX4CTL_TOOL_NAME,
                          static_cast<unsigned int>(current.error),
                          static_cast<unsigned int>(current.remote_error_code));
             return exit_status(current.error);
         }
-        static constexpr char expected_product[] = "px4-userland";
+        static constexpr char expected_product[] = PX4CTL_PRODUCT_SLUG;
         const auto& product = current.snapshot.status.producer.product;
         if (product.length != sizeof(expected_product) - 1U ||
             std::memcmp(product.bytes.data(), expected_product,
                         sizeof(expected_product) - 1U) != 0) {
-            std::fprintf(stderr, "px4ctl: endpoint belongs to another product\n");
+            std::fprintf(stderr, "%s: endpoint belongs to another product\n", PX4CTL_TOOL_NAME);
             return 3;
         }
         if (has_device && !matches_device(current.snapshot.list, expected)) {
-            std::fprintf(stderr, "px4ctl: connected instance does not match --device\n");
+            std::fprintf(stderr, "%s: connected instance does not match --device\n",
+                         PX4CTL_TOOL_NAME);
             return 3;
         }
         if (!current.snapshot.status.context.instance.present) {
-            std::fprintf(stderr, "px4ctl: daemon omitted canonical instance\n");
+            std::fprintf(stderr, "%s: daemon omitted canonical instance\n", PX4CTL_TOOL_NAME);
             return 3;
         }
         const auto& actual_instance = current.snapshot.status.context.instance.value;
         if (actual_instance.length != candidate.instance.size() ||
             std::memcmp(actual_instance.bytes.data(), candidate.instance.data(),
                         candidate.instance.size()) != 0) {
-            std::fprintf(stderr, "px4ctl: connected instance does not match selector\n");
+            std::fprintf(stderr, "%s: connected instance does not match selector\n",
+                         PX4CTL_TOOL_NAME);
             return 3;
         }
         if (found) {
-            std::fprintf(stderr, "px4ctl: multiple runtime roots publish this target\n");
+            std::fprintf(stderr, "%s: multiple runtime roots publish this target\n",
+                         PX4CTL_TOOL_NAME);
             return 3;
         }
         snapshot = std::move(current);
@@ -399,7 +426,7 @@ int main(int argc, char** argv)
                                                        output.data(), output.size()});
     if (!encoded || std::fwrite(output.data(), 1U, encoded.value(), stdout) != encoded.value() ||
         std::fflush(stdout) != 0) {
-        std::fprintf(stderr, "px4ctl: status output failed\n");
+        std::fprintf(stderr, "%s: status output failed\n", PX4CTL_TOOL_NAME);
         return 70;
     }
     return 0;

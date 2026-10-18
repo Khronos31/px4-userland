@@ -1,8 +1,8 @@
 {
-  "kind": "work-in-progress-source-checkpoint-review-pending",
+  "kind": "work-in-progress-source-checkpoint-limited-review-ready",
   "branch": "wip/userland-common-20261017",
   "upstream_main": "90f08a594487e2603bd5c09f778a0b3b64ac9a4d",
-  "snapshot_source": "/config/.work/userland-common-20261017/implementation/px4-runtime-seams-idle",
+  "snapshot_source": "/config/.work/userland-common-20261017/implementation/px4-product-status-ctl",
   "snapshot_file_count": 293,
   "snapshot_file_sha256": {
     ".editorconfig": "a38dc184aabf62d6bea89d602420a10eb74d0cf4c464968cf6b597670752e669",
@@ -15,7 +15,7 @@
     ".gitignore": "b94ce7c7ea1db75bc7d5f03e973b4d72e6ea1eebebab9415ef693738bd27f08f",
     "AGENTS.md": "fb61919abd62f579ad6de474828f32cffe554d0021a9d3e3ca23b049bda929f0",
     "CLAUDE.md": "336cc4fbf19beaada7ccf9986414fa91851a8d7a07dfb3ccbe800a69eed0ab49",
-    "CMakeLists.txt": "f46dd855e18b98b28e6c7a99ad936e6ecf99fa50014535219b6df0efe3acd0d0",
+    "CMakeLists.txt": "a2c32a16cb2eebad9f40c2630f4dbb2e390d7d19140e31b602782847acf3d177",
     "LICENSE": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
     "PROVENANCE.md": "3dcc9b0392446567020d0f88e08c050ca5aa972202c1c3fa410125c804f27768",
     "README.md": "708c6b0cc03791d9189287f1d64cddeff7cf67cd6afde8e0b75a5ee533107e5b",
@@ -286,7 +286,7 @@
     "userland/tools/px4_ts_windows_output.cpp": "2fdbe169bd02a3e8e970519eb29dbe8c001bd853bc12b61e02562a726e9faad3",
     "userland/tools/px4_ts_windows_output.h": "bf5327117a0aefde4e144f1f6dc22e876ad31d8df966dd99e3737ab629011672",
     "userland/tools/px4_windows_args.h": "20d71af4d347f5324dd76fd3274a22e714e23f999e04b7e3a35a8506cd050631",
-    "userland/tools/px4ctl.cpp": "a1648787ef21055b1b8b3c8b47c5ce2377e285cb52e1909f401d03664e7e2e2d",
+    "userland/tools/px4ctl.cpp": "31f2a56e7617b0c7baab2b2b18ee956f8355c9e98943b94b15e5786f78bc2fe7",
     "userland/tools/px4ctl_format.cpp": "d9662fbffd0fea8d348ab9823cb6b31bfb89258fdd4558db57202ad07157f566",
     "userland/tools/px4ctl_format.h": "77fc4b3f8984533fa6b97ebb526ade12b197e290fb3508f59ecaf34480995d90",
     "userland/tools/px4d.cpp": "ba06f1868ff33de6309011ecb9a3f8494a4bb87a699352d909087699629e4ec5",
@@ -300,16 +300,17 @@
     "userland/tools/usb_probe.cpp": "4e23145c862f8d96b00089bccd4770d411b8e65f61c83f097f9ac99aa7c93933"
   },
   "retained_upstream_files_outside_snapshot": [],
-  "overlay_policy": "専用branchへ固定済みの作業中sourceを保全。manifest外のupstream fileは保持。独立review待ちで、releaseや最終受入を表さない。metadata自体はsnapshot外。",
+  "overlay_policy": "固定sourceを専用branchへ保全。metadata自体はsnapshot外。限定reviewと製品全体のRC認定は分ける。",
   "acceptance_scope": [
-    "既受入idle修正と新P seam5pathを競合なく三者統合。親normal関連3試験とactual libusb daemon/client/ctl buildは成功。",
-    "seam自体の独立reviewはS公開runtime reviewで進行中。全CLI/全OS/RCは後続。"
+    "製品bindingで同じctl sourceを共有。P実ctlを含む関連2試験、S/PIX別process status proofは成功。独立reviewのPIX準備gate修正は限定READY。",
+    "P/common以外の製品はこのP sourceへ明示overrideして検証。更新後pin/default-fetchは後続。",
+    "Windows入口の新wire接続は別作業中。全CLI/全OS/CARD/実機/RCはこのcheckpointの認定範囲に含めない。"
   ],
   "acceptance_index": "https://github.com/Khronos31/agent-workspace/blob/design/userland-common-contract-20261017/implementation/accepted-source-index.md",
   "ci_policy": "このソース保全コミットは[skip ci]を含む。リリース・tag・mainへの反映は別の判断とする。",
   "known_followups": [
     "https://github.com/Khronos31/px4-userland/issues/68"
   ],
-  "previous_checkpoint_commit": "8cded89082a9723b8396594fccd3624dd55fb20f",
+  "previous_checkpoint_commit": "a5b72256e612995f0c3766ac31949ca7a7e485a5",
   "common_source_commit": "80ccc7b7e9ccad7c9b3656f02a28d12f003c45a0"
 }

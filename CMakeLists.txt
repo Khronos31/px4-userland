@@ -385,7 +385,8 @@ if(WIN32)
     )
     target_compile_features(px4ctl PRIVATE cxx_std_17)
     target_compile_definitions(px4ctl PRIVATE
-        PX4_USERLAND_PRODUCT_VERSION="${PROJECT_VERSION}")
+        PX4_USERLAND_PRODUCT_VERSION="${PROJECT_VERSION}"
+        PX4CTL_PX4_IDENTITY=1)
     px4_enable_project_warnings(px4ctl)
     add_executable(px4-ts
         userland/tools/px4_ts_windows.cpp
@@ -1089,7 +1090,8 @@ if(TARGET px4_userland_posix_ipc)
     target_include_directories(px4ctl PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/userland/include)
     target_compile_features(px4ctl PRIVATE cxx_std_17)
     target_compile_definitions(px4ctl PRIVATE
-        PX4_USERLAND_PRODUCT_VERSION="${PROJECT_VERSION}")
+        PX4_USERLAND_PRODUCT_VERSION="${PROJECT_VERSION}"
+        PX4CTL_PX4_IDENTITY=1)
     px4_enable_project_warnings(px4ctl)
     if(TARGET px4_runtime_v1_server_tests)
         target_compile_definitions(px4_runtime_v1_server_tests PRIVATE
