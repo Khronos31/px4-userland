@@ -189,11 +189,13 @@ class LeaseIds final : public TunerLeaseIdSource {
 public:
     Result<std::uint64_t> next() noexcept override
     {
-        return Result<std::uint64_t>::success(0x91b4c2d87730e5a6ULL + next_++);
+        return Result<std::uint64_t>::success(
+            0x91b4c2d87730e5a6ULL + next_.fetch_add(1U));
     }
+    std::uint64_t calls() const noexcept { return next_.load(); }
 
 private:
-    std::uint64_t next_ = 0U;
+    std::atomic<std::uint64_t> next_{0U};
 };
 
 // Manually advanced engine clock; sleeps advance it, so lock polls finish.
@@ -815,12 +817,15 @@ struct Fixture final {
                                      stream_control));
     }
 
-    bool start(bool sparse = false, std::uint8_t epoch_seed = 0x10U)
+    bool start(bool sparse = false, std::uint8_t epoch_seed = 0x10U,
+               std::string_view published_instance = "test-instance",
+               std::optional<bool> serial_unique = std::nullopt)
     {
         if (!runtime.valid() || !tuner->configure_strict_capabilities()) return false;
         if (sparse) {
             sparse_context(*context, make_epoch(epoch_seed));
-        } else if (!product_context(*tuner, make_epoch(epoch_seed), *context, first, second)) {
+        } else if (!product_context(*tuner, make_epoch(epoch_seed), *context, first, second,
+                                    published_instance, serial_unique)) {
             return false;
         }
         auto created = PosixControlServer::create(endpoint, *card, *tuner, *context,
