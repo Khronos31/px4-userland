@@ -68,6 +68,7 @@ void usage() noexcept
         "[--instance TOKEN] [--runtime-dir PATH] [--group] [--allow-lnb-power]\n"
         "  px4d --list\n"
         "  px4d --list-json\n"
+        "  px4d --models\n"
         "  px4d --version\n"
         "\n"
         "  serial:VALUE is the 14-digit serial base for paired devices or the\n"
@@ -81,6 +82,7 @@ void usage() noexcept
 #endif
         "  --list             print connected supported enclosures and exit;\n"
         "  --list-json        print the same data as compact JSON and exit;\n"
+        "  --models          print static supported model catalog as JSON\n"
         "  --version         print current build version and exit\n"
         "                     read-only, needs neither firmware nor a daemon\n");
 }
@@ -717,6 +719,16 @@ int main(int argc, char** argv)
     }
     if (arguments.version) {
         std::printf("px4d %s\n", PX4_USERLAND_PRODUCT_VERSION);
+        return 0;
+    }
+    if (arguments.models) {
+        const std::string output = tools::format_model_catalog_json(PX4_USERLAND_PRODUCT_VERSION);
+        if (output.empty() ||
+            std::fwrite(output.data(), 1U, output.size(), stdout) != output.size() ||
+            std::fflush(stdout) != 0) {
+            std::fprintf(stderr, "models: catalog output failed\n");
+            return 70;
+        }
         return 0;
     }
     if (arguments.list || arguments.list_json) return list_devices(arguments.list_json);

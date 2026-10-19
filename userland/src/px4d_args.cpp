@@ -75,6 +75,12 @@ Px4dArguments parse_px4d_arguments(int argc,
             result.version = true;
             return result;
         }
+        if (option == "--models") {
+            if (argc != 2) return invalid("--models cannot be combined");
+            result.valid = true;
+            result.models = true;
+            return result;
+        }
         if (option == "--list") {
             if (argc != 2) return invalid("--list cannot be combined");
             result.valid = true;

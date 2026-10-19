@@ -15,4 +15,7 @@ std::string format_device_list(const GroupingResult& grouping);
 // Formats `px4d --list-json` as one compact JSON object followed by newline.
 std::string format_device_list_json(const GroupingResult& grouping);
 
+// Static supported-model inventory; no USB enumeration or firmware access.
+std::string format_model_catalog_json(const char* product_version);
+
 } // namespace px4::userland::tools

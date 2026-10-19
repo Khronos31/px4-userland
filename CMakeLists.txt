@@ -431,6 +431,7 @@ if(WIN32)
             ${CMAKE_CURRENT_SOURCE_DIR}/userland/tools
         )
         target_compile_features(px4d PRIVATE cxx_std_17)
+        target_link_libraries(px4d PRIVATE dtv::json)
         target_compile_definitions(px4d PRIVATE
             PX4_USERLAND_PRODUCT_VERSION="${PROJECT_VERSION}")
         px4_enable_project_warnings(px4d)
@@ -1205,6 +1206,7 @@ if(TARGET px4_userland_posix_ipc)
             ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
         )
         target_compile_features(px4d PRIVATE cxx_std_17)
+        target_link_libraries(px4d PRIVATE dtv::json)
         target_compile_definitions(px4d PRIVATE
             PX4_USERLAND_PRODUCT_VERSION="${PROJECT_VERSION}")
         px4_enable_project_warnings(px4d)

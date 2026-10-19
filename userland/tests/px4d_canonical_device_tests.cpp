@@ -59,6 +59,9 @@ DeviceObservation q3_observation(const char* base, std::uint8_t device,
 
 bool test_canonical_parser()
 {
+    const auto catalog = parse({"px4d", "--models"});
+    CHECK(catalog.valid && catalog.models && !catalog.list_json);
+    CHECK(!parse({"px4d", "--models", "--list-json"}).valid);
     const auto version = parse({"px4d", "--version"});
     CHECK(version.valid && version.version && !version.help && !version.list_json);
     CHECK(!parse({"px4d", "--version", "--list-json"}).valid);
