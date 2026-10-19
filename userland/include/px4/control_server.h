@@ -22,6 +22,8 @@ struct ControlContext final {
     dtv::userland::wire::Uuid epoch{};
     dtv::userland::wire::Optional<dtv::userland::wire::WString<64>> instance{};
     dtv::userland::wire::ListResponse list{};
+    // Optional, payload-free control request logging for --verbose.
+    bool verbose = false;
     std::array<std::uint8_t, dtv::userland::wire::kMaxPublicReceivers> receiver_index{};
 };
 

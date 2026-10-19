@@ -63,7 +63,7 @@ Px4dArguments parse_px4d_arguments(int argc,
     for (int index = 1; index < argc; ++index) {
         if (argv[index] == nullptr) return invalid("null argument");
         const std::string_view option(argv[index]);
-        if (option == "--help") {
+        if (option == "--help" || option == "-h") {
             if (argc != 2) return invalid("--help cannot be combined");
             result.valid = true;
             result.help = true;
@@ -81,17 +81,15 @@ Px4dArguments parse_px4d_arguments(int argc,
             result.models = true;
             return result;
         }
-        if (option == "--list") {
-            if (argc != 2) return invalid("--list cannot be combined");
-            result.valid = true;
-            result.list = true;
-            return result;
-        }
         if (option == "--list-json") {
             if (argc != 2) return invalid("--list-json cannot be combined");
             result.valid = true;
             result.list_json = true;
             return result;
+        }
+        if (option == "-v" || option == "--verbose") {
+            result.verbose = true;
+            continue;
         }
         if (option == "--group") {
             if (result.group) return invalid("duplicate --group");
@@ -114,6 +112,7 @@ Px4dArguments parse_px4d_arguments(int argc,
         }
 #endif
         if (option != "--device" && option != "-d" && option != "--firmware" &&
+            option != "-F" &&
             option != "--runtime-dir" && option != "--fd" &&
             option != "--instance") {
             return invalid("unknown argument");
@@ -148,7 +147,7 @@ Px4dArguments parse_px4d_arguments(int argc,
             if (have_instance) return invalid("duplicate --instance");
             have_instance = true;
             result.instance = value;
-        } else if (option == "--firmware") {
+        } else if (option == "--firmware" || option == "-F") {
             if (have_firmware) return invalid("duplicate --firmware");
             have_firmware = true;
             result.firmware = value;

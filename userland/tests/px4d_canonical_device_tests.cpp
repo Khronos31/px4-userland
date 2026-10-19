@@ -59,6 +59,19 @@ DeviceObservation q3_observation(const char* base, std::uint8_t device,
 
 bool test_canonical_parser()
 {
+    const auto help = parse({"px4d", "-h"});
+    CHECK(help.valid && help.help);
+    CHECK(!parse({"px4d", "-h", "--models"}).valid);
+    CHECK(!parse({"px4d", "--list"}).valid);
+    CHECK(!parse({"px4d", "-l"}).valid);
+    const auto verbose = parse({"px4d", "-v", "--device", "serial:00000000000010",
+                                "-F", "firmware.bin"});
+    CHECK(verbose.valid && verbose.verbose && verbose.firmware == "firmware.bin");
+    const auto verbose_long = parse({"px4d", "--verbose", "--device",
+                                     "serial:00000000000010", "--firmware", "firmware.bin"});
+    CHECK(verbose_long.valid && verbose_long.verbose);
+    CHECK(!parse({"px4d", "-F", "a", "--firmware", "b", "--device",
+                  "serial:00000000000010"}).valid);
     const auto catalog = parse({"px4d", "--models"});
     CHECK(catalog.valid && catalog.models && !catalog.list_json);
     CHECK(!parse({"px4d", "--models", "--list-json"}).valid);

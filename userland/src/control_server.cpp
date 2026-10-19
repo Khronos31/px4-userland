@@ -1285,6 +1285,11 @@ struct PosixControlServer::Impl final {
 
     void dispatch(Client& client, const wire::ControlRequest& request) noexcept
     {
+        if (context->verbose) {
+            std::fprintf(stderr, "px4d verbose: control opcode=0x%04x request_id=%u\n",
+                         static_cast<unsigned int>(request.opcode),
+                         static_cast<unsigned int>(request.request_id));
+        }
         switch (request.kind) {
         case wire::ControlRequestKind::list:
             serve_list(client, request);

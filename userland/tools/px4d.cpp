@@ -61,12 +61,11 @@ void usage() noexcept
 {
     std::printf(
         "usage:\n"
-        "  px4d -d|--device serial:VALUE|usb:BUS-PORT[,BUS-PORT] --firmware PATH "
+        "  px4d -d|--device serial:VALUE|usb:BUS-PORT[,BUS-PORT] -F|--firmware PATH "
         "[--instance TOKEN] "
         "[--runtime-dir PATH] [--group] [--allow-lnb-power]\n"
-        "  px4d --fd FD [--fd FD] [-d|--device serial:VALUE] --firmware PATH "
+        "  px4d --fd FD [--fd FD] [-d|--device serial:VALUE] -F|--firmware PATH "
         "[--instance TOKEN] [--runtime-dir PATH] [--group] [--allow-lnb-power]\n"
-        "  px4d --list\n"
         "  px4d --list-json\n"
         "  px4d --models\n"
         "  px4d --version\n"
@@ -80,8 +79,10 @@ void usage() noexcept
         "  --exit-on-stdin-eof  exit with cleanup when stdin reaches EOF (Windows\n"
         "                     cooperative parent stop)\n"
 #endif
-        "  --list             print connected supported enclosures and exit;\n"
-        "  --list-json        print the same data as compact JSON and exit;\n"
+        "  -h, --help        print this help and exit\n"
+        "  -F, --firmware PATH  load the tuner firmware image\n"
+        "  -v, --verbose     log control request types to stderr\n"
+        "  --list-json        print read-only connected USB inventory as JSON\n"
         "  --models          print static supported models and USB IDs (text)\n"
         "  --version         print current build version and exit\n"
         "                     read-only, needs neither firmware nor a daemon\n");
@@ -536,6 +537,7 @@ int serve(const Px4dArguments& arguments, std::unique_ptr<Px4Family> family) noe
         std::fprintf(stderr, "control context: %s\n", error_string(built.error()));
         return exit_status(built.error());
     }
+    context->verbose = arguments.verbose;
     const auto published = owned.publish(*context);
     if (!published) {
         std::fprintf(stderr, "control endpoint: %s\n", error_string(published.error()));
@@ -731,7 +733,7 @@ int main(int argc, char** argv)
         }
         return 0;
     }
-    if (arguments.list || arguments.list_json) return list_devices(arguments.list_json);
+    if (arguments.list_json) return list_devices(true);
 
     FirmwareProvider firmware_provider(arguments.firmware);
     const auto firmware = firmware_provider.load();
@@ -790,6 +792,11 @@ int main(int argc, char** argv)
         return exit_status(runtime.error());
     }
     const DeviceModel model = runtime.value()->model();
+    if (arguments.verbose) {
+        std::fprintf(stderr, "px4d verbose: USB enclosure opened model=%s functions=%u\n",
+                     device_profile(model).name,
+                     static_cast<unsigned int>(runtime.value()->bridge_count()));
+    }
     const bool single_bridge = runtime.value()->bridge_count() == 1U;
     // Every --fd must belong to the selected enclosure: an extra descriptor
     // that selection ignored is an argument error, not a silent leftover.

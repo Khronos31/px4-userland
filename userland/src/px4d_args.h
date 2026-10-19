@@ -21,10 +21,9 @@ struct Px4dArguments final {
     bool valid = false;
     bool help = false;
     bool version = false;
-    // `px4d --list`: enumerate supported enclosures and exit (SPEC 4.6).
-    bool list = false;
     bool list_json = false;
     bool models = false;
+    bool verbose = false;
     bool group = false;
     bool allow_lnb_power = false;
 #if defined(_WIN32)
