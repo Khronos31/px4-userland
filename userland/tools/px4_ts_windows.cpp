@@ -119,6 +119,10 @@ int main(int argc, char** argv)
         print_px4_ts_usage(stdout);
         return 0;
     }
+    if (arguments.version) {
+        std::printf("px4-ts %s\n", PX4_USERLAND_PRODUCT_VERSION);
+        return 0;
+    }
     if (!install_handlers()) {
         std::fprintf(stderr, "signal setup failed\n");
         return 70;

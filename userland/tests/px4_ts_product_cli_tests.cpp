@@ -30,6 +30,12 @@ bool check(bool condition, const char* message)
 int main()
 {
     bool ok = true;
+    const auto version = parse({"px4-ts", "--version"});
+    ok &= check(version.valid && version.version && version.product_cli && !version.help,
+                "--version is standalone and exits before recording");
+    ok &= check(!parse({"px4-ts", "--version", "--receiver", "0"}).valid,
+                "--version cannot be combined");
+
     const auto t13 = parse({"px4-ts", "-d", "serial:00001205000960", "--receiver", "0",
                             "-c", "T13", "-t", "-"});
     ok &= check(t13.valid && t13.product_cli && t13.system == px4::userland::ipc::System::ISDB_T &&

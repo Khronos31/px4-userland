@@ -68,6 +68,7 @@ void usage() noexcept
         "[--instance TOKEN] [--runtime-dir PATH] [--group] [--allow-lnb-power]\n"
         "  px4d --list\n"
         "  px4d --list-json\n"
+        "  px4d --version\n"
         "\n"
         "  serial:VALUE is the 14-digit serial base for paired devices or the\n"
         "  15-digit USB serial for single-device models.  Pass one --fd per\n"
@@ -80,6 +81,7 @@ void usage() noexcept
 #endif
         "  --list             print connected supported enclosures and exit;\n"
         "  --list-json        print the same data as compact JSON and exit;\n"
+        "  --version         print current build version and exit\n"
         "                     read-only, needs neither firmware nor a daemon\n");
 }
 
@@ -711,6 +713,10 @@ int main(int argc, char** argv)
     }
     if (arguments.help) {
         usage();
+        return 0;
+    }
+    if (arguments.version) {
+        std::printf("px4d %s\n", PX4_USERLAND_PRODUCT_VERSION);
         return 0;
     }
     if (arguments.list || arguments.list_json) return list_devices(arguments.list_json);

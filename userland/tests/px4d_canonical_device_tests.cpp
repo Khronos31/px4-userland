@@ -59,6 +59,9 @@ DeviceObservation q3_observation(const char* base, std::uint8_t device,
 
 bool test_canonical_parser()
 {
+    const auto version = parse({"px4d", "--version"});
+    CHECK(version.valid && version.version && !version.help && !version.list_json);
+    CHECK(!parse({"px4d", "--version", "--list-json"}).valid);
     const auto serial = parse({"px4d", "--device", "serial:00000000000010",
                                "--firmware", "firmware.bin"});
     CHECK(serial.valid && serial.device == "00000000000010");

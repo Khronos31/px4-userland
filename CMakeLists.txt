@@ -399,6 +399,8 @@ if(WIN32)
         ${CMAKE_CURRENT_SOURCE_DIR}/userland/tools
     )
     target_compile_features(px4-ts PRIVATE cxx_std_17)
+    target_compile_definitions(px4-ts PRIVATE
+        PX4_USERLAND_PRODUCT_VERSION="${PROJECT_VERSION}")
     px4_enable_project_warnings(px4-ts)
     # Px4TsRunner::run() frames a full TS frame buffer
     # (kFrameHeaderSize + kMaxTsDataPayload = 1,048,616 bytes) plus an 8 KiB
@@ -1176,6 +1178,8 @@ if(TARGET px4_userland_posix_ipc)
         ${CMAKE_CURRENT_SOURCE_DIR}/userland/tools
     )
     target_compile_features(px4-ts PRIVATE cxx_std_17)
+    target_compile_definitions(px4-ts PRIVATE
+        PX4_USERLAND_PRODUCT_VERSION="${PROJECT_VERSION}")
     px4_enable_project_warnings(px4-ts)
 
     if(PX4_ENABLE_LIBUSB)
