@@ -46,6 +46,7 @@ struct Arguments final {
     std::string instance;
     std::string runtime_directory;
     std::string_view error;
+    bool list = false;
     bool status = false;
 };
 
@@ -96,14 +97,19 @@ Arguments parse_arguments(int argc, const char* const* argv) noexcept
             }
             continue;
         }
+        if (option == "list") {
+            if (result.list || result.status) return invalid("duplicate command");
+            result.list = true;
+            continue;
+        }
         if (option == "status") {
-            if (result.status) return invalid("duplicate status command");
+            if (result.status || result.list) return invalid("duplicate command");
             result.status = true;
             continue;
         }
-        return invalid("only status is supported");
+        return invalid("list or status command is required");
     }
-    if (!result.status) return invalid("status command is required");
+    if (!result.status && !result.list) return invalid("list or status command is required");
     if ((have_device && result.device.empty()) || (have_instance && result.instance.empty()))
         return invalid("selector value must not be empty");
     if (have_runtime && result.runtime_directory.empty())
@@ -125,7 +131,7 @@ void usage(FILE* output) noexcept
 {
     std::fprintf(output,
                  "usage: %s [--device serial:SERIAL|usb:BUS-PORT[,BUS-PORT...]] "
-                 "[--instance TOKEN] [--runtime-dir PATH] [--group] status\n"
+                 "[--instance TOKEN] [--runtime-dir PATH] [--group] list|status\n"
                  "       %s --help | --version\n", PX4CTL_TOOL_NAME, PX4CTL_TOOL_NAME);
 }
 
@@ -249,6 +255,164 @@ int exit_status(CommonError error) noexcept
     case CommonError::INTERNAL: return 70;
     }
     return 70;
+}
+
+const char* mode_name(wire::Mode mode) noexcept
+{
+    switch (mode) {
+    case wire::Mode::cold: return "cold";
+    case wire::Mode::runtime: return "runtime";
+    case wire::Mode::unknown: return "unknown";
+    }
+    return "unknown";
+}
+
+const char* context_state_name(wire::ContextState state) noexcept
+{
+    switch (state) {
+    case wire::ContextState::starting: return "starting";
+    case wire::ContextState::ready: return "ready";
+    case wire::ContextState::stopping: return "stopping";
+    case wire::ContextState::error: return "error";
+    case wire::ContextState::disconnected: return "disconnected";
+    }
+    return "unknown";
+}
+
+const char* receiver_system_name(wire::Systems systems) noexcept
+{
+    // Comma-separated canonical system tokens; bit 2 remains reserved in Core v1.
+    switch (systems.mask) {
+    case 0x01U: return "ISDB-T";
+    case 0x02U: return "ISDB-S";
+    case 0x03U: return "ISDB-T,ISDB-S";
+    case 0x04U: return "ISDB-C";
+    case 0x05U: return "ISDB-T,ISDB-C";
+    case 0x06U: return "ISDB-S,ISDB-C";
+    case 0x07U: return "ISDB-T,ISDB-S,ISDB-C";
+    }
+    return "unknown";
+}
+
+std::size_t device_number(const wire::ListResponse& list,
+                          const wire::ReceiverDescriptor& receiver) noexcept
+{
+    if (!receiver.binding.present) return 0U;
+    for (std::size_t index = 0U; index < list.functions.count; ++index) {
+        if (list.functions.items[index].id == receiver.binding.value.function_id)
+            return index + 1U;
+    }
+    return 0U;
+}
+
+bool print_list(const wire::ListResponse& list, const wire::StatusResponse& status) noexcept
+{
+    std::uint8_t usb_present_mask = 0U;
+    // LIST function order is the legacy physical device slot order.
+    for (std::size_t index = 0U; index < list.functions.count && index < 8U; ++index) {
+        if (list.functions.items[index].present)
+            usb_present_mask = static_cast<std::uint8_t>(
+                usb_present_mask | static_cast<std::uint8_t>(1U << index));
+    }
+    if (std::fputs("serial=", stdout) == EOF) return false;
+    if (list.enclosure.present) {
+        const wire::Enclosure& enclosure = list.enclosure.value;
+        const wire::Identity& identity = enclosure.identity;
+        if (identity.serial_state == wire::IdentitySerialState::present &&
+            identity.serial.present) {
+            if (std::fprintf(stdout, "%.*s",
+                             static_cast<int>(identity.serial.value.length),
+                             identity.serial.value.bytes.data()) < 0)
+                return false;
+        } else if (std::fputs("unknown", stdout) == EOF) {
+            return false;
+        }
+    } else if (std::fputs("unknown", stdout) == EOF) {
+        return false;
+    }
+    if (std::fprintf(stdout, " ready=%s usb-present-mask=0x%02x\n",
+                     context_state_name(status.context.state),
+                     static_cast<unsigned int>(usb_present_mask)) < 0)
+        return false;
+    if (list.enclosure.present) {
+        const wire::Enclosure& enclosure = list.enclosure.value;
+        if (std::fprintf(stdout, "enclosure id=%u",
+                         static_cast<unsigned int>(enclosure.id)) < 0)
+            return false;
+        if (enclosure.model.present &&
+            std::fprintf(stdout, " model=%.*s",
+                         static_cast<int>(enclosure.model.value.name.length),
+                         enclosure.model.value.name.bytes.data()) < 0)
+            return false;
+        if (std::fputc('\n', stdout) == EOF) return false;
+    } else if (std::fputs("enclosure unavailable\n", stdout) == EOF) {
+        return false;
+    }
+    if (std::fputs("functions:\n", stdout) == EOF) return false;
+    for (std::size_t index = 0U; index < list.functions.count; ++index) {
+        const wire::UsbFunction& function = list.functions.items[index];
+        if (std::fprintf(stdout, "  function id=%u usb=%04x:%04x mode=%s",
+                         static_cast<unsigned int>(function.id),
+                         static_cast<unsigned int>(function.vid),
+                         static_cast<unsigned int>(function.pid), mode_name(function.mode)) < 0)
+            return false;
+        if (function.location.usb_path.present &&
+            std::fprintf(stdout, " path=%.*s",
+                         static_cast<int>(function.location.usb_path.value.length),
+                         function.location.usb_path.value.bytes.data()) < 0)
+            return false;
+        if (std::fputc('\n', stdout) == EOF) return false;
+    }
+    if (!list.receivers.present) {
+        if (std::fputs("receivers=unknown\n", stdout) == EOF) return false;
+    } else if (list.receivers.value.count == 0U) {
+        if (std::fputs("receivers=0\n", stdout) == EOF) return false;
+    } else {
+        for (std::size_t index = 0U; index < list.receivers.value.count; ++index) {
+            const wire::ReceiverDescriptor& receiver = list.receivers.value.items[index];
+            const std::size_t device = device_number(list, receiver);
+            const std::size_t local = receiver.binding.present ?
+                receiver.binding.value.local_id : 0U;
+            if (std::fprintf(stdout, "receiver=%u device=",
+                             static_cast<unsigned int>(receiver.id)) < 0)
+                return false;
+            if (device == 0U) {
+                if (std::fputs("unknown", stdout) == EOF) return false;
+            } else if (std::fprintf(stdout, "%u", static_cast<unsigned int>(device)) < 0) {
+                return false;
+            }
+            if (receiver.binding.present) {
+                if (std::fprintf(stdout, " local=%u",
+                                 static_cast<unsigned int>(local)) < 0)
+                    return false;
+            } else if (std::fputs(" local=unknown", stdout) == EOF) {
+                return false;
+            }
+            if (std::fprintf(stdout, " system=%s\n",
+                             receiver_system_name(receiver.systems)) < 0)
+                return false;
+        }
+    }
+    if (!list.readers.present) {
+        if (std::fputs("readers=unknown\n", stdout) == EOF) return false;
+    } else if (list.readers.value.count == 0U) {
+        if (std::fputs("readers=0\n", stdout) == EOF) return false;
+    } else {
+        if (std::fputs("readers:\n", stdout) == EOF) return false;
+        for (std::size_t index = 0U; index < list.readers.value.count; ++index) {
+            const wire::ReaderDescriptor& reader = list.readers.value.items[index];
+            if (std::fprintf(stdout, "  reader id=%u",
+                             static_cast<unsigned int>(reader.id)) < 0)
+                return false;
+            if (reader.binding.present &&
+                std::fprintf(stdout, " binding=%u:%u",
+                             static_cast<unsigned int>(reader.binding.value.function_id),
+                             static_cast<unsigned int>(reader.binding.value.local_id)) < 0)
+                return false;
+            if (std::fputc('\n', stdout) == EOF) return false;
+        }
+    }
+    return std::fflush(stdout) == 0;
 }
 
 }  // namespace
@@ -417,6 +581,13 @@ int main(int argc, char** argv)
         found = true;
     }
     if (!found) return 3;
+    if (arguments.list) {
+        if (!print_list(snapshot.snapshot.list, snapshot.snapshot.status)) {
+            std::fprintf(stderr, "%s: list output failed\n", PX4CTL_TOOL_NAME);
+            return 70;
+        }
+        return 0;
+    }
     wire::StatusContext context{&snapshot.snapshot.list};
     const auto size = wire::status_json_size(snapshot.snapshot.status, context);
     if (!size) return exit_status(size.error());

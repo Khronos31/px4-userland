@@ -1,9 +1,14 @@
 # px4-userland 仕様
 
-Status: Frozen v0.38 (2026-10-19)
+Status: Frozen v0.39 (2026-10-20)
 
 本書の`MUST`、`MUST NOT`、`SHOULD`は規範要件を示す。実機観測で前提の誤りが判明した場合も暗黙に
 実装だけを変えず、本書のversionと変更理由を更新してから実装する。
+
+### v0.39 change record (2026-10-20)
+
+- 公開ctlの受信機一覧の単数キー system= を維持し、複数方式を ISDB-T,ISDB-S のように正式名称のカンマ区切りで表示する。旧略号 ISDB-T/S は新規テキスト出力では使わない。将来ISDB-Cに対応した場合のみ、該当受信機のカンマ区切りの値に ISDB-C を追加できる（現Core v1は未対応）。
+- receiver/device/local、USB presence、serialなどは保持。公開discovery JSONの systems[] 配列には変更を加えない。下記の旧版JSON説明にある system 文字列はhistorical v0.26の記録であり、現行discovery JSONへの復帰を意味しない。denpa上流パーサの追従は他CLI変更とまとめて後で伝える。
 
 ### v0.38 change record (2026-10-19)
 
@@ -621,7 +626,7 @@ slotとTSIDはIPC上で別fieldとし、値の大きさから暗黙判定しな�
     `status`はgroupingの結果（`ready`、`incomplete`、`duplicate`、`invalid_observation`）とする。
     `ready`以外の筐体では`px4d --device`は起動できない。
   - 続く`receivers`個のreceiver行: `px4ctl list`（6.4節`LIST`）と同じ書式
-    `receiver=<ID> device=<dev_id> local=<local_id> system=<ISDB-T|ISDB-S|ISDB-T/S>`で、4.2節の表をそのまま出す。
+    `receiver=<ID> device=<dev_id> local=<local_id> system=<ISDB-T|ISDB-S|ISDB-T,ISDB-S>`で、4.2節の表をそのまま出す。
 - 対象機種のUSB IDを持ちながら筐体にまとめられなかったUSBデバイスは、筐体行の後に
   `rejected serial=<serial> model=<機種名> usb=<vid>:<pid> status=<理由>`として1台1行で出す。理由は
   serialを読めない、または4.1節の形式に合わない`invalid_serial`、もしくはopenまたはdescriptor取得に

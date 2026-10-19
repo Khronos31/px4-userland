@@ -20,7 +20,7 @@ const char* system_name(ipc::System system) noexcept
     case ipc::System::ISDB_S:
         return "ISDB-S";
     case ipc::System::ISDB_T_OR_S:
-        return "ISDB-T/S";
+        return "ISDB-T,ISDB-S";
     }
     return "";
 }

@@ -1918,7 +1918,8 @@ void on_child_term(int) { g_child_stop = 1; }
                                    bool shared_group = false,
                                    bool wrong_product = false,
                                    bool shared_serial_model = false,
-                                   std::optional<bool> serial_unique = std::nullopt)
+                                   std::optional<bool> serial_unique = std::nullopt,
+                                   bool serial_missing = false)
 {
     std::signal(SIGTERM, on_child_term);
     CardBackend card_backend;
@@ -1955,6 +1956,12 @@ void on_child_term(int) { g_child_stop = 1; }
         !instance.empty() &&
         product_context(tuner, epoch.value(), *context, first, second, instance,
                         serial_unique)) {
+        if (serial_missing && context->list.enclosure.present) {
+            auto& device_identity = context->list.enclosure.value.identity;
+            device_identity.serial_state = wire::IdentitySerialState::absent;
+            device_identity.serial.present = false;
+            device_identity.uniqueness = wire::Uniqueness::unknown;
+        }
         if (wrong_product) {
             auto& product = context->list.producer.product;
             product = {};
@@ -1999,7 +2006,8 @@ void on_child_term(int) { g_child_stop = 1; }
 pid_t start_child(const std::string& runtime, const std::string& instance,
                   bool shared_group = false, bool wrong_product = false,
                   bool shared_serial_model = false,
-                  std::optional<bool> serial_unique = std::nullopt)
+                  std::optional<bool> serial_unique = std::nullopt,
+                  bool serial_missing = false)
 {
     int pipe_fds[2] = {-1, -1};
     if (::pipe(pipe_fds) != 0) return -1;
@@ -2007,7 +2015,7 @@ pid_t start_child(const std::string& runtime, const std::string& instance,
     if (pid == 0) {
         ::close(pipe_fds[0]);
         run_child_server(runtime, pipe_fds[1], instance, shared_group, wrong_product,
-                         shared_serial_model, serial_unique);
+                         shared_serial_model, serial_unique, serial_missing);
     }
     ::close(pipe_fds[1]);
     if (pid < 0) {
@@ -2082,7 +2090,7 @@ int create_busy_endpoint(const std::string& runtime, std::string_view instance)
 
 bool run_ctl_status(const std::string& runtime, const std::string& instance,
                     int& status, std::string& output,
-                    const char* device = nullptr)
+                    const char* device = nullptr, const char* command = "status")
 {
     int pipe_fds[2] = {-1, -1};
     if (::pipe(pipe_fds) != 0) return false;
@@ -2094,18 +2102,18 @@ bool run_ctl_status(const std::string& runtime, const std::string& instance,
         if (device != nullptr && !instance.empty())
             ::execl(PX4CTL_EXECUTABLE, PX4CTL_EXECUTABLE,
                     "--runtime-dir", runtime.c_str(), "--instance", instance.c_str(),
-                    "--device", device, "status", static_cast<char*>(nullptr));
+                    "--device", device, command, static_cast<char*>(nullptr));
         else if (device != nullptr)
             ::execl(PX4CTL_EXECUTABLE, PX4CTL_EXECUTABLE,
                     "--runtime-dir", runtime.c_str(), "--device", device,
-                    "status", static_cast<char*>(nullptr));
+                    command, static_cast<char*>(nullptr));
         else if (instance.empty())
             ::execl(PX4CTL_EXECUTABLE, PX4CTL_EXECUTABLE,
-                    "--runtime-dir", runtime.c_str(), "status", static_cast<char*>(nullptr));
+                    "--runtime-dir", runtime.c_str(), command, static_cast<char*>(nullptr));
         else
             ::execl(PX4CTL_EXECUTABLE, PX4CTL_EXECUTABLE,
                     "--runtime-dir", runtime.c_str(), "--instance", instance.c_str(),
-                    "status", static_cast<char*>(nullptr));
+                    command, static_cast<char*>(nullptr));
         std::_Exit(127);
     }
     ::close(pipe_fds[1]);
@@ -2378,6 +2386,48 @@ bool test_actual_ctl_rejects_wrong_product()
     const bool stopped = stop_child(server_pid);
     V1_CHECK(done && WIFEXITED(status) && WEXITSTATUS(status) == 3 &&
              output.empty() && stopped);
+    return true;
+}
+
+bool test_actual_ctl_list_formats_typed_topology()
+{
+    TempRuntime runtime;
+    V1_CHECK(runtime.valid());
+    const std::string instance = "list-instance";
+    const pid_t server_pid = start_child(runtime.path(), instance);
+    V1_CHECK(server_pid > 0);
+    int status = 0;
+    std::string output;
+    const bool done = run_ctl_status(runtime.path(), instance, status, output, nullptr, "list");
+    const bool stopped = stop_child(server_pid);
+    V1_CHECK(done && WIFEXITED(status) && WEXITSTATUS(status) == 0 && stopped);
+    V1_CHECK(output.find("serial=00001205000960 ready=ready usb-present-mask=0x03\n") == 0U &&
+             output.find("enclosure id=") != std::string::npos &&
+             output.find("functions:\n  function id=") != std::string::npos &&
+             output.find("receiver=0 device=1 local=0 system=ISDB-S\n") != std::string::npos &&
+             output.find("receiver=4 device=2 local=0 system=ISDB-S\n") != std::string::npos &&
+             output.find("readers:\n  reader id=") != std::string::npos);
+    V1_CHECK(output.find("systems=") == std::string::npos &&
+             output.find("{\"schema\"") == std::string::npos);
+    return true;
+}
+
+bool test_actual_ctl_list_marks_missing_serial_unknown()
+{
+    TempRuntime runtime;
+    V1_CHECK(runtime.valid());
+    const std::string instance = "list-no-serial";
+    const pid_t server_pid = start_child(runtime.path(), instance, false, false, false,
+                                         std::nullopt, true);
+    V1_CHECK(server_pid > 0);
+    int status = 0;
+    std::string output;
+    const bool done = run_ctl_status(runtime.path(), instance, status, output, nullptr, "list");
+    const bool stopped = stop_child(server_pid);
+    V1_CHECK(done && WIFEXITED(status) && WEXITSTATUS(status) == 0 && stopped);
+    V1_CHECK(output.find("serial=unknown") != std::string::npos &&
+             output.find("serial=00001205000960") == std::string::npos &&
+             output.find("ready=ready") != std::string::npos);
     return true;
 }
 
@@ -3066,6 +3116,10 @@ int main()
         {"installed_ctl_status_against_daemon_process",
          test_installed_ctl_status_against_daemon_process},
         {"actual_ctl_rejects_wrong_product", test_actual_ctl_rejects_wrong_product},
+        {"actual_ctl_list_formats_typed_topology",
+         test_actual_ctl_list_formats_typed_topology},
+        {"actual_ctl_list_marks_missing_serial_unknown",
+         test_actual_ctl_list_marks_missing_serial_unknown},
         {"ctl_rejects_shared_serial_assertion", test_ctl_rejects_shared_serial_assertion},
         {"ctl_rejects_unverified_serial_assertion",
          test_ctl_rejects_unverified_serial_assertion},

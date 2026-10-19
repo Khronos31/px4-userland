@@ -260,7 +260,7 @@ PX-Q3U4 に搭載されている 8 つの受信機は以下の番号に割り当
 | 4, 5 | ISDB-S | デバイス 2（衛星放送） |
 | 6, 7 | ISDB-T | デバイス 2（地上波） |
 
-DTV02A-5TS-P / PX-MLT5PE の 5 つの受信機は 0〜4 番で、いずれも選局ごとに ISDB-T と ISDB-S を選択できます（同じ lease のまま切り替え可能）。`px4ctl list` では `system=ISDB-T/S` と表示され、存在しない 5〜7 番は `status` に表示されません。
+DTV02A-5TS-P / PX-MLT5PE の 5 つの受信機は 0〜4 番で、いずれも選局ごとに ISDB-T と ISDB-S を選択できます（同じ lease のまま切り替え可能）。`px4ctl list` では `system=ISDB-T,ISDB-S` と表示され、存在しない 5〜7 番は `status` に表示されません。
 
 | 受信機番号 | 放送方式 | 備考 |
 |:---:|:---:|---|
@@ -375,7 +375,7 @@ receiver=1 device=1 local=1 system=ISDB-S lnb_15v_supported=true
 receiver=2 device=1 local=2 system=ISDB-T lnb_15v_supported=false
 ...
 serial=000020263901491 model=DTV02A-5TS-P usb=0511:924e status=ready receivers=5 serial_unique=true dev1_bus=1 dev1_address=30 dev1_port=1-7.5
-receiver=0 device=1 local=0 system=ISDB-T/S lnb_15v_supported=true
+receiver=0 device=1 local=0 system=ISDB-T,ISDB-S lnb_15v_supported=true
 ...
 ```
 
