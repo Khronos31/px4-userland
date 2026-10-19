@@ -820,7 +820,7 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
             userland/tools/px4d_list_format.cpp
             userland/tests/px4d_list_format_tests.cpp
         )
-        target_link_libraries(px4_userland_tests PRIVATE px4_userland_posix_ipc)
+        target_link_libraries(px4_userland_tests PRIVATE px4_userland_posix_ipc dtv::json)
         target_compile_definitions(px4_userland_tests PRIVATE
             PX4_POSIX_IPC_TEST_ACCESS=1
         )

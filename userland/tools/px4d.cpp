@@ -123,8 +123,13 @@ int list_devices(bool json) noexcept
         std::fprintf(stderr, "enumeration failed: %s\n", error_string(grouping.error()));
         return exit_status(grouping.error());
     }
-    const std::string output = json ? tools::format_device_list_json(grouping.value())
-                                    : tools::format_device_list(grouping.value());
+    const std::string output = json ? tools::format_discovery_json(
+        grouping.value(), PX4_USERLAND_PRODUCT_VERSION)
+        : tools::format_device_list(grouping.value());
+    if (json && output.empty()) {
+        std::fprintf(stderr, "list-json: unable to represent device inventory\n");
+        return exit_status(Error::INVALID_ARGUMENT);
+    }
     if ((!output.empty() &&
          std::fwrite(output.data(), 1U, output.size(), stdout) != output.size()) ||
         std::fflush(stdout) != 0) {
