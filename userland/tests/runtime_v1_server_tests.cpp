@@ -151,23 +151,38 @@ public:
 
 class CardSession final : public CardProtocolSession {
 public:
+    // Only the dedicated successful-APDU proof enables a synthetic card.
+    // All pre-existing fixtures keep the original no-ATR/UNSUPPORTED behavior.
+    void enable_mock_apdu() noexcept { mock_apdu_ = true; }
     Result<void> initialize() noexcept override
     {
         initialize_calls.fetch_add(1U);
+        if (mock_apdu_) {
+            ready_ = true;
+            atr_.length = 2U;
+            atr_.bytes[0U] = 0x3bU;
+            atr_.bytes[1U] = 0x00U;
+        }
         return Result<void>::success();
     }
-    Result<std::size_t> transmit(ByteView, MutableByteView) noexcept override
+    Result<std::size_t> transmit(ByteView, MutableByteView response) noexcept override
     {
         transmit_calls.fetch_add(1U);
-        return Result<std::size_t>::failure(Error::UNSUPPORTED);
+        if (!mock_apdu_ || !ready_ || response.data == nullptr || response.size < 2U)
+            return Result<std::size_t>::failure(Error::UNSUPPORTED);
+        response.data[0U] = 0x90U;
+        response.data[1U] = 0x00U;
+        return Result<std::size_t>::success(2U);
     }
-    bool initialized() const noexcept override { return false; }
+    bool initialized() const noexcept override { return ready_; }
     const CardAtr& atr() const noexcept override { return atr_; }
-    void invalidate() noexcept override {}
+    void invalidate() noexcept override { ready_ = false; }
     std::atomic<std::size_t> initialize_calls{0U};
     std::atomic<std::size_t> transmit_calls{0U};
 
 private:
+    bool mock_apdu_ = false;
+    bool ready_ = false;
     CardAtr atr_{};
 };
 
@@ -1801,6 +1816,61 @@ bool test_card_service_over_control()
     return true;
 }
 
+// Success-path CARD_SERVICE proof: one real newwire request chain against the
+// existing CardService and card worker, with only the physical APDU stubbed.
+bool test_card_successful_apdu_over_control()
+{
+    Fixture f("v1-card-success");
+    f.card_session.enable_mock_apdu();
+    V1_CHECK(f.start());
+    auto client = TestClient::connect(f.endpoint);
+    V1_CHECK(client && client->hello(nullptr, wire::kFeatureCardService));
+
+    wire::CardConnectRequest connect;
+    connect.key.epoch = client->epoch;
+    connect.key.reader_id = 0U;
+    connect.share = wire::Share::shared;
+    connect.preferred_protocols = 1U;
+    Reply reply;
+    V1_CHECK(client->request(wire::kOpcodeCardConnect,
+                             TestClient::encode(connect, &wire::encode_card_connect_request),
+                             reply));
+    V1_CHECK(reply.header.kind == wire::Kind::response);
+    const auto joined = wire::decode_card_session_result(reply.view());
+    V1_CHECK(joined && joined.value().card_handle != 0U &&
+             joined.value().bound_generation != 0U &&
+             joined.value().usable && joined.value().atr.present);
+
+    wire::CardTransmitRequest transmit;
+    transmit.key.epoch = client->epoch;
+    transmit.key.reader_id = 0U;
+    transmit.key.card_handle = joined.value().card_handle;
+    transmit.key.bound_generation = joined.value().bound_generation;
+    transmit.protocol = wire::CardProtocol::t1;
+    transmit.command.length = 1U;
+    transmit.command.bytes[0U] = 0x00U;
+    V1_CHECK(client->request(wire::kOpcodeCardTransmit,
+                             TestClient::encode(transmit, &wire::encode_card_transmit_request),
+                             reply));
+    V1_CHECK(reply.header.kind == wire::Kind::response);
+    const auto response = wire::decode_card_transmit_response(reply.view());
+    V1_CHECK(response && response.value().response.length == 2U &&
+             response.value().response.bytes[0U] == 0x90U &&
+             response.value().response.bytes[1U] == 0x00U);
+    V1_CHECK(f.card_session.transmit_calls.load() == 1U);
+
+    wire::CardDisconnectRequest disconnect;
+    disconnect.key = transmit.key;
+    disconnect.disposition = wire::Disposition::leave;
+    V1_CHECK(client->request(
+        wire::kOpcodeCardDisconnect,
+        TestClient::encode(disconnect, &wire::encode_card_disconnect_request), reply));
+    const auto closed = wire::decode_card_disconnect_response(reply.view());
+    V1_CHECK(closed && closed.value().consumed && closed.value().quiesced);
+    V1_CHECK(f.server_ok.load());
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // Separate process: a fresh epoch per daemon context, and a restarted daemon
 // rejects the previous epoch.
@@ -2954,6 +3024,7 @@ int main()
          test_owner_eof_during_tune_and_blocked_cleanup},
         {"pending_operations_fail_closed", test_pending_operations_fail_closed},
         {"card_service_over_control", test_card_service_over_control},
+        {"card_successful_apdu_over_control", test_card_successful_apdu_over_control},
         {"fresh_epoch_after_restart", test_fresh_epoch_after_restart},
         {"installed_ctl_status_against_daemon_process",
          test_installed_ctl_status_against_daemon_process},
