@@ -363,7 +363,7 @@ if(WIN32)
             ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
         )
         target_compile_features(px4_winscard_client PUBLIC cxx_std_17)
-        target_link_libraries(px4_winscard_client PUBLIC advapi32 bcrypt ws2_32 Threads::Threads dtv::core)
+        target_link_libraries(px4_winscard_client PUBLIC advapi32 bcrypt ws2_32 Threads::Threads dtv::core dtv::control)
         target_link_libraries(px4_winscard_client PRIVATE dtv::identity)
         px4_enable_project_warnings(px4_winscard_client)
         add_library(px4_winscard SHARED

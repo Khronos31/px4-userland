@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // Native Windows, hardware-free tests of the actual typed CARD_* client and
-// private AF_UNIX discovery. The peer is a scripted IPC server, not USB/px4d.
+// private AF_UNIX discovery. The peer is a scripted UDTV 1.0 IPC server, not
+// USB/px4d. The client speaks the shared dtv-userland-core CARD control wire
+// (HELLO/LIST/STATUS/CARD_STATUS/CARD_CONNECT/CARD_TRANSMIT/CARD_DISCONNECT).
 #include "windows/winscard_card_client.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -14,6 +16,11 @@
 #include <aclapi.h>
 #include <winioctl.h>
 #include "windows/windows_security.h"
+
+#include "px4/posix_ipc.h"
+
+#include <dtv/userland/records.h>
+#include <dtv/userland/wire.h>
 
 #include <array>
 #include <atomic>
@@ -37,6 +44,11 @@ using namespace px4::userland::ipc;
 using namespace px4::userland::ipc::posix;
 using windows_card::CardClient;
 using Clock = std::chrono::steady_clock;
+namespace w = dtv::userland::wire;
+
+// UDTV 1.0 publishes exactly one local reader id.
+constexpr std::uint16_t kReaderId = 0U;
+constexpr std::uint8_t kEpochByte = 0x5aU;
 
 int failures = 0;
 
@@ -48,6 +60,95 @@ int failures = 0;
             ++failures;                                                        \
         }                                                                      \
     } while (false)
+
+template <std::size_t N>
+bool set_text(w::WString<N>& out, const char* value) noexcept
+{
+    const std::size_t length = std::strlen(value);
+    if (length > out.bytes.size()) return false;
+    out.length = static_cast<std::uint16_t>(length);
+    std::memcpy(out.bytes.data(), value, length);
+    return true;
+}
+
+void set_producer(w::Producer& producer) noexcept
+{
+    (void)set_text(producer.product, "px4-userland");
+    producer.version.length = 5U;
+    std::memcpy(producer.version.bytes.data(), "1.2.3", 5U);
+}
+
+w::ListResponse fixture_list() noexcept
+{
+    w::ListResponse list{};
+    list.epoch[0] = kEpochByte;
+    set_producer(list.producer);
+    list.topology.state = w::TopologyState::complete;
+    list.topology.expected_function_count.present = true;
+    list.topology.expected_function_count.value = 1U;
+    list.functions.count = 1U;
+    auto& function = list.functions.items[0];
+    function.id = 0U;
+    function.vid = 0x1234U;
+    function.pid = 0x5678U;
+    function.mode = w::Mode::runtime;
+    function.location.usb_path.present = true;
+    function.location.usb_path.value.length = 3U;
+    std::memcpy(function.location.usb_path.value.bytes.data(), "1-2", 3U);
+    function.serial_state = w::SerialState::present;
+    function.serial.present = true;
+    (void)set_text(function.serial.value, "function-serial");
+    function.model.present = true;
+    (void)set_text(function.model.value.id, "model-id");
+    (void)set_text(function.model.value.name, "Model name");
+    list.enclosure.present = true;
+    list.enclosure.value.id = 0U;
+    list.enclosure.value.model.present = true;
+    (void)set_text(list.enclosure.value.model.value.id, "model-id");
+    (void)set_text(list.enclosure.value.model.value.name, "Model name");
+    list.enclosure.value.identity.serial_state = w::IdentitySerialState::present;
+    list.enclosure.value.identity.serial.present = true;
+    (void)set_text(list.enclosure.value.identity.serial.value, "enclosure-serial");
+    list.enclosure.value.identity.uniqueness = w::Uniqueness::unique_in_scan;
+    list.receivers.present = true;
+    list.receivers.value.count = 1U;
+    list.receivers.value.items[0].id = 0U;
+    list.receivers.value.items[0].systems.mask = 1U;
+    list.readers.present = true;
+    list.readers.value.count = 1U;
+    list.readers.value.items[0].id = kReaderId;
+    return list;
+}
+
+w::StatusResponse fixture_status(const w::ListResponse& list, bool ready) noexcept
+{
+    w::StatusResponse status{};
+    status.producer = list.producer;
+    status.context.epoch = list.epoch;
+    status.context.state = ready ? w::ContextState::ready : w::ContextState::starting;
+    status.context.instance.present = true;
+    (void)set_text(status.context.instance.value, "instance");
+    status.snapshot.sequence = 1U;
+    status.snapshot.observed_at_ns = 5U;
+    status.scope.kind = w::ScopeKind::enclosure;
+    status.topology = list.topology;
+    status.functions.present = true;
+    status.functions.value = list.functions;
+    status.receivers.present = true;
+    status.receivers.value.count = 1U;
+    status.receivers.value.items[0].descriptor = list.receivers.value.items[0];
+    status.readers.present = true;
+    status.readers.value.count = 1U;
+    status.readers.value.items[0].descriptor = list.readers.value.items[0];
+    status.readers.value.items[0].present = true;
+    status.readers.value.items[0].card.state = w::CardState::present;
+    status.readers.value.items[0].card.sampled_at_ns.present = true;
+    status.readers.value.items[0].card.sampled_at_ns.value = 5U;
+    status.enclosure.present = true;
+    status.enclosure.value = list.enclosure.value;
+    status.enclosure.value.identity.uniqueness = w::Uniqueness::unknown;
+    return status;
+}
 
 class TempRoot final {
 public:
@@ -96,10 +197,10 @@ enum class TransmitBehavior : unsigned {
 struct PeerOptions final {
     bool ready = true;
     bool stall_hello = false;
-    std::uint32_t capabilities = kCapabilityCard | kCapabilityCardGenerationBinding;
+    std::uint64_t features = w::kFeatureCardService;
     std::uint64_t handle = 0x1122334455667788ULL;
     std::uint64_t generation = 0x8877665544332211ULL;
-    bool empty_connect_atr = false;
+    bool invalid_connect = false;
     ErrorCode connect_error = ErrorCode::OK;
 };
 
@@ -132,7 +233,6 @@ public:
     std::atomic<unsigned> closed{0U};
     std::atomic<unsigned> card_connects{0U};
     std::atomic<unsigned> statuses{0U};
-    std::atomic<unsigned> handle_statuses{0U};
     std::atomic<unsigned> transmits{0U};
     std::atomic<unsigned> disconnects{0U};
     std::atomic<unsigned> last_mode{0U};
@@ -146,142 +246,209 @@ public:
     std::atomic<TransmitBehavior> behavior{TransmitBehavior::echo};
 
 private:
-    class Peer final : public FrameConsumer {
+    template <typename Record>
+    static bool encode_record(const Record& value,
+                              dtv::userland::Result<std::size_t> (*encode)(
+                                  const Record&, MutableByteView) noexcept,
+                              std::array<std::uint8_t, w::kMaxControlPayload>& out,
+                              std::size_t& out_size) noexcept
+    {
+        const auto size = encode(value, MutableByteView{out.data(), out.size()});
+        if (!size) return false;
+        out_size = size.value();
+        return true;
+    }
+
+    class Peer final : public w::FrameHandler {
     public:
         Peer(MockDaemon& owner, SocketStream& stream) noexcept
             : owner_(owner), stream_(stream) {}
 
-        Result<void> on_frame(const FrameView& frame) noexcept override
+        Result<void> on_frame(const w::Frame& frame) noexcept override
         {
-            if (frame.header.kind != MessageKind::request) return fail();
-            switch (frame.header.type) {
-            case MessageType::HELLO: {
-                const auto hello = decode_hello_request_payload(frame.payload);
-                if (!hello || hello.value().requested_capabilities !=
-                                  (kCapabilityCard | kCapabilityCardGenerationBinding))
+            if (frame.header.kind != w::Kind::request) return fail();
+            const std::uint16_t opcode = frame.header.opcode;
+            const std::uint32_t request_id = frame.header.request_id;
+            switch (opcode) {
+            case w::kOpcodeHello: {
+                const auto hello = w::decode_hello_request(frame.payload);
+                if (!hello || hello.value().required_features != w::kFeatureCardService)
                     return fail();
                 if (owner_.options_.stall_hello) return Result<void>::success();
-                return reply(frame, HelloResponsePayload{kProtocolMajor, kProtocolMinor,
-                                                         owner_.options_.capabilities});
+                w::HelloResponse response{};
+                response.major = w::kVersionMajor;
+                response.minor = w::kVersionMinor;
+                response.features = owner_.options_.features;
+                response.epoch[0] = kEpochByte;
+                set_producer(response.producer);
+                response.max_control_payload = static_cast<std::uint32_t>(w::kMaxControlPayload);
+                response.max_ts_bytes = static_cast<std::uint32_t>(w::kMaxTsPacketBytes);
+                return reply(opcode, request_id, response, &w::encode_hello_response);
             }
-            case MessageType::LIST: {
-                if (frame.payload.size != 0U) return fail();
-                const auto records = receiver_records(kQ3U4ReceiverCount);
-                if (!records) return fail();
-                const std::array<std::uint8_t, 3U> serial{'1', '2', '3'};
-                return reply(frame, ListResponsePayload{
-                    1U, ByteView{serial.data(), serial.size()},
-                    static_cast<std::uint8_t>(owner_.options_.ready ? 1U : 0U),
-                    0x03U, records.value(), kQ3U4ReceiverCount});
+            case w::kOpcodeList: {
+                const auto request = w::decode_list_request(frame.payload);
+                if (!request) return fail();
+                const w::ListResponse list = fixture_list();
+                return reply(opcode, request_id, list, &w::encode_list_response);
             }
-            case MessageType::CARD_CONNECT: {
-                const auto card = decode_card_connect_request_payload(frame.payload);
-                if (!card) return fail();
-                ++owner_.card_connects;
-                owner_.last_mode.store(static_cast<unsigned>(card.value().share_mode));
-                if (owner_.options_.connect_error != ErrorCode::OK)
-                    return error(frame, owner_.options_.connect_error);
-                if (!owner_.present.load()) return error(frame, ErrorCode::NO_CARD);
-                connected_ = true;
-                const std::array<std::uint8_t, 2U> atr{0x3bU, 0x00U};
-                return reply(frame, CardConnectResponsePayload{
-                    owner_.options_.handle, owner_.options_.empty_connect_atr ?
-                        ByteView{nullptr, 0U} : ByteView{atr.data(), atr.size()}});
+            case w::kOpcodeStatus: {
+                const auto request = w::decode_status_request(frame.payload);
+                if (!request) return fail();
+                const w::ListResponse list = fixture_list();
+                const w::StatusResponse status =
+                    fixture_status(list, owner_.options_.ready);
+                return reply(opcode, request_id, status, &w::encode_status_response);
             }
-            case MessageType::CARD_STATUS:
-            case MessageType::CARD_HANDLE_STATUS: {
-                const bool owned = frame.header.type == MessageType::CARD_HANDLE_STATUS;
-                if (owned) {
-                    const auto card = decode_card_handle_request_payload(frame.payload);
-                    if (!card) return fail();
-                    ++owner_.handle_statuses;
-                    if (!connected_ || card.value().card_handle != owner_.options_.handle)
-                        return error(frame, ErrorCode::NOT_FOUND);
-                    if (owner_.status_error.load() != ErrorCode::OK)
-                        return error(frame, owner_.status_error.load());
-                } else {
-                    if (frame.payload.size != 0U) return fail();
-                    ++owner_.statuses;
-                }
+            case w::kOpcodeCardStatus: {
+                const auto request = w::decode_card_status_request(frame.payload);
+                if (!request) return fail();
+                ++owner_.statuses;
+                if (!owner_.options_.ready) return error(opcode, request_id, ErrorCode::NOT_READY);
+                if (owner_.status_error.load() != ErrorCode::OK)
+                    return error(opcode, request_id, owner_.status_error.load());
                 const bool present = owner_.present.load();
                 const bool initialized = present && connected_ && owner_.initialized.load();
-                const std::array<std::uint8_t, 2U> atr{0x3bU, owner_.status_atr_tail.load()};
-                return reply(frame, CardStatusResponsePayload{
-                    static_cast<std::uint8_t>(present ? 1U : 0U),
-                    static_cast<std::uint8_t>(initialized ? 1U : 0U),
-                    owner_.generation.load(),
-                    initialized ? ByteView{atr.data(), atr.size()} : ByteView{nullptr, 0U}});
+                w::CardStatusResponse status{};
+                status.key.epoch[0] = kEpochByte;
+                status.key.reader_id = kReaderId;
+                status.current_generation = owner_.generation.load();
+                status.present = present;
+                status.initialized = initialized;
+                if (initialized) {
+                    status.protocol.present = true;
+                    status.protocol.value = w::CardProtocol::t1;
+                    status.atr.present = true;
+                    status.atr.value.length = 2U;
+                    status.atr.value.bytes[0] = 0x3bU;
+                    status.atr.value.bytes[1] = owner_.status_atr_tail.load();
+                }
+                return reply(opcode, request_id, status, &w::encode_card_status_response);
             }
-            case MessageType::CARD_TRANSMIT: {
-                const auto card = decode_card_transmit_request_payload(frame.payload);
-                if (!card || card.value().card_handle != owner_.options_.handle)
+            case w::kOpcodeCardConnect: {
+                const auto card = w::decode_card_connect_request(frame.payload);
+                if (!card) return fail();
+                ++owner_.card_connects;
+                owner_.last_mode.store(static_cast<unsigned>(card.value().share));
+                if (owner_.options_.connect_error != ErrorCode::OK)
+                    return error(opcode, request_id, owner_.options_.connect_error);
+                if (!owner_.present.load()) return error(opcode, request_id, ErrorCode::NO_CARD);
+                connected_ = true;
+                w::CardSessionResult response{};
+                response.epoch[0] = kEpochByte;
+                response.reader_id = kReaderId;
+                response.card_handle = owner_.options_.handle;
+                response.bound_generation = owner_.generation.load();
+                response.current_generation = owner_.generation.load();
+                response.present = true;
+                response.initialized = !owner_.options_.invalid_connect;
+                response.usable = !owner_.options_.invalid_connect;
+                if (response.usable) {
+                    response.protocol.present = true;
+                    response.protocol.value = w::CardProtocol::t1;
+                    response.atr.present = true;
+                    response.atr.value.length = 2U;
+                    response.atr.value.bytes[0] = 0x3bU;
+                    response.atr.value.bytes[1] = 0x00U;
+                }
+                return reply(opcode, request_id, response, &w::encode_card_session_result);
+            }
+            case w::kOpcodeCardTransmit: {
+                const auto card = w::decode_card_transmit_request(frame.payload);
+                if (!card || card.value().key.card_handle != owner_.options_.handle)
                     return fail();
                 ++owner_.transmits;
                 switch (owner_.behavior.load()) {
-                case TransmitBehavior::busy: return error(frame, ErrorCode::BUSY);
-                case TransmitBehavior::no_card: return error(frame, ErrorCode::NO_CARD);
-                case TransmitBehavior::card_removed: return error(frame, ErrorCode::CARD_REMOVED);
+                case TransmitBehavior::busy:
+                    return error(opcode, request_id, ErrorCode::BUSY);
+                case TransmitBehavior::no_card:
+                    return error(opcode, request_id, ErrorCode::NO_CARD);
+                case TransmitBehavior::card_removed:
+                    return error(opcode, request_id, ErrorCode::CARD_REMOVED);
                 case TransmitBehavior::disconnect:
                     stream_.close();
                     return Result<void>::success();
-                case TransmitBehavior::wrong_id: {
-                    FrameView wrong = frame;
-                    ++wrong.header.request_id;
-                    return reply(wrong, CardTransmitResponsePayload{card.value().apdu});
-                }
-                case TransmitBehavior::stall: return Result<void>::success();
+                case TransmitBehavior::wrong_id:
+                    return reply(opcode, request_id + 1U, echo_transmit(card.value()),
+                                 &w::encode_card_transmit_response);
+                case TransmitBehavior::stall:
+                    return Result<void>::success();
                 case TransmitBehavior::echo:
-                    return reply(frame, CardTransmitResponsePayload{card.value().apdu});
+                    return reply(opcode, request_id, echo_transmit(card.value()),
+                                 &w::encode_card_transmit_response);
                 }
                 return fail();
             }
-            case MessageType::CARD_DISCONNECT: {
-                const auto card = decode_card_disposition_request_payload(frame.payload);
-                if (!card || card.value().card_handle != owner_.options_.handle)
+            case w::kOpcodeCardDisconnect: {
+                const auto card = w::decode_card_disconnect_request(frame.payload);
+                if (!card || card.value().key.card_handle != owner_.options_.handle)
                     return fail();
                 ++owner_.disconnects;
                 owner_.last_disposition.store(static_cast<unsigned>(card.value().disposition));
-                return send(frame, ByteView{nullptr, 0U}, MessageKind::response);
+                w::CardDisconnectResponse response{};
+                response.key.epoch[0] = kEpochByte;
+                response.key.reader_id = kReaderId;
+                response.card_handle = card.value().key.card_handle;
+                response.consumed = true;
+                response.quiesced = true;
+                return reply(opcode, request_id, response, &w::encode_card_disconnect_response);
             }
-            default: return fail();
+            default:
+                return fail();
             }
         }
 
     private:
+        static w::CardTransmitResponse echo_transmit(const w::CardTransmitRequest& request) noexcept
+        {
+            w::CardTransmitResponse response{};
+            response.key = request.key;
+            response.response = request.command;
+            return response;
+        }
         Result<void> fail() noexcept
         {
             owner_.bad_request.store(true);
             return Result<void>::failure(Error::PROTOCOL_ERROR);
         }
-        template <typename Payload>
-        Result<void> reply(const FrameView& request, const Payload& payload) noexcept
+        template <typename Record>
+        Result<void> reply(std::uint16_t opcode, std::uint32_t request_id, const Record& value,
+                           dtv::userland::Result<std::size_t> (*encode)(
+                               const Record&, MutableByteView) noexcept) noexcept
         {
-            std::array<std::uint8_t, kMaxCardPayload + 64U> encoded{};
-            const auto size = encode_payload(payload, MutableByteView{encoded.data(), encoded.size()});
-            if (!size) return fail();
-            return send(request, ByteView{encoded.data(), size.value()}, MessageKind::response);
+            std::size_t size = 0U;
+            if (!encode_record(value, encode, scratch_, size)) return fail();
+            return send(opcode, request_id, ByteView{scratch_.data(), size}, w::Kind::response);
         }
-        Result<void> error(const FrameView& request, ErrorCode error_code) noexcept
+        Result<void> error(std::uint16_t opcode, std::uint32_t request_id,
+                           ErrorCode error_code) noexcept
         {
-            std::array<std::uint8_t, 16U> encoded{};
-            const auto size = encode_payload(ErrorResponsePayload{error_code, ByteView{nullptr, 0U}},
-                                             MutableByteView{encoded.data(), encoded.size()});
-            if (!size) return fail();
-            return send(request, ByteView{encoded.data(), size.value()}, MessageKind::error_response);
+            w::ErrorResponse response{};
+            response.epoch[0] = kEpochByte;
+            response.error.code = static_cast<std::uint32_t>(error_code);
+            response.error.operation.length = 4U;
+            std::memcpy(response.error.operation.bytes.data(), "card", 4U);
+            std::size_t size = 0U;
+            if (!encode_record(response, &w::encode_error_response, scratch_, size)) return fail();
+            return send(opcode, request_id, ByteView{scratch_.data(), size},
+                        w::Kind::error_response);
         }
-        Result<void> send(const FrameView& request, ByteView payload, MessageKind kind) noexcept
+        Result<void> send(std::uint16_t opcode, std::uint32_t request_id, ByteView payload,
+                          w::Kind kind) noexcept
         {
-            std::array<std::uint8_t, kMaxCardPayload + 128U> encoded{};
-            const FrameHeader header{kProtocolMajor, kProtocolMinor, request.header.type, kind,
-                                      request.header.request_id,
-                                      static_cast<std::uint32_t>(payload.size)};
-            const auto size = encode_frame(header, payload,
-                                           MutableByteView{encoded.data(), encoded.size()});
+            w::Header header{};
+            header.kind = kind;
+            header.opcode = opcode;
+            header.request_id = request_id;
+            header.payload_length = static_cast<std::uint32_t>(payload.size);
+            const auto size = w::encode_frame(
+                header, payload, MutableByteView{out_.data(), out_.size()});
             if (!size) return fail();
-            return stream_.write_frame(ByteView{encoded.data(), size.value()}, Timeout{500U});
+            return stream_.write_all(ByteView{out_.data(), size.value()}, Timeout{500U});
         }
         MockDaemon& owner_;
         SocketStream& stream_;
+        std::array<std::uint8_t, w::kMaxControlPayload> scratch_{};
+        std::array<std::uint8_t, w::kHeaderSize + w::kMaxControlPayload> out_{};
         bool connected_ = false;
     };
 
@@ -295,14 +462,19 @@ private:
             }
             ++accepted;
             auto& stream = accepted_stream.value();
-            std::array<std::uint8_t, kFrameHeaderSize + kMaxControlPayload> storage{};
+            std::array<std::uint8_t, w::kHeaderSize + w::kMaxControlPayload> storage{};
             std::array<std::uint8_t, 8192U> input{};
-            StreamFramer framer(MutableByteView{storage.data(), storage.size()});
+            w::FrameReceiver receiver(MutableByteView{storage.data(), storage.size()});
             Peer peer(*this, stream);
             while (!stop_.load()) {
-                const auto result = stream.read_frames(MutableByteView{input.data(), input.size()},
-                                                        framer, peer, Timeout{25U});
-                if (!result && result.error() != Error::TIMEOUT) break;
+                const auto result = stream.read_some(
+                    MutableByteView{input.data(), input.size()}, Timeout{25U});
+                if (!result) {
+                    if (result.error() != Error::TIMEOUT) break;
+                    continue;
+                }
+                const auto fed = receiver.feed(ByteView{input.data(), result.value()}, peer);
+                if (!fed) break;
             }
             ++closed;
         }
@@ -362,17 +534,17 @@ void test_discovery_filters_and_sorting()
     not_ready.ready = false;
     MockDaemon starting(root.utf8(), "starting", not_ready);
     PeerOptions no_card;
-    no_card.capabilities = 0U;
+    no_card.features = 0U;
     MockDaemon unsupported(root.utf8(), "unsupported", no_card);
     PeerOptions legacy;
-    legacy.capabilities = kCapabilityCard;
+    legacy.features = 0U;
     MockDaemon legacy_server(root.utf8(), "legacy", legacy);
     PeerOptions no_card_bit;
-    no_card_bit.capabilities = kCapabilityCardGenerationBinding;
+    no_card_bit.features = 0U;
     MockDaemon no_card_server(root.utf8(), "nocardbit", no_card_bit);
     CHECK(zulu.valid() && alpha.valid() && starting.valid() && unsupported.valid() &&
           legacy_server.valid() && no_card_server.valid());
-    const auto stale_path = root.path() / "px4-userland" / "stale";
+    const auto stale_path = root.path() / "px4-userland" / "v1" / "stale";
     CHECK(::CreateDirectoryW(stale_path.c_str(), nullptr) != 0);
     CHECK(windows_security::set_current_user_owner_and_dacl(stale_path.c_str()));
     const auto listed = windows_card::list_readers(root.utf8());
@@ -412,13 +584,14 @@ void test_typed_round_trip_and_lifetime()
     CHECK(card);
     if (!card) return;
     CHECK(server.last_mode.load() == static_cast<unsigned>(ShareMode::exclusive));
-    CHECK(server.statuses.load() == 0U && server.handle_statuses.load() == 0U);
+    // begin_card issues exactly one reader-keyed CARD_STATUS before CONNECT.
+    CHECK(server.statuses.load() == 1U);
     server.status_atr_tail.store(0x55U);
     const auto status = card.value()->status();
     CHECK(status && status.value().present && status.value().initialized &&
           status.value().generation == 0x8877665544332211ULL &&
           status.value().atr == std::vector<std::uint8_t>({0x3bU, 0x00U}));
-    CHECK(server.statuses.load() == 0U && server.handle_statuses.load() == 1U);
+    CHECK(server.statuses.load() == 2U);
     const std::array<std::uint8_t, 5U> apdu{0x00U, 0xa4U, 0x00U, 0x00U, 0x00U};
     const auto response = card.value()->transmit(ByteView{apdu.data(), apdu.size()});
     CHECK(response && response.value() == std::vector<std::uint8_t>(apdu.begin(), apdu.end()));
@@ -464,7 +637,7 @@ void test_connect_errors()
     const auto zero_card = CardClient::connect(root.utf8(), "zero", ShareMode::shared);
     CHECK(!zero_card && zero_card.error() == Error::PROTOCOL_ERROR);
     PeerOptions empty_atr;
-    empty_atr.empty_connect_atr = true;
+    empty_atr.invalid_connect = true;
     MockDaemon empty_atr_server(root.utf8(), "emptyatr", empty_atr);
     const auto empty_atr_card = CardClient::connect(root.utf8(), "emptyatr", ShareMode::shared);
     CHECK(!empty_atr_card && empty_atr_card.error() == Error::PROTOCOL_ERROR);
@@ -508,7 +681,7 @@ void test_terminal_errors_do_not_replay()
     }
 }
 
-void test_reader_and_atomic_handle_status()
+void test_reader_and_owner_status()
 {
     {
         TempRoot root;
@@ -522,16 +695,15 @@ void test_reader_and_atomic_handle_status()
         CHECK(server.card_connects.load() == 0U && server.transmits.load() == 0U &&
               server.disconnects.load() == 0U);
         // A reader snapshot need not initialize a card. Connecting is one
-        // explicit CARD_CONNECT, with no reader-global epoch sampling.
+        // explicit CARD_CONNECT after the mandatory CARD_STATUS sample.
         auto card = CardClient::connect(root.utf8(), "reader", ShareMode::shared);
         CHECK(card);
         if (!card) return;
         ++server.generation;
         const auto changed = card.value()->status();
         CHECK(changed && changed.value().generation == server.generation.load());
-        // The numeric generation can stay unchanged across protocol loss and
-        // a legacy client's recovery. Only atomic owned-handle status proves
-        // this strict handle is live; never fall back to global CARD_STATUS.
+        // The owning connection sees the reader-keyed sample. A failure is
+        // terminal: the connection closes and later calls report NOT_FOUND.
         server.status_error.store(ErrorCode::CARD_REMOVED);
         const auto removed = card.value()->status();
         CHECK(!removed && removed.error() == Error::CARD_REMOVED);
@@ -540,7 +712,9 @@ void test_reader_and_atomic_handle_status()
         const std::uint8_t apdu = 0U;
         CHECK(!card.value()->transmit(ByteView{&apdu, 1U}));
         CHECK(server.card_connects.load() == 1U && server.transmits.load() == 0U);
-        CHECK(server.statuses.load() == 1U && server.handle_statuses.load() == 2U);
+        // reader_status sample, begin_card sample, one owner sample, one
+        // failing owner sample.
+        CHECK(server.statuses.load() == 4U);
     }
     {
         TempRoot root;
@@ -579,8 +753,7 @@ void test_reader_and_atomic_handle_status()
         CHECK(!card.value()->status());
         const std::uint8_t apdu = 0U;
         CHECK(!card.value()->transmit(ByteView{&apdu, 1U}));
-        CHECK(server.statuses.load() == 0U && server.handle_statuses.load() == 1U &&
-              server.card_connects.load() == 1U &&
+        CHECK(server.statuses.load() == 2U && server.card_connects.load() == 1U &&
               server.transmits.load() == 0U && server.disconnects.load() == 0U);
         CHECK(wait_for(server.closed, 1U));
         CHECK(server.accepted.load() == 1U && !server.bad_request.load());
@@ -597,7 +770,7 @@ void test_reader_and_atomic_handle_status()
         const auto status = card.value()->status();
         CHECK(!status && status.error() == Error::NOT_READY);
         CHECK(!card.value()->status());
-        CHECK(server.handle_statuses.load() == 1U && server.transmits.load() == 0U);
+        CHECK(server.statuses.load() == 2U && server.transmits.load() == 0U);
     }
 }
 
@@ -608,10 +781,13 @@ void test_discovery_entry_and_time_bounds()
         CHECK(root.valid());
         if (!root.valid()) return;
         const auto product = root.path() / "px4-userland";
+        const auto version = product / "v1";
         CHECK(::CreateDirectoryW(product.c_str(), nullptr) != 0);
         CHECK(windows_security::set_current_user_owner_and_dacl(product.c_str()));
+        CHECK(::CreateDirectoryW(version.c_str(), nullptr) != 0);
+        CHECK(windows_security::set_current_user_owner_and_dacl(version.c_str()));
         for (unsigned i = 0U; i < 65U; ++i) {
-            const auto entry = product / ("entry" + std::to_string(i));
+            const auto entry = version / ("entry" + std::to_string(i));
             CHECK(::CreateDirectoryW(entry.c_str(), nullptr) != 0);
         }
         const auto list = windows_card::list_readers(root.utf8());
@@ -734,11 +910,15 @@ void test_reparse_traversal_rejected()
     const auto private_product = instance_alias.path() / "px4-userland";
     CHECK(::CreateDirectoryW(private_product.c_str(), nullptr) != 0);
     CHECK(windows_security::set_current_user_owner_and_dacl(private_product.c_str()));
-    const auto reader_link = private_product / "reader";
-    CHECK(create_junction(reader_link, runtime / "px4-userland" / "reader"));
+    const auto private_version = private_product / "v1";
+    CHECK(::CreateDirectoryW(private_version.c_str(), nullptr) != 0);
+    CHECK(windows_security::set_current_user_owner_and_dacl(private_version.c_str()));
+    const auto reader_link = private_version / "reader";
+    CHECK(create_junction(reader_link, runtime / "px4-userland" / "v1" / "reader"));
     const auto instance_list = windows_card::list_readers(instance_alias.utf8());
     CHECK(instance_list && instance_list.value().empty());
-    const auto instance_card = CardClient::connect(instance_alias.utf8(), "reader", ShareMode::shared);
+    const auto instance_card = CardClient::connect(instance_alias.utf8(), "reader",
+                                                  ShareMode::shared);
     CHECK(!instance_card && instance_card.error() == Error::INVALID_ARGUMENT);
     CHECK(server.accepted.load() == 0U);
     CHECK(::RemoveDirectoryW(reader_link.c_str()) != 0);
@@ -879,8 +1059,8 @@ void test_production_dll_tvcas_sequence()
         CHECK(is_valid(context) == ERROR_INVALID_HANDLE);
     }
     CHECK(server.card_connects.load() == 1U && server.transmits.load() == 1U &&
-          server.disconnects.load() == 1U && server.handle_statuses.load() == 1U &&
-          server.statuses.load() >= 1U && !server.bad_request.load());
+          server.disconnects.load() == 1U && server.statuses.load() >= 1U &&
+          !server.bad_request.load());
 
     // Cooperative shutdown while one real DLL call is awaiting its IPC
     // deadline. This deliberately does NOT use TerminateThread and is not
@@ -957,7 +1137,7 @@ int main()
     test_typed_round_trip_and_lifetime();
     test_connect_errors();
     test_terminal_errors_do_not_replay();
-    test_reader_and_atomic_handle_status();
+    test_reader_and_owner_status();
     test_discovery_entry_and_time_bounds();
     test_untrusted_security_fails_closed();
     test_reparse_traversal_rejected();

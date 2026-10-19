@@ -2,7 +2,10 @@
 #ifndef PX4_USERLAND_WINSCARD_CARD_CLIENT_H
 #define PX4_USERLAND_WINSCARD_CARD_CLIENT_H
 
-#include "px4/control_client.h"
+#include "px4/ipc.h"
+#include "px4/transport.h"
+
+#include <dtv/userland/control_client.h>
 
 #include <memory>
 #include <string>
@@ -24,14 +27,15 @@ struct ReaderStatus final {
 
 // runtime_root is the UTF-8 local-absolute runtime parent (normally
 // LOCALAPPDATA), not its px4-userland child. Only already-running private
-// endpoints with CARD + generation binding and a ready LIST are returned.
-// Discovery has a 64-entry cap and a 1500 ms cooperative aggregate deadline;
-// it fails rather than returning a partial list if either bound is exhausted.
+// endpoints under px4-userland/v1 that advertise CARD_SERVICE with a ready
+// context are returned. Discovery has a 64-entry cap and a 1500 ms cooperative
+// aggregate deadline; it fails rather than returning a partial list if either
+// bound is exhausted.
 Result<std::vector<Reader>> list_readers(const std::string& runtime_root) noexcept;
 
-// One current snapshot, not an idle wait. The existing daemon CARD_STATUS may
-// temporarily power on/off an otherwise-unused reader to detect presence; it
-// does not connect, initialize the card protocol, reset, or send an APDU.
+// One current snapshot, not an idle wait. The shared CARD_STATUS reads the
+// reader's present/initialized/ATR without connecting, initializing the card
+// protocol, resetting, or sending an APDU.
 Result<ReaderStatus> reader_status(const std::string& runtime_root,
                                   const std::string& instance) noexcept;
 
@@ -44,17 +48,22 @@ public:
     CardClient(const CardClient&) = delete;
     CardClient& operator=(const CardClient&) = delete;
     // No implicit reconnect or retry. Ambiguous I/O and observed card loss
-    // permanently close this connection; the wire u64 never leaves this type.
+    // permanently close this connection; the session handle never leaves this
+    // type.
     Result<std::vector<std::uint8_t>> transmit(ByteView apdu) noexcept;
     Result<ReaderStatus> status() noexcept;
     Result<void> disconnect(ipc::Disposition disposition) noexcept;
 
 private:
-    explicit CardClient(std::unique_ptr<ipc::posix::PosixControlClient> client,
-                        std::uint64_t handle, std::vector<std::uint8_t> atr = {}) noexcept
-        : client_(std::move(client)), handle_(handle), atr_(std::move(atr)) {}
-    std::unique_ptr<ipc::posix::PosixControlClient> client_;
-    std::uint64_t handle_ = 0U;
+    CardClient(std::unique_ptr<dtv::userland::wire::ClientTransport> transport,
+               dtv::userland::wire::CardClientSession session,
+               std::vector<std::uint8_t> atr) noexcept
+        : transport_(std::move(transport)), session_(session), atr_(std::move(atr)) {}
+    // Permanently drops the owning connection after a terminal error or a
+    // CARD_DISCONNECT; no request is ever replayed on a fresh connection.
+    void forget() noexcept;
+    std::unique_ptr<dtv::userland::wire::ClientTransport> transport_;
+    dtv::userland::wire::CardClientSession session_;
     std::vector<std::uint8_t> atr_;
 };
 

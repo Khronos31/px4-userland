@@ -12,6 +12,7 @@
 #include <windows.h>
 #include <aclapi.h>
 
+#include "px4/posix_ipc.h"
 #include "windows/windows_security.h"
 
 #include <algorithm>
@@ -20,6 +21,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <string_view>
 #include <utility>
 
@@ -28,14 +30,15 @@ namespace {
 
 using namespace ipc;
 using namespace ipc::posix;
+namespace wire = dtv::userland::wire;
 using Clock = std::chrono::steady_clock;
 
 constexpr std::size_t kMaxDiscoveryEntries = 64U;
 constexpr std::uint32_t kDiscoveryTimeoutMs = 1500U;
 constexpr std::uint32_t kEndpointTimeoutMs = 200U;
 constexpr std::uint32_t kRequestTimeoutMs = 4000U;
-constexpr std::uint32_t kRequiredCapabilities =
-    kCapabilityCard | kCapabilityCardGenerationBinding;
+// UDTV 1.0 publishes exactly one card reader for the local reader namespace.
+constexpr std::uint16_t kReaderId = 0U;
 
 Timeout remaining_timeout(Clock::time_point deadline) noexcept
 {
@@ -46,6 +49,37 @@ Timeout remaining_timeout(Clock::time_point deadline) noexcept
         deadline - now).count();
     return Timeout{static_cast<std::uint32_t>(remaining)};
 }
+
+// Adapts the product's Windows SocketStream to the shared core's byte
+// transport. Framing and every typed request/response stay in the core client;
+// this only moves bytes and reports a monotonic clock in the same units.
+class SocketTransport final : public wire::ClientTransport {
+public:
+    SocketTransport() noexcept = default;
+    explicit SocketTransport(SocketStream stream) noexcept : stream_(std::move(stream)) {}
+    ~SocketTransport() noexcept override { stream_.close(); }
+    SocketTransport(const SocketTransport&) = delete;
+    SocketTransport& operator=(const SocketTransport&) = delete;
+
+    Result<void> write_all(ByteView bytes, Timeout timeout) noexcept override
+    {
+        return stream_.write_all(bytes, timeout);
+    }
+    Result<std::size_t> read_some(MutableByteView bytes, Timeout timeout) noexcept override
+    {
+        return stream_.read_some(bytes, timeout);
+    }
+    std::uint64_t monotonic_ms() noexcept override
+    {
+        return static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                Clock::now().time_since_epoch()).count());
+    }
+    void close() noexcept override { stream_.close(); }
+
+private:
+    SocketStream stream_;
+};
 
 bool reserved_device_name(std::string_view value) noexcept
 {
@@ -205,7 +239,9 @@ bool verified_security(HANDLE handle, bool private_directory) noexcept
 struct RuntimePins final {
     std::array<DirectoryPin, 64U> ancestors;
     DirectoryPin product;
+    DirectoryPin version;
     std::wstring product_path;
+    std::wstring version_path;
 
     Result<void> open(const std::string& runtime) noexcept
     {
@@ -236,9 +272,15 @@ struct RuntimePins final {
         product_path = path;
         if (product_path.back() != L'\\') product_path += L'\\';
         product_path += L"px4-userland";
-        const auto opened = product.open(product_path, true);
-        if (!opened) return opened;
+        const auto product_opened = product.open(product_path, true);
+        if (!product_opened) return product_opened;
         if (!verified_security(product.get(), true))
+            return Result<void>::failure(Error::INVALID_ARGUMENT);
+        // The published layout is <runtime>/px4-userland/v1/<instance>.
+        version_path = product_path + L"\\v1";
+        const auto version_opened = version.open(version_path, true);
+        if (!version_opened) return version_opened;
+        if (!verified_security(version.get(), true))
             return Result<void>::failure(Error::INVALID_ARGUMENT);
         return Result<void>::success();
     }
@@ -249,78 +291,47 @@ Result<void> pin_instance(const RuntimePins& runtime, const std::string& instanc
 {
     if (!valid_instance(instance)) return Result<void>::failure(Error::INVALID_ARGUMENT);
     const std::wstring wide(instance.begin(), instance.end());
-    const auto opened = pin.open(runtime.product_path + L'\\' + wide, true);
+    const auto opened = pin.open(runtime.version_path + L'\\' + wide, true);
     if (!opened) return opened;
     return verified_security(pin.get(), true) ? Result<void>::success() :
                                               Result<void>::failure(Error::INVALID_ARGUMENT);
 }
 
-Result<std::unique_ptr<PosixControlClient>> ready_client(
+Result<std::unique_ptr<SocketTransport>> open_transport(
     const std::string& runtime, const std::string& instance,
     Clock::time_point deadline) noexcept
 {
-    const EndpointConfig endpoint{runtime.c_str(), instance.c_str(),
-                                   kControlEndpointName, EndpointAccess::private_user};
-    // PosixControlClient::connect has one timeout for each of socket connect
-    // and HELLO. Divide the remaining budget so their sum stays bounded.
-    const auto remaining = remaining_timeout(deadline).milliseconds;
-    if (remaining < 2U)
-        return Result<std::unique_ptr<PosixControlClient>>::failure(Error::TIMEOUT);
-    auto client = PosixControlClient::connect(endpoint, kRequiredCapabilities,
-                                             Timeout{remaining / 2U});
-    if (!client) return client;
-    // Old daemons can retain card handles across removal/reinsertion. Require
-    // the opt-in atomic generation binding; status polling cannot close that
-    // race and reconnecting/replaying would be unsafe for an APDU consumer.
-    if ((client.value()->negotiated_capabilities() & kRequiredCapabilities) !=
-        kRequiredCapabilities)
-        return Result<std::unique_ptr<PosixControlClient>>::failure(Error::UNSUPPORTED);
     const Timeout timeout = remaining_timeout(deadline);
     if (timeout.milliseconds == 0U)
-        return Result<std::unique_ptr<PosixControlClient>>::failure(Error::TIMEOUT);
-    const auto response = client.value()->request(MessageType::LIST, ByteView{nullptr, 0U},
-                                                   timeout);
-    if (!response)
-        return Result<std::unique_ptr<PosixControlClient>>::failure(response.error());
-    const auto list = decode_list_response_payload(
-        ByteView{response.value().payload.data(), response.value().payload.size()});
-    // The typed LIST decoder also verifies exactly one card reader and every
-    // record/count/mask. Directory existence alone never exposes a reader.
-    if (!list)
-        return Result<std::unique_ptr<PosixControlClient>>::failure(list.error());
-    if (list.value().ready == 0U)
-        return Result<std::unique_ptr<PosixControlClient>>::failure(Error::NOT_READY);
-    return client;
+        return Result<std::unique_ptr<SocketTransport>>::failure(Error::TIMEOUT);
+    const EndpointConfig endpoint{runtime.c_str(), instance.c_str(),
+                                   kControlEndpointName, EndpointAccess::private_user};
+    auto stream = SocketStream::connect(endpoint, timeout);
+    if (!stream) return Result<std::unique_ptr<SocketTransport>>::failure(stream.error());
+    return Result<std::unique_ptr<SocketTransport>>::success(
+        std::make_unique<SocketTransport>(std::move(stream.value())));
 }
 
-template <typename Payload>
-Result<ControlResponse> request(PosixControlClient& client, MessageType type,
-                                const Payload& payload, Timeout timeout) noexcept
+bool listed_reader(const wire::ListResponse& list, std::uint16_t reader_id) noexcept
 {
-    std::array<std::uint8_t, kMaxCardPayload + 12U> encoded{};
-    const auto size = encode_payload(payload, MutableByteView{encoded.data(), encoded.size()});
-    if (!size) return Result<ControlResponse>::failure(size.error());
-    return client.request(type, ByteView{encoded.data(), size.value()}, timeout);
+    if (!list.readers.present) return false;
+    for (std::size_t index = 0U; index < list.readers.value.count; ++index) {
+        if (list.readers.value.items[index].id == reader_id) return true;
+    }
+    return false;
 }
 
-Result<ReaderStatus> read_status(PosixControlClient& client, Timeout timeout,
-                                 std::uint64_t handle = 0U) noexcept
+ReaderStatus to_reader_status(const wire::CardStatusResponse& response) noexcept
 {
-    if (timeout.milliseconds == 0U) return Result<ReaderStatus>::failure(Error::TIMEOUT);
-    const auto response = handle == 0U ?
-        client.request(MessageType::CARD_STATUS, ByteView{nullptr, 0U}, timeout) :
-        request(client, MessageType::CARD_HANDLE_STATUS, CardHandleRequestPayload{handle}, timeout);
-    if (!response) return Result<ReaderStatus>::failure(response.error());
-    const auto decoded = decode_card_status_response_payload(
-        ByteView{response.value().payload.data(), response.value().payload.size()});
-    if (!decoded) return Result<ReaderStatus>::failure(decoded.error());
     ReaderStatus result;
-    result.present = decoded.value().present != 0U;
-    result.initialized = decoded.value().initialized != 0U;
-    result.generation = decoded.value().reader_generation;
-    const ByteView atr = decoded.value().atr;
-    if (atr.size != 0U) result.atr.assign(atr.data, atr.data + atr.size);
-    return Result<ReaderStatus>::success(std::move(result));
+    result.present = response.present;
+    result.initialized = response.initialized;
+    result.generation = response.current_generation;
+    if (response.atr.present && response.atr.value.length != 0U) {
+        result.atr.assign(response.atr.value.bytes.data(),
+                          response.atr.value.bytes.data() + response.atr.value.length);
+    }
+    return result;
 }
 
 bool terminal_error(Error error) noexcept
@@ -349,13 +360,14 @@ Result<std::vector<Reader>> list_readers(const std::string& runtime_root) noexce
         return Result<std::vector<Reader>>::failure(opened.error());
     }
     std::vector<std::string> instances;
-    const std::wstring pattern = runtime.product_path + L"\\*";
+    const std::wstring pattern = runtime.version_path + L"\\*";
     WIN32_FIND_DATAW data{};
     const HANDLE search = ::FindFirstFileW(pattern.c_str(), &data);
     if (search == INVALID_HANDLE_VALUE) {
         const DWORD error = ::GetLastError();
-        return error == ERROR_FILE_NOT_FOUND ? Result<std::vector<Reader>>::success({}) :
-            Result<std::vector<Reader>>::failure(path_error(error));
+        return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND
+            ? Result<std::vector<Reader>>::success({})
+            : Result<std::vector<Reader>>::failure(path_error(error));
     }
     Error scan_error = Error::OK;
     std::size_t entries = 0U;
@@ -395,8 +407,18 @@ Result<std::vector<Reader>> list_readers(const std::string& runtime_root) noexce
         if (!pin_instance(runtime, instance, pin)) continue;
         const auto endpoint_deadline = std::min(
             deadline, Clock::now() + std::chrono::milliseconds(kEndpointTimeoutMs));
-        const auto client = ready_client(runtime_root, instance, endpoint_deadline);
-        if (client) readers.push_back(Reader{instance, "PX4 userland (" + instance + ")"});
+        auto transport = open_transport(runtime_root, instance, endpoint_deadline);
+        if (!transport) continue;
+        const Timeout timeout = remaining_timeout(endpoint_deadline);
+        if (timeout.milliseconds == 0U) continue;
+        const auto status = wire::fetch_status(*transport.value(), timeout,
+                                               wire::kFeatureCardService);
+        // A CARD_SERVICE endpoint that is not ready, or that does not publish
+        // the reader, is not exposed as a usable reader.
+        if (!status || status.snapshot.status.context.state != wire::ContextState::ready ||
+            !listed_reader(status.snapshot.list, kReaderId))
+            continue;
+        readers.push_back(Reader{instance, "PX4 userland (" + instance + ")"});
     }
     if (remaining_timeout(deadline).milliseconds == 0U)
         return Result<std::vector<Reader>>::failure(Error::TIMEOUT);
@@ -414,9 +436,30 @@ Result<ReaderStatus> reader_status(const std::string& runtime_root,
     DirectoryPin pin;
     const auto pinned = pin_instance(runtime, instance, pin);
     if (!pinned) return Result<ReaderStatus>::failure(pinned.error());
-    auto client = ready_client(runtime_root, instance, deadline);
-    if (!client) return Result<ReaderStatus>::failure(client.error());
-    return read_status(*client.value(), remaining_timeout(deadline));
+    auto transport = open_transport(runtime_root, instance, deadline);
+    if (!transport) return Result<ReaderStatus>::failure(transport.error());
+    const Timeout fetch_timeout = remaining_timeout(deadline);
+    if (fetch_timeout.milliseconds == 0U)
+        return Result<ReaderStatus>::failure(Error::TIMEOUT);
+    const auto status = wire::fetch_status(*transport.value(), fetch_timeout,
+                                           wire::kFeatureCardService);
+    if (!status) return Result<ReaderStatus>::failure(status.error);
+    if (status.snapshot.status.context.state != wire::ContextState::ready)
+        return Result<ReaderStatus>::failure(Error::NOT_READY);
+    if (!listed_reader(status.snapshot.list, kReaderId))
+        return Result<ReaderStatus>::failure(Error::NOT_FOUND);
+    // A reader snapshot must not connect or initialize the card: one
+    // reader-keyed CARD_STATUS with no owner handle.
+    wire::CardClientSession session{};
+    session.epoch = status.snapshot.status.context.epoch;
+    session.reader_id = kReaderId;
+    session.next_request_id = 4U;
+    const Timeout status_timeout = remaining_timeout(deadline);
+    if (status_timeout.milliseconds == 0U)
+        return Result<ReaderStatus>::failure(Error::TIMEOUT);
+    const auto result = wire::card_status(*transport.value(), session, status_timeout);
+    if (!result) return Result<ReaderStatus>::failure(result.error);
+    return Result<ReaderStatus>::success(to_reader_status(result.response));
 }
 
 Result<std::unique_ptr<CardClient>> CardClient::connect(
@@ -433,93 +476,99 @@ Result<std::unique_ptr<CardClient>> CardClient::connect(
     DirectoryPin pin;
     const auto pinned = pin_instance(runtime, instance, pin);
     if (!pinned) return Result<std::unique_ptr<CardClient>>::failure(pinned.error());
-    auto client = ready_client(runtime_root, instance, deadline);
-    if (!client) return Result<std::unique_ptr<CardClient>>::failure(client.error());
+    auto transport = open_transport(runtime_root, instance, deadline);
+    if (!transport) return Result<std::unique_ptr<CardClient>>::failure(transport.error());
     const Timeout timeout = remaining_timeout(deadline);
     if (timeout.milliseconds == 0U)
         return Result<std::unique_ptr<CardClient>>::failure(Error::TIMEOUT);
-    const auto connected = request(*client.value(), MessageType::CARD_CONNECT,
-                                   CardConnectRequestPayload{mode}, timeout);
-    if (!connected)
-        return Result<std::unique_ptr<CardClient>>::failure(connected.error());
-    const auto decoded = decode_card_connect_response_payload(
-        ByteView{connected.value().payload.data(), connected.value().payload.size()});
-    if (!decoded || decoded.value().card_handle == 0U || decoded.value().atr.size == 0U)
+    // The shared client performs HELLO(CARD_SERVICE)/LIST/STATUS then
+    // CARD_STATUS and CARD_CONNECT on this one connection. A non-card daemon
+    // is refused with UNSUPPORTED and every failure closes the connection.
+    wire::CardClientOptions options{};
+    options.reader_id = kReaderId;
+    options.share = static_cast<wire::Share>(mode);
+    options.preferred_protocols = 1U;
+    const auto card = wire::begin_card(*transport.value(), options, timeout);
+    if (!card) return Result<std::unique_ptr<CardClient>>::failure(card.error);
+    // Never present a stale (usable=false) or ATR-less handle as a live card.
+    if (!card.connection.usable || !card.connection.atr.present ||
+        card.connection.atr.value.length == 0U)
         return Result<std::unique_ptr<CardClient>>::failure(Error::PROTOCOL_ERROR);
-    std::vector<std::uint8_t> atr(decoded.value().atr.data,
-                                 decoded.value().atr.data + decoded.value().atr.size);
+    std::vector<std::uint8_t> atr(
+        card.connection.atr.value.bytes.data(),
+        card.connection.atr.value.bytes.data() + card.connection.atr.value.length);
     return Result<std::unique_ptr<CardClient>>::success(std::unique_ptr<CardClient>(
-        new CardClient(std::move(client.value()), decoded.value().card_handle,
-                       std::move(atr))));
+        new CardClient(std::move(transport.value()), card.session, std::move(atr))));
 }
 
 CardClient::~CardClient() noexcept
 {
     // Closing the owning connection releases handles/transactions in px4d.
     // Destruction never resets the card or waits for an extra request.
-    if (client_) client_->close();
+    if (transport_) transport_->close();
+}
+
+void CardClient::forget() noexcept
+{
+    if (transport_) transport_->close();
+    transport_.reset();
+    session_.card_handle = 0U;
+    session_.bound_generation = 0U;
 }
 
 Result<std::vector<std::uint8_t>> CardClient::transmit(ByteView apdu) noexcept
 {
-    if (apdu.data == nullptr || apdu.size == 0U || apdu.size > kMaxCardPayload)
+    if (apdu.data == nullptr || apdu.size == 0U || apdu.size > wire::kMaxApduBytes)
         return Result<std::vector<std::uint8_t>>::failure(Error::INVALID_ARGUMENT);
-    if (!client_ || handle_ == 0U)
+    if (!transport_ || session_.card_handle == 0U)
         return Result<std::vector<std::uint8_t>>::failure(Error::NOT_FOUND);
-    const auto response = request(*client_, MessageType::CARD_TRANSMIT,
-                                  CardTransmitRequestPayload{handle_, apdu},
-                                  Timeout{kRequestTimeoutMs});
-    if (!response) {
-        if (terminal_error(response.error())) { client_->close(); handle_ = 0U; }
-        return Result<std::vector<std::uint8_t>>::failure(response.error());
+    const auto result = wire::card_transmit(*transport_, session_, wire::CardProtocol::t1,
+                                            apdu, Timeout{kRequestTimeoutMs});
+    if (!result) {
+        if (terminal_error(result.error)) forget();
+        return Result<std::vector<std::uint8_t>>::failure(result.error);
     }
-    const auto decoded = decode_card_transmit_response_payload(
-        ByteView{response.value().payload.data(), response.value().payload.size()});
-    if (!decoded) {
-        client_->close();
-        handle_ = 0U;
-        return Result<std::vector<std::uint8_t>>::failure(decoded.error());
-    }
-    std::vector<std::uint8_t> result;
-    const ByteView bytes = decoded.value().response;
-    if (bytes.size != 0U) result.assign(bytes.data, bytes.data + bytes.size);
-    return Result<std::vector<std::uint8_t>>::success(std::move(result));
+    const auto& bytes = result.response.response;
+    std::vector<std::uint8_t> response;
+    if (bytes.length != 0U) response.assign(bytes.bytes.data(), bytes.bytes.data() + bytes.length);
+    return Result<std::vector<std::uint8_t>>::success(std::move(response));
 }
 
 Result<ReaderStatus> CardClient::status() noexcept
 {
-    if (!client_ || handle_ == 0U) return Result<ReaderStatus>::failure(Error::NOT_FOUND);
-    // The daemon checks this owning handle's sticky stale state and obtains
-    // the snapshot in one serialized card-lane operation. Reader-global epoch
-    // sampling alone cannot prove handle validity after a protocol card loss.
-    auto result = read_status(*client_, Timeout{kRequestTimeoutMs}, handle_);
+    if (!transport_ || session_.card_handle == 0U)
+        return Result<ReaderStatus>::failure(Error::NOT_FOUND);
+    const auto result = wire::card_status(*transport_, session_, Timeout{kRequestTimeoutMs});
     if (!result) {
-        if (terminal_error(result.error())) { client_->close(); handle_ = 0U; }
-        return result;
+        if (terminal_error(result.error)) forget();
+        return Result<ReaderStatus>::failure(result.error);
     }
-    if (!result.value().present || !result.value().initialized) {
-        client_->close();
-        handle_ = 0U;
-        return Result<ReaderStatus>::failure(result.value().present ? Error::NOT_READY :
-                                                                     Error::CARD_REMOVED);
+    ReaderStatus status = to_reader_status(result.response);
+    if (!status.present) {
+        forget();
+        return Result<ReaderStatus>::failure(Error::CARD_REMOVED);
+    }
+    if (!status.initialized) {
+        forget();
+        return Result<ReaderStatus>::failure(Error::NOT_READY);
     }
     // Do not borrow a replacement card's ATR. Preserve the ATR that belongs
-    // to this successful, atomically validated CARD_CONNECT handle.
-    result.value().atr = atr_;
-    return result;
+    // to this successful, validated CARD_CONNECT handle.
+    status.atr = atr_;
+    return Result<ReaderStatus>::success(std::move(status));
 }
 
 Result<void> CardClient::disconnect(Disposition disposition) noexcept
 {
     if (disposition != Disposition::leave && disposition != Disposition::reset)
         return Result<void>::failure(Error::INVALID_ARGUMENT);
-    if (!client_ || handle_ == 0U) return Result<void>::failure(Error::NOT_FOUND);
-    const auto response = request(*client_, MessageType::CARD_DISCONNECT,
-                                  CardDispositionRequestPayload{handle_, disposition},
-                                  Timeout{kRequestTimeoutMs});
-    client_->close();
-    handle_ = 0U;
-    return response ? Result<void>::success() : Result<void>::failure(response.error());
+    if (!transport_ || session_.card_handle == 0U)
+        return Result<void>::failure(Error::NOT_FOUND);
+    const auto result = wire::card_disconnect(
+        *transport_, session_, static_cast<wire::Disposition>(disposition),
+        Timeout{kRequestTimeoutMs});
+    forget();
+    return result ? Result<void>::success() : Result<void>::failure(result.error);
 }
 
 }  // namespace px4::userland::windows_card
