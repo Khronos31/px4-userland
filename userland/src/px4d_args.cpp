@@ -2,6 +2,7 @@
 #include "px4d_args.h"
 
 #include "px4/identity.h"
+#include <dtv/userland/identity.h>
 
 #include <charconv>
 #include <cstdint>
@@ -37,39 +38,6 @@ bool parse_fd(std::string_view value, int& output) noexcept
     }
     output = static_cast<int>(parsed);
     return true;
-}
-
-bool parse_usb_path_number(std::string_view value) noexcept
-{
-    if (value.empty()) return false;
-    std::uint16_t parsed = 0U;
-    const auto result = std::from_chars(value.data(), value.data() + value.size(), parsed);
-    return result.ec == std::errc{} && result.ptr == value.data() + value.size() &&
-           parsed >= 1U && parsed <= 255U;
-}
-
-bool valid_usb_path(std::string_view value) noexcept
-{
-    const std::size_t colon = value.find(':');
-    if (colon != std::string_view::npos) {
-        return value.find(':', colon + 1U) == std::string_view::npos &&
-               parse_usb_path_number(value.substr(0U, colon)) &&
-               parse_usb_path_number(value.substr(colon + 1U));
-    }
-    const std::size_t dash = value.find('-');
-    if (dash == std::string_view::npos ||
-        !parse_usb_path_number(value.substr(0U, dash))) return false;
-    std::size_t start = dash + 1U;
-    std::size_t count = 0U;
-    while (start < value.size()) {
-        const std::size_t dot = value.find('.', start);
-        const std::size_t end = dot == std::string_view::npos ? value.size() : dot;
-        if (++count > 8U || !parse_usb_path_number(value.substr(start, end - start)))
-            return false;
-        if (dot == std::string_view::npos) return true;
-        start = dot + 1U;
-    }
-    return false;
 }
 
 }  // namespace
@@ -133,9 +101,9 @@ Px4dArguments parse_px4d_arguments(int argc,
             continue;
         }
 #endif
-        if (option != "--device" && option != "--firmware" &&
+        if (option != "--device" && option != "-d" && option != "--firmware" &&
             option != "--runtime-dir" && option != "--fd" &&
-            option != "--usb-path" && option != "--instance") {
+            option != "--instance") {
             return invalid("unknown argument");
         }
 
@@ -143,24 +111,31 @@ Px4dArguments parse_px4d_arguments(int argc,
         if (!take_value(index, argc, argv, value)) {
             return invalid("option requires a value");
         }
-        if (option == "--device") {
+        if (option == "--device" || option == "-d") {
             if (have_device) return invalid("duplicate --device");
             have_device = true;
-            result.device = value;
+            const auto selector = dtv::userland::identity::parse_device_selector(value);
+            if (!selector) return invalid("--device selector is invalid");
+            if (selector.value().kind ==
+                dtv::userland::identity::SelectorKind::serial) {
+                result.device.assign(selector.value().serial.bytes.data(),
+                                     selector.value().serial.length);
+                if (!valid_px4d_base_serial(result.device))
+                    return invalid("--device serial is invalid for this product");
+            } else {
+                if (selector.value().topology.count > result.usb_paths.size())
+                    return invalid("--device supports at most two USB paths");
+                for (std::size_t path_index = 0U;
+                     path_index < selector.value().topology.count; ++path_index) {
+                    const auto& path = selector.value().topology.paths[path_index];
+                    result.usb_paths[result.usb_path_count++].assign(
+                        path.bytes.data(), path.length);
+                }
+            }
         } else if (option == "--instance") {
             if (have_instance) return invalid("duplicate --instance");
             have_instance = true;
             result.instance = value;
-        } else if (option == "--usb-path") {
-            if (result.usb_path_count >= result.usb_paths.size())
-                return invalid("at most two --usb-path values are supported");
-            if (!valid_usb_path(value)) return invalid("--usb-path is invalid");
-            for (std::size_t path_index = 0U; path_index < result.usb_path_count;
-                 ++path_index) {
-                if (result.usb_paths[path_index] == value)
-                    return invalid("--usb-path values must be distinct");
-            }
-            result.usb_paths[result.usb_path_count++] = value;
         } else if (option == "--firmware") {
             if (have_firmware) return invalid("duplicate --firmware");
             have_firmware = true;
@@ -188,16 +163,13 @@ Px4dArguments parse_px4d_arguments(int argc,
     if (result.file_descriptor_count == 0U && !have_device) {
         return invalid("native mode requires --device");
     }
-    if (have_device && !valid_px4d_base_serial(result.device)) {
-        return invalid("--device requires a 14-digit base serial or 15-digit serial");
-    }
     if (have_instance &&
         (!valid_runtime_instance(result.instance) || valid_device_instance(result.instance)))
         return invalid("--instance is invalid");
     if (result.usb_path_count != 0U && result.file_descriptor_count != 0U)
-        return invalid("--usb-path and --fd cannot be combined");
+        return invalid("USB topology selector and --fd cannot be combined");
     if (result.usb_path_count != 0U && !have_instance)
-        return invalid("--usb-path requires --instance");
+        return invalid("USB topology selector requires --instance");
     if (!have_firmware || result.firmware.empty()) {
         return invalid("--firmware is required");
     }

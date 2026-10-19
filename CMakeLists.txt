@@ -789,6 +789,18 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
     target_sources(px4_userland_tests PRIVATE userland/tools/px4d_signals.cpp)
     px4_enable_project_warnings(px4_userland_tests)
 
+    add_executable(px4d_canonical_device_tests
+        userland/tests/px4d_canonical_device_tests.cpp
+        userland/src/px4d_args.cpp)
+    target_link_libraries(px4d_canonical_device_tests
+        PRIVATE px4_userland_core dtv::identity)
+    target_include_directories(px4d_canonical_device_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/src)
+    target_compile_features(px4d_canonical_device_tests PRIVATE cxx_std_17)
+    px4_enable_project_warnings(px4d_canonical_device_tests)
+    add_test(NAME px4d_canonical_device_tests COMMAND px4d_canonical_device_tests)
+
     if(TARGET px4_userland_posix_ipc)
         target_sources(px4_userland_tests PRIVATE
             userland/src/posix_ipc.cpp

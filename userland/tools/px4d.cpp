@@ -35,6 +35,7 @@
 #include "px4d_signals.h"
 #include "runtime_identity.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -60,15 +61,15 @@ void usage() noexcept
 {
     std::printf(
         "usage:\n"
-        "  px4d --device BASE_SERIAL --firmware PATH "
-        "[--usb-path BUS:ADDRESS|BUS-PORT ...] [--instance TOKEN] "
+        "  px4d -d|--device serial:VALUE|usb:BUS-PORT[,BUS-PORT] --firmware PATH "
+        "[--instance TOKEN] "
         "[--runtime-dir PATH] [--group] [--allow-lnb-power]\n"
-        "  px4d --fd FD [--fd FD] [--device BASE_SERIAL] --firmware PATH "
+        "  px4d --fd FD [--fd FD] [-d|--device serial:VALUE] --firmware PATH "
         "[--instance TOKEN] [--runtime-dir PATH] [--group] [--allow-lnb-power]\n"
         "  px4d --list\n"
         "  px4d --list-json\n"
         "\n"
-        "  BASE_SERIAL is the 14-digit serial base for paired devices or the\n"
+        "  serial:VALUE is the 14-digit serial base for paired devices or the\n"
         "  15-digit USB serial for single-device models.  Pass one --fd per\n"
         "  USB device: two for paired models, one for single-device models.\n"
         "\n"
@@ -741,6 +742,7 @@ int main(int argc, char** argv)
     }
     if (!runtime) {
         std::fprintf(stderr, "device open: %s\n", error_string(runtime.error()));
+        bool ambiguous_serial = false;
         if (mode == Px4dOpenMode::native && arguments.usb_path_count == 0U &&
             runtime.error() == Error::INVALID_ARGUMENT) {
             const auto grouping = Q3U4Runtime::enumerate_native();
@@ -749,15 +751,24 @@ int main(int argc, char** argv)
                 for (const Q3U4Group& group : grouping.value().groups) {
                     if (group.base_serial == arguments.device) matches.groups.push_back(group);
                 }
-                if (!matches.groups.empty()) {
+                ambiguous_serial = matches.groups.size() > 1U ||
+                    std::any_of(matches.groups.begin(), matches.groups.end(),
+                                [](const Q3U4Group& group) {
+                                    return group.status == GroupStatus::duplicate;
+                                });
+                if (ambiguous_serial) {
                     const std::string candidates = tools::format_device_list(matches);
                     std::fprintf(stderr,
-                                 "serial is not uniquely selectable; specify --usb-path "
+                                 "serial is not uniquely selectable; specify --device usb:... "
                                  "and --instance. Candidates:\n%s",
                                  candidates.c_str());
                 }
             }
         }
+        if (ambiguous_serial ||
+            (mode == Px4dOpenMode::native && arguments.usb_path_count != 0U &&
+             runtime.error() == Error::INVALID_ARGUMENT))
+            return exit_status(Error::NOT_FOUND);
         return exit_status(runtime.error());
     }
     const DeviceModel model = runtime.value()->model();
