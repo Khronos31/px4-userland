@@ -349,67 +349,28 @@ std::string format_device_list_json(const GroupingResult& grouping)
 }
 
 
-std::string format_model_catalog_json(const char* product_version)
+std::string format_supported_models_text()
 {
     namespace w = dtv::userland::wire;
-    if (product_version == nullptr) return {};
-
-    auto text = [](auto& field, const char* value) -> bool {
-        if (value == nullptr) return false;
-        const std::size_t length = std::strlen(value);
-        if (length == 0U || length > field.bytes.size()) return false;
-        field.length = static_cast<std::uint16_t>(length);
-        std::memcpy(field.bytes.data(), value, length);
-        return true;
-    };
-
     constexpr std::size_t count =
         static_cast<std::size_t>(DeviceModel::dtv02a_1t1s_u) + 1U;
-    std::array<w::ModelCatalogEntry, count> profiles{};
-    for (std::size_t i = 0U; i < profiles.size(); ++i) {
+    std::array<w::SupportedModel, count> supported{};
+    for (std::size_t i = 0U; i < supported.size(); ++i) {
         const DeviceProfile& p = device_profile(static_cast<DeviceModel>(i));
-        auto& catalog = profiles[i];
-        if (!text(catalog.model.id, p.name) ||
-            !text(catalog.model.name, p.name)) return {};
-
-        catalog.usb_ids.count = 1U;
-        catalog.usb_ids.items[0] = {kQ3U4VendorId, p.product_id, w::Mode::runtime};
-        catalog.nominal_receiver_count = {true, p.receiver_count};
-        catalog.nominal_usb_function_count = {true, p.bridge_count};
-
-        // px4d is built only with the USB backend enabled. This means the
-        // backend was compiled, not that a real unit or its RF was verified.
-        catalog.available_in_build = true;
-        const auto observed = ipc::receiver_records(p.receiver_count, p.dual_system);
-        if (!observed) return {};
-        catalog.receivers.present = true;
-        catalog.receivers.value.count = p.receiver_count;
-        for (std::size_t j = 0U; j < p.receiver_count; ++j) {
-            auto& r = catalog.receivers.value.items[j];
-            r.id = static_cast<std::uint16_t>(j);
-            const auto system = observed.value()[j].system;
-            r.systems.mask = system == ipc::System::ISDB_T_OR_S ? 3U :
-                             system == ipc::System::ISDB_S ? 2U : 1U;
-            // PX-S1UR is a single satellite receiver. The generic legacy
-            // one-receiver table defaults to terrestrial unless specified.
-            if (p.model == DeviceModel::px_s1ur) r.systems.mask = 2U;
-        }
-        // Actual concurrent stream capacity is not inferred from a
-        // nominal tuner count; null until the published limit is known.
-        catalog.max_concurrent_streams.present = false;
+        const std::size_t length = std::strlen(p.name);
+        if (length == 0U || length > supported[i].name.bytes.size()) return {};
+        supported[i].name.length = static_cast<std::uint16_t>(length);
+        std::memcpy(supported[i].name.bytes.data(), p.name, length);
+        supported[i].usb_ids.count = 1U;
+        supported[i].usb_ids.items[0] = {kQ3U4VendorId, p.product_id};
     }
-
-    w::ModelsResponse doc{};
-    if (!text(doc.producer.product, "px4-userland") ||
-        !text(doc.producer.version, product_version)) return {};
-    doc.models = {profiles.data(), profiles.size()};
-    const auto size = w::models_json_size(doc);
+    const w::SupportedModels models{{supported.data(), supported.size()}};
+    const auto size = w::models_text_size(models);
     if (!size) return {};
-    std::string result(size.value(), '\0');
-    const auto encoded = w::encode_models_json(
-        doc, {reinterpret_cast<std::uint8_t*>(result.data()), result.size()});
-    return encoded && encoded.value() == result.size() ?
-        result : std::string{};
+    std::string output(size.value(), '\0');
+    const auto encoded = w::encode_models_text(models, {
+        reinterpret_cast<std::uint8_t*>(output.data()), output.size()});
+    return encoded && encoded.value() == output.size() ? output : std::string{};
 }
 
 } // namespace px4::userland::tools

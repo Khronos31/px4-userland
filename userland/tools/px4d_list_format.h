@@ -16,6 +16,6 @@ std::string format_device_list(const GroupingResult& grouping);
 std::string format_device_list_json(const GroupingResult& grouping);
 
 // Static supported-model inventory; no USB enumeration or firmware access.
-std::string format_model_catalog_json(const char* product_version);
+std::string format_supported_models_text();
 
 } // namespace px4::userland::tools

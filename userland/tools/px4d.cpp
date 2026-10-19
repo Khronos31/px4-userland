@@ -82,7 +82,7 @@ void usage() noexcept
 #endif
         "  --list             print connected supported enclosures and exit;\n"
         "  --list-json        print the same data as compact JSON and exit;\n"
-        "  --models          print static supported model catalog as JSON\n"
+        "  --models          print static supported models and USB IDs (text)\n"
         "  --version         print current build version and exit\n"
         "                     read-only, needs neither firmware nor a daemon\n");
 }
@@ -722,7 +722,7 @@ int main(int argc, char** argv)
         return 0;
     }
     if (arguments.models) {
-        const std::string output = tools::format_model_catalog_json(PX4_USERLAND_PRODUCT_VERSION);
+        const std::string output = tools::format_supported_models_text();
         if (output.empty() ||
             std::fwrite(output.data(), 1U, output.size(), stdout) != output.size() ||
             std::fflush(stdout) != 0) {
