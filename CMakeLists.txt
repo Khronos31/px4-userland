@@ -646,7 +646,7 @@ if(PX4_BUILD_PCSC_IFD AND UNIX AND NOT ANDROID)
             PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
         )
         target_compile_features(px4_userland_pcsc_ifd_core PUBLIC cxx_std_17)
-        target_link_libraries(px4_userland_pcsc_ifd_core PUBLIC px4_userland_posix_ipc)
+        target_link_libraries(px4_userland_pcsc_ifd_core PUBLIC px4_userland_posix_ipc dtv::control)
         set_target_properties(px4_userland_pcsc_ifd_core PROPERTIES
             POSITION_INDEPENDENT_CODE ON
         )
@@ -1010,6 +1010,12 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
             userland/tools/px4_ts_posix.cpp)
         target_link_libraries(px4_runtime_v1_server_tests
             PRIVATE px4_userland_core px4_userland_posix_ipc dtv::json dtv::tuning)
+        if(PX4_PCSC_IFD_AVAILABLE)
+            target_link_libraries(px4_runtime_v1_server_tests PRIVATE
+                px4_userland_pcsc_ifd_core)
+            target_compile_definitions(px4_runtime_v1_server_tests PRIVATE
+                PX4_IFD_NEW_WIRE_PROOF=1)
+        endif()
         target_include_directories(px4_runtime_v1_server_tests PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
             ${CMAKE_CURRENT_SOURCE_DIR}/userland/src

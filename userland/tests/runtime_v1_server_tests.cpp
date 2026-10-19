@@ -7,6 +7,9 @@
 #include "control_server_test_access.h"
 #include "control_workers.h"
 #include "px4/card_service.h"
+#if defined(PX4_IFD_NEW_WIRE_PROOF)
+#include "px4/pcsc_ifd_adapter.h"
+#endif
 #include "px4/control_context.h"
 #include "px4/control_server.h"
 #include "px4/posix_tuner_nonce.h"
@@ -1816,6 +1819,37 @@ bool test_card_service_over_control()
     return true;
 }
 
+#if defined(PX4_IFD_NEW_WIRE_PROOF)
+// Public PC/SC card-client factory on an actual newwire daemon; only the
+// physical card is simulated. This does not alter any old IFD fixture.
+bool test_public_ifd_newwire_card()
+{
+    Fixture f("ifd-newwire-card");
+    f.card_session.enable_mock_apdu();
+    V1_CHECK(f.start(false, 0x10U, f.instance));
+    pcsc::PosixIfdCardClientFactory factory;
+    pcsc::IfdEndpoint endpoint{};
+    endpoint.runtime_directory = f.runtime.path();
+    endpoint.device_instance = f.instance;
+    const auto created = factory.connect(endpoint);
+    V1_CHECK(created && created.value());
+    auto& client = *created.value();
+    const auto before = client.status();
+    V1_CHECK(before && before.value().present);
+    const auto opened = client.connect_shared();
+    V1_CHECK(opened && opened.value().handle != 0U && opened.value().atr_length == 2U);
+    const std::uint8_t apdu = 0x00U;
+    std::array<std::uint8_t, 16> bytes{};
+    const auto result = client.transmit(
+        opened.value().handle, ByteView{&apdu,1U}, MutableByteView{bytes.data(),bytes.size()});
+    V1_CHECK(result && result.value() == 2U && bytes[0] == 0x90U && bytes[1] == 0x00U);
+    V1_CHECK(client.disconnect(opened.value().handle));
+    client.close();
+    V1_CHECK(f.card_session.transmit_calls.load() == 1U && f.server_ok.load());
+    return true;
+}
+#endif
+
 // Success-path CARD_SERVICE proof: one real newwire request chain against the
 // existing CardService and card worker, with only the physical APDU stubbed.
 bool test_card_successful_apdu_over_control()
@@ -3025,6 +3059,9 @@ int main()
         {"pending_operations_fail_closed", test_pending_operations_fail_closed},
         {"card_service_over_control", test_card_service_over_control},
         {"card_successful_apdu_over_control", test_card_successful_apdu_over_control},
+#if defined(PX4_IFD_NEW_WIRE_PROOF)
+        {"public_ifd_newwire_card", test_public_ifd_newwire_card},
+#endif
         {"fresh_epoch_after_restart", test_fresh_epoch_after_restart},
         {"installed_ctl_status_against_daemon_process",
          test_installed_ctl_status_against_daemon_process},
