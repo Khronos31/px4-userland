@@ -45,6 +45,27 @@ int main()
                             "-f", "557142857", "-s", "isdb-t", "-o", "-"});
     ok &= check(t27.valid && t27.frequency_hz == 557142857U && t27.output == "-",
                 "Hz input and stdout output are retained");
+    for (const auto* spelling : {"isdb-t", "ISDB-T", "IsDb-T"}) {
+        const auto matched = parse({"px4-ts", "--device", "serial:00001205000960",
+                                    "--receiver", "0", "--freq", "557142857",
+                                    "--system", spelling});
+        ok &= check(matched.valid &&
+                        matched.system == px4::userland::ipc::System::ISDB_T,
+                    "terrestrial system names are ASCII case-insensitive");
+    }
+    for (const auto* spelling : {"isdb-s", "ISDB-S", "IsDb-S"}) {
+        const auto matched = parse({"px4-ts", "--device", "serial:00001205000960",
+                                    "--receiver", "0", "--channel", "BS15",
+                                    "--system", spelling, "--slot", "2"});
+        ok &= check(matched.valid &&
+                        matched.system == px4::userland::ipc::System::ISDB_S,
+                    "satellite system names are ASCII case-insensitive");
+    }
+    ok &= check(!parse({"px4-ts", "--device", "serial:00001205000960",
+                         "--receiver", "0", "--freq", "557142857",
+                         "--system", "ISDB-T2"}).valid,
+                "unknown or extended system names are rejected");
+
     const auto bs = parse({"px4-ts", "--device", "serial:00001205000960", "--receiver", "0",
                            "-c", "BS15", "-s", "isdb-s", "--slot", "2"});
     ok &= check(bs.valid && bs.frequency_hz == 1318000000U && bs.slot == 2U,
