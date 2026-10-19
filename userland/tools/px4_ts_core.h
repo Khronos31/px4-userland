@@ -45,6 +45,7 @@ Px4TsChannel parse_px4_ts_channel(std::string_view text) noexcept;
 struct Px4TsArguments final {
     bool valid = false;
     bool help = false;
+    bool product_cli = false;
     bool group = false;
     std::string device;
     std::string instance;
@@ -71,6 +72,8 @@ struct Px4TsArguments final {
 
 Px4TsArguments parse_px4_ts_arguments(int argc,
                                       const char* const* argv) noexcept;
+Px4TsArguments parse_px4_ts_product_arguments(int argc,
+                                              const char* const* argv) noexcept;
 void print_px4_ts_usage(void* output) noexcept;
 int px4_ts_exit_status(Error error,
                        Px4TsFailureKind kind = Px4TsFailureKind::ipc) noexcept;

@@ -393,7 +393,7 @@ if(WIN32)
         userland/tools/px4_ts_windows_output.cpp
         userland/tools/px4_ts_core.cpp
     )
-    target_link_libraries(px4-ts PRIVATE px4_userland_windows_ipc shell32)
+    target_link_libraries(px4-ts PRIVATE px4_userland_windows_ipc dtv::tuning shell32)
     target_include_directories(px4-ts PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
         ${CMAKE_CURRENT_SOURCE_DIR}/userland/tools
@@ -548,6 +548,7 @@ if(WIN32)
         target_link_libraries(px4_windows_ts_output_tests PRIVATE
             px4_userland_core
             px4_userland_windows_ipc
+            dtv::tuning
         )
         target_include_directories(px4_windows_ts_output_tests PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
@@ -768,7 +769,7 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
     if(TARGET px4_userland_posix_ipc)
         target_sources(px4_userland_tests PRIVATE userland/src/control_workers.cpp)
     endif()
-    target_link_libraries(px4_userland_tests PRIVATE px4_userland_core px4_userland_test_support)
+    target_link_libraries(px4_userland_tests PRIVATE px4_userland_core px4_userland_test_support dtv::tuning)
     if(PX4_ENABLE_LIBUSB)
         target_link_libraries(px4_userland_tests PRIVATE px4_userland_libusb_transport)
     endif()
@@ -808,6 +809,16 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
         target_compile_definitions(px4_userland_tests PRIVATE
             PX4_POSIX_IPC_TEST_ACCESS=1
         )
+
+        add_executable(px4-ts-product-cli-tests
+            userland/tests/px4_ts_product_cli_tests.cpp
+            userland/tools/px4_ts_core.cpp)
+        target_link_libraries(px4-ts-product-cli-tests PRIVATE
+            px4_userland_posix_ipc dtv::tuning)
+        target_include_directories(px4-ts-product-cli-tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/tools)
+        px4_enable_project_warnings(px4-ts-product-cli-tests)
+        add_test(NAME px4-ts-product-cli-tests COMMAND px4-ts-product-cli-tests)
     endif()
 
     if(PX4_PCSC_IFD_AVAILABLE)
@@ -983,7 +994,7 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
             userland/tools/px4_ts_core.cpp
             userland/tools/px4_ts_posix.cpp)
         target_link_libraries(px4_runtime_v1_server_tests
-            PRIVATE px4_userland_core px4_userland_posix_ipc dtv::json)
+            PRIVATE px4_userland_core px4_userland_posix_ipc dtv::json dtv::tuning)
         target_include_directories(px4_runtime_v1_server_tests PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
             ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
@@ -1012,6 +1023,32 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
         add_test(NAME px4_runtime_v1_server_tests
                  COMMAND px4_runtime_v1_server_tests)
         set_tests_properties(px4_runtime_v1_server_tests PROPERTIES TIMEOUT 120)
+        add_executable(px4_ts_product_process_proof
+            userland/tests/px4_ts_product_process_proof.cpp
+            userland/src/control_server.cpp
+            userland/src/control_workers.cpp
+            userland/src/q3u4_stream.cpp
+            userland/tools/px4_ts_core.cpp
+            userland/tools/px4_ts_posix.cpp)
+        target_link_libraries(px4_ts_product_process_proof
+            PRIVATE px4_userland_core px4_userland_posix_ipc dtv::json dtv::tuning)
+        target_include_directories(px4_ts_product_process_proof PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/tools
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/tests)
+        target_compile_features(px4_ts_product_process_proof PRIVATE cxx_std_17)
+        target_compile_definitions(px4_ts_product_process_proof PRIVATE
+            PX4_CONTROL_SERVER_TEST_ACCESS=1
+            PX4_CONTROL_WORKERS_TEST_ACCESS=1
+            PX4_Q3U4_STREAM_TEST_ACCESS=1
+            PX4CTL_EXECUTABLE="${CMAKE_CURRENT_BINARY_DIR}/px4ctl"
+            PX4_TS_EXECUTABLE="$<TARGET_FILE:px4-ts>")
+        add_dependencies(px4_ts_product_process_proof px4ctl px4-ts)
+        px4_enable_project_warnings(px4_ts_product_process_proof)
+        add_test(NAME px4_ts_product_process_proof
+                 COMMAND px4_ts_product_process_proof)
+        set_tests_properties(px4_ts_product_process_proof PROPERTIES TIMEOUT 120)
         add_executable(px4_normal_wire_idle_timeout_tests
             userland/tests/normal_wire_idle_timeout_tests.cpp
             userland/src/control_server.cpp
@@ -1020,7 +1057,7 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
             userland/tools/px4_ts_core.cpp
             userland/tools/px4_ts_posix.cpp)
         target_link_libraries(px4_normal_wire_idle_timeout_tests
-            PRIVATE px4_userland_core px4_userland_posix_ipc dtv::json)
+            PRIVATE px4_userland_core px4_userland_posix_ipc dtv::json dtv::tuning)
         target_include_directories(px4_normal_wire_idle_timeout_tests PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
             ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
@@ -1121,7 +1158,7 @@ if(TARGET px4_userland_posix_ipc)
         userland/tools/px4_ts_core.cpp
         userland/tools/px4_ts_posix.cpp
     )
-    target_link_libraries(px4-ts PRIVATE px4_userland_posix_ipc)
+    target_link_libraries(px4-ts PRIVATE px4_userland_posix_ipc dtv::tuning)
     target_include_directories(px4-ts PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
         ${CMAKE_CURRENT_SOURCE_DIR}/userland/tools
