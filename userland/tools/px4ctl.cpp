@@ -11,6 +11,7 @@
 #endif
 
 #include <chrono>
+#include <array>
 #include <cstdio>
 #include <cstring>
 #include <memory>
@@ -24,6 +25,16 @@ using namespace px4::userland::ipc::posix;
 namespace wire = dtv::userland::wire;
 namespace identity = dtv::userland::identity;
 using CommonError = dtv::userland::Error;
+
+enum class Command : std::uint8_t {
+    none,
+    list,
+    status,
+    card_status,
+    card_atr,
+    card_reset,
+    card_apdu,
+};
 
 #ifndef PX4CTL_TOOL_NAME
 #define PX4CTL_TOOL_NAME "px4ctl"
@@ -46,8 +57,9 @@ struct Arguments final {
     std::string instance;
     std::string runtime_directory;
     std::string_view error;
-    bool list = false;
-    bool status = false;
+    Command command = Command::none;
+    std::array<std::uint8_t, wire::kMaxApduBytes> apdu{};
+    std::size_t apdu_length = 0U;
 };
 
 Arguments invalid(std::string_view message) noexcept
@@ -55,6 +67,45 @@ Arguments invalid(std::string_view message) noexcept
     Arguments result;
     result.error = message;
     return result;
+}
+
+int hex_nibble(char value) noexcept
+{
+    if (value >= '0' && value <= '9') return value - '0';
+    if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+    if (value >= 'A' && value <= 'F') return value - 'A' + 10;
+    return -1;
+}
+
+bool parse_hex(std::string_view value, Arguments& result) noexcept
+{
+    if (value.empty()) return false;
+    std::size_t offset = 0U;
+    while (offset < value.size()) {
+        if (result.apdu_length == result.apdu.size() || offset + 2U > value.size())
+            return false;
+        const int high = hex_nibble(value[offset]);
+        const int low = hex_nibble(value[offset + 1U]);
+        if (high < 0 || low < 0) return false;
+        result.apdu[result.apdu_length++] = static_cast<std::uint8_t>((high << 4) | low);
+        offset += 2U;
+        if (offset == value.size()) break;
+        if (value[offset++] != ':' || offset == value.size()) return false;
+    }
+    return result.apdu_length != 0U;
+}
+
+Command parse_command(std::string_view value) noexcept
+{
+    if (value == "list") return Command::list;
+    if (value == "status") return Command::status;
+#if defined(PX4CTL_PX4_IDENTITY)
+    if (value == "card-status") return Command::card_status;
+    if (value == "card-atr") return Command::card_atr;
+    if (value == "card-reset") return Command::card_reset;
+    if (value == "card-apdu") return Command::card_apdu;
+#endif
+    return Command::none;
 }
 
 Arguments parse_arguments(int argc, const char* const* argv) noexcept
@@ -97,19 +148,19 @@ Arguments parse_arguments(int argc, const char* const* argv) noexcept
             }
             continue;
         }
-        if (option == "list") {
-            if (result.list || result.status) return invalid("duplicate command");
-            result.list = true;
+        if (result.command == Command::none) {
+            result.command = parse_command(option);
+            if (result.command == Command::none) return invalid("unknown command");
+            if (result.command == Command::card_apdu) {
+                if (index + 1 >= argc || argv[index + 1] == nullptr ||
+                    !parse_hex(argv[++index], result))
+                    return invalid("card-apdu requires 1..4096 colon-separated bytes");
+            }
             continue;
         }
-        if (option == "status") {
-            if (result.status || result.list) return invalid("duplicate command");
-            result.status = true;
-            continue;
-        }
-        return invalid("list or status command is required");
+        return invalid("unexpected argument");
     }
-    if (!result.status && !result.list) return invalid("list or status command is required");
+    if (result.command == Command::none) return invalid("a command is required");
     if ((have_device && result.device.empty()) || (have_instance && result.instance.empty()))
         return invalid("selector value must not be empty");
     if (have_runtime && result.runtime_directory.empty())
@@ -131,8 +182,27 @@ void usage(FILE* output) noexcept
 {
     std::fprintf(output,
                  "usage: %s [--device serial:SERIAL|usb:BUS-PORT[,BUS-PORT...]] "
-                 "[--instance TOKEN] [--runtime-dir PATH] [--group] list|status\n"
-                 "       %s --help | --version\n", PX4CTL_TOOL_NAME, PX4CTL_TOOL_NAME);
+                 "[--instance TOKEN] [--runtime-dir PATH] [--group] COMMAND\n"
+                 "       %s --help | --version\ncommands: list, status",
+                 PX4CTL_TOOL_NAME, PX4CTL_TOOL_NAME);
+#if defined(PX4CTL_PX4_IDENTITY)
+    std::fputs(", card-status, card-atr, card-reset, card-apdu HEX", output);
+#endif
+    std::fputc('\n', output);
+}
+
+bool is_card_command(Command command) noexcept
+{
+    return command == Command::card_status || command == Command::card_atr ||
+           command == Command::card_reset || command == Command::card_apdu;
+}
+
+void print_hex(const char* label, const std::uint8_t* data, std::size_t size) noexcept
+{
+    std::printf("%s=", label);
+    for (std::size_t index = 0U; index < size; ++index)
+        std::printf("%s%02x", index == 0U ? "" : ":", static_cast<unsigned int>(data[index]));
+    std::putchar('\n');
 }
 
 class SocketTransport final : public wire::ClientTransport {
@@ -232,7 +302,7 @@ bool matches_device(const wire::ListResponse& list,
     return list.functions.count == expected.topology.count;
 }
 
-int exit_status(CommonError error) noexcept
+int exit_status(CommonError error, bool card_operation = false) noexcept
 {
     switch (error) {
     case CommonError::OK: return 0;
@@ -243,8 +313,8 @@ int exit_status(CommonError error) noexcept
     case CommonError::BUSY:
     case CommonError::RESOURCE_LIMIT: return 4;
     case CommonError::TIMEOUT: return 5;
-    case CommonError::VERSION_MISMATCH:
-    case CommonError::PROTOCOL_ERROR: return 6;
+    case CommonError::VERSION_MISMATCH: return 6;
+    case CommonError::PROTOCOL_ERROR: return card_operation ? 9 : 6;
     case CommonError::USB_IO:
     case CommonError::DISCONNECTED: return 7;
     case CommonError::SLOW_CONSUMER: return 8;
@@ -522,6 +592,8 @@ int main(int argc, char** argv)
     if (endpoints.empty()) return 3;
 
     wire::StatusFetchResult snapshot{};
+    RuntimeCandidate selected_candidate{};
+    std::unique_ptr<SocketTransport> selected_transport;
     bool found = false;
     for (const RuntimeCandidate& candidate : endpoints) {
         const EndpointConfig endpoint{
@@ -539,8 +611,11 @@ int main(int argc, char** argv)
                          static_cast<unsigned int>(stream.error()));
             return exit_status(stream.error());
         }
-        SocketTransport transport(std::move(stream.value()));
-        auto current = wire::fetch_status(transport, dtv::userland::Timeout{5000U});
+        auto transport = std::make_unique<SocketTransport>(std::move(stream.value()));
+        const std::uint64_t required_features =
+            arguments.command == Command::card_status ? wire::kFeatureCardService : 0U;
+        auto current = wire::fetch_status(*transport, dtv::userland::Timeout{5000U},
+                                          required_features);
         if (!current) {
             std::fprintf(stderr, "%s: status failed (%u, remote=%u)\n", PX4CTL_TOOL_NAME,
                          static_cast<unsigned int>(current.error),
@@ -578,15 +653,141 @@ int main(int argc, char** argv)
             return 3;
         }
         snapshot = std::move(current);
+        selected_candidate = candidate;
+        selected_transport = std::move(transport);
         found = true;
     }
     if (!found) return 3;
-    if (arguments.list) {
+    if (arguments.command == Command::list) {
         if (!print_list(snapshot.snapshot.list, snapshot.snapshot.status)) {
             std::fprintf(stderr, "%s: list output failed\n", PX4CTL_TOOL_NAME);
             return 70;
         }
         return 0;
+    }
+    if (arguments.command == Command::card_status) {
+        if (!snapshot.snapshot.list.readers.present ||
+            snapshot.snapshot.list.readers.value.count == 0U) {
+            std::fprintf(stderr, "%s: no card reader is available\n", PX4CTL_TOOL_NAME);
+            return 3;
+        }
+        wire::CardClientSession session{};
+        session.epoch = snapshot.snapshot.status.context.epoch;
+        session.reader_id = snapshot.snapshot.list.readers.value.items[0U].id;
+        session.next_request_id = 4U;
+        const auto card = wire::card_status(*selected_transport, session,
+                                            dtv::userland::Timeout{5000U});
+        if (!card) {
+            std::fprintf(stderr, "%s: card-status failed (%u, remote=%u)\n",
+                         PX4CTL_TOOL_NAME, static_cast<unsigned int>(card.error),
+                         static_cast<unsigned int>(card.remote_error_code));
+            return exit_status(card.error);
+        }
+        const wire::CardStatusResponse& response = card.response;
+        std::printf("present=%s initialized=%s reader-generation=%llu\n",
+                    response.present ? "yes" : "no",
+                    response.initialized ? "yes" : "no",
+                    static_cast<unsigned long long>(response.current_generation));
+        if (response.atr.present)
+            print_hex("atr", response.atr.value.bytes.data(), response.atr.value.length);
+        return std::fflush(stdout) == 0 ? 0 : 70;
+    }
+    if (is_card_command(arguments.command)) {
+        const EndpointConfig endpoint{
+            selected_candidate.runtime_directory.empty() ? nullptr :
+                selected_candidate.runtime_directory.c_str(),
+            selected_candidate.instance.c_str(), kControlEndpointName,
+            arguments.group ? EndpointAccess::shared_group : EndpointAccess::private_user};
+        selected_transport->close();
+        auto stream = SocketStream::connect(endpoint, px4::userland::Timeout{2000U});
+        if (!stream) {
+            std::fprintf(stderr, "%s: connect failed (%u)\n", PX4CTL_TOOL_NAME,
+                         static_cast<unsigned int>(stream.error()));
+            return exit_status(stream.error());
+        }
+        SocketTransport card_transport(std::move(stream.value()));
+        if (!snapshot.snapshot.list.readers.present ||
+            snapshot.snapshot.list.readers.value.count == 0U) {
+            std::fprintf(stderr, "%s: no card reader is available\n", PX4CTL_TOOL_NAME);
+            return 3;
+        }
+        wire::CardClientOptions options{};
+        options.reader_id = snapshot.snapshot.list.readers.value.items[0U].id;
+        const auto opened = wire::begin_card(card_transport, options,
+                                              dtv::userland::Timeout{5000U});
+        if (!opened) {
+            std::fprintf(stderr, "%s: card connect failed (%u, remote=%u)\n",
+                         PX4CTL_TOOL_NAME, static_cast<unsigned int>(opened.error),
+                         static_cast<unsigned int>(opened.remote_error_code));
+            return exit_status(opened.error, true);
+        }
+        if (opened.session.epoch != snapshot.snapshot.status.context.epoch ||
+            opened.session.reader_id != options.reader_id) {
+            // CARD_CONNECT has already acquired a handle on the second
+            // connection. Release it even when this daemon is not the
+            // originally selected instance (e.g. daemon restarted).
+            wire::CardClientSession stale = opened.session;
+            if (stale.card_handle != 0U) {
+                const auto released = wire::card_disconnect(
+                    card_transport, stale, wire::Disposition::leave,
+                    dtv::userland::Timeout{5000U});
+                if (!released)
+                    std::fprintf(stderr, "%s: stale card handle release failed (%u)\n",
+                                 PX4CTL_TOOL_NAME,
+                                 static_cast<unsigned int>(released.error));
+            }
+            std::fprintf(stderr, "%s: daemon changed during card selection\n",
+                         PX4CTL_TOOL_NAME);
+            return 3;
+        }
+        wire::CardClientSession session = opened.session;
+        CommonError operation_error = CommonError::OK;
+        if (arguments.command == Command::card_atr) {
+            if (!opened.connection.atr.present) {
+                operation_error = CommonError::NOT_READY;
+            } else {
+                print_hex("atr", opened.connection.atr.value.bytes.data(),
+                          opened.connection.atr.value.length);
+            }
+        } else if (arguments.command == Command::card_reset) {
+            const auto reset = wire::card_reset(card_transport, session,
+                                                 dtv::userland::Timeout{5000U});
+            if (!reset) {
+                operation_error = reset.error;
+            } else if (!reset.response.atr.present) {
+                operation_error = CommonError::NOT_READY;
+            } else {
+                print_hex("atr", reset.response.atr.value.bytes.data(),
+                          reset.response.atr.value.length);
+            }
+        } else {
+            const auto transmitted = wire::card_transmit(
+                card_transport, session, wire::CardProtocol::t1,
+                dtv::userland::ByteView{arguments.apdu.data(), arguments.apdu_length},
+                dtv::userland::Timeout{5000U});
+            if (!transmitted) {
+                operation_error = transmitted.error;
+            } else {
+                print_hex("response", transmitted.response.response.bytes.data(),
+                          transmitted.response.response.length);
+                std::printf("response-length=%zu\ntransmit-count=1\n",
+                            static_cast<std::size_t>(
+                                transmitted.response.response.length));
+            }
+        }
+        if (session.card_handle != 0U) {
+            const auto disconnected = wire::card_disconnect(
+                card_transport, session, wire::Disposition::leave,
+                dtv::userland::Timeout{5000U});
+            if (!disconnected && operation_error == CommonError::OK)
+                operation_error = disconnected.error;
+        }
+        if (operation_error != CommonError::OK) {
+            std::fprintf(stderr, "%s: card operation failed (%u)\n", PX4CTL_TOOL_NAME,
+                         static_cast<unsigned int>(operation_error));
+            return exit_status(operation_error, true);
+        }
+        return std::fflush(stdout) == 0 ? 0 : 70;
     }
     wire::StatusContext context{&snapshot.snapshot.list};
     const auto size = wire::status_json_size(snapshot.snapshot.status, context);

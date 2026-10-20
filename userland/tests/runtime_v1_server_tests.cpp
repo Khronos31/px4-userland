@@ -132,6 +132,7 @@ private:
 // Counts every card-side call: generic STATUS must never reach any of them.
 class CardBackend final : public CardServiceBackend {
 public:
+    explicit CardBackend(bool card_present = true) noexcept : card_present_(card_present) {}
     Result<void> set_power(bool) noexcept override
     {
         power_calls.fetch_add(1U);
@@ -145,11 +146,14 @@ public:
     Result<bool> detect_card() noexcept override
     {
         detect_calls.fetch_add(1U);
-        return Result<bool>::success(true);
+        return Result<bool>::success(card_present_);
     }
     std::atomic<std::size_t> power_calls{0U};
     std::atomic<std::size_t> uart_calls{0U};
     std::atomic<std::size_t> detect_calls{0U};
+
+private:
+    bool card_present_ = true;
 };
 
 class CardSession final : public CardProtocolSession {
@@ -1919,11 +1923,15 @@ void on_child_term(int) { g_child_stop = 1; }
                                    bool wrong_product = false,
                                    bool shared_serial_model = false,
                                    std::optional<bool> serial_unique = std::nullopt,
-                                   bool serial_missing = false)
+                                   bool serial_missing = false,
+                                   bool card_present = true,
+                                   bool mock_card_apdu = false,
+                                   bool no_reader = false)
 {
     std::signal(SIGTERM, on_child_term);
-    CardBackend card_backend;
+    CardBackend card_backend(card_present);
     CardSession card_session;
+    if (mock_card_apdu) card_session.enable_mock_apdu();
     CardService card(card_backend, card_session);
     Backend backend;
     PosixTunerNonceSource nonce;
@@ -1956,6 +1964,8 @@ void on_child_term(int) { g_child_stop = 1; }
         !instance.empty() &&
         product_context(tuner, epoch.value(), *context, first, second, instance,
                         serial_unique)) {
+        if (no_reader && context->list.readers.present)
+            context->list.readers.value.count = 0U;
         if (serial_missing && context->list.enclosure.present) {
             auto& device_identity = context->list.enclosure.value.identity;
             device_identity.serial_state = wire::IdentitySerialState::absent;
@@ -2007,7 +2017,8 @@ pid_t start_child(const std::string& runtime, const std::string& instance,
                   bool shared_group = false, bool wrong_product = false,
                   bool shared_serial_model = false,
                   std::optional<bool> serial_unique = std::nullopt,
-                  bool serial_missing = false)
+                  bool serial_missing = false, bool card_present = true,
+                  bool mock_card_apdu = false, bool no_reader = false)
 {
     int pipe_fds[2] = {-1, -1};
     if (::pipe(pipe_fds) != 0) return -1;
@@ -2015,7 +2026,8 @@ pid_t start_child(const std::string& runtime, const std::string& instance,
     if (pid == 0) {
         ::close(pipe_fds[0]);
         run_child_server(runtime, pipe_fds[1], instance, shared_group, wrong_product,
-                         shared_serial_model, serial_unique, serial_missing);
+                         shared_serial_model, serial_unique, serial_missing,
+                         card_present, mock_card_apdu, no_reader);
     }
     ::close(pipe_fds[1]);
     if (pid < 0) {
@@ -2090,7 +2102,8 @@ int create_busy_endpoint(const std::string& runtime, std::string_view instance)
 
 bool run_ctl_status(const std::string& runtime, const std::string& instance,
                     int& status, std::string& output,
-                    const char* device = nullptr, const char* command = "status")
+                    const char* device = nullptr, const char* command = "status",
+                    const char* command_argument = nullptr)
 {
     int pipe_fds[2] = {-1, -1};
     if (::pipe(pipe_fds) != 0) return false;
@@ -2099,21 +2112,38 @@ bool run_ctl_status(const std::string& runtime, const std::string& instance,
         ::close(pipe_fds[0]);
         (void)::dup2(pipe_fds[1], STDOUT_FILENO);
         ::close(pipe_fds[1]);
-        if (device != nullptr && !instance.empty())
+        if (device != nullptr && !instance.empty()) {
+            if (command_argument != nullptr)
+                ::execl(PX4CTL_EXECUTABLE, PX4CTL_EXECUTABLE,
+                    "--runtime-dir", runtime.c_str(), "--instance", instance.c_str(),
+                    "--device", device, command, command_argument, static_cast<char*>(nullptr));
             ::execl(PX4CTL_EXECUTABLE, PX4CTL_EXECUTABLE,
                     "--runtime-dir", runtime.c_str(), "--instance", instance.c_str(),
                     "--device", device, command, static_cast<char*>(nullptr));
-        else if (device != nullptr)
+        } else if (device != nullptr) {
+            if (command_argument != nullptr)
+                ::execl(PX4CTL_EXECUTABLE, PX4CTL_EXECUTABLE,
+                    "--runtime-dir", runtime.c_str(), "--device", device,
+                    command, command_argument, static_cast<char*>(nullptr));
             ::execl(PX4CTL_EXECUTABLE, PX4CTL_EXECUTABLE,
                     "--runtime-dir", runtime.c_str(), "--device", device,
                     command, static_cast<char*>(nullptr));
-        else if (instance.empty())
+        } else if (instance.empty()) {
+            if (command_argument != nullptr)
+                ::execl(PX4CTL_EXECUTABLE, PX4CTL_EXECUTABLE,
+                    "--runtime-dir", runtime.c_str(), command, command_argument,
+                    static_cast<char*>(nullptr));
             ::execl(PX4CTL_EXECUTABLE, PX4CTL_EXECUTABLE,
                     "--runtime-dir", runtime.c_str(), command, static_cast<char*>(nullptr));
-        else
+        } else {
+            if (command_argument != nullptr)
+                ::execl(PX4CTL_EXECUTABLE, PX4CTL_EXECUTABLE,
+                    "--runtime-dir", runtime.c_str(), "--instance", instance.c_str(),
+                    command, command_argument, static_cast<char*>(nullptr));
             ::execl(PX4CTL_EXECUTABLE, PX4CTL_EXECUTABLE,
                     "--runtime-dir", runtime.c_str(), "--instance", instance.c_str(),
                     command, static_cast<char*>(nullptr));
+        }
         std::_Exit(127);
     }
     ::close(pipe_fds[1]);
@@ -2428,6 +2458,44 @@ bool test_actual_ctl_list_marks_missing_serial_unknown()
     V1_CHECK(output.find("serial=unknown") != std::string::npos &&
              output.find("serial=00001205000960") == std::string::npos &&
              output.find("ready=ready") != std::string::npos);
+    return true;
+}
+
+bool test_actual_ctl_card_commands_use_typed_service()
+{
+    const auto run = [](const char* instance, const char* command,
+                        const char* argument, bool card_present,
+                        bool mock_card_apdu, bool no_reader, int expected_status,
+                        std::string_view expected_output) {
+        TempRuntime runtime;
+        if (!runtime.valid()) return false;
+        const pid_t server_pid = start_child(runtime.path(), instance, false, false,
+                                             false, std::nullopt, false,
+                                             card_present, mock_card_apdu, no_reader);
+        if (server_pid <= 0) return false;
+        int status = 0;
+        std::string output;
+        const bool done = run_ctl_status(runtime.path(), instance, status, output,
+                                         nullptr, command, argument);
+        const bool stopped = stop_child(server_pid);
+        return done && WIFEXITED(status) && WEXITSTATUS(status) == expected_status &&
+               stopped && (expected_output.empty() ? output.empty() :
+                           output.find(expected_output) != std::string::npos);
+    };
+
+    V1_CHECK(run("card-status-present", "card-status", nullptr, true, false, false, 0,
+                 "present=yes initialized=no reader-generation="));
+    V1_CHECK(run("card-status-absent", "card-status", nullptr, false, false, false, 0,
+                 "present=no initialized=no reader-generation="));
+    V1_CHECK(run("card-status-no-reader", "card-status", nullptr, true, false, true, 3,
+                 ""));
+    V1_CHECK(run("card-atr-connected", "card-atr", nullptr, true, true, false, 0,
+                 "atr=3b:00\n"));
+    V1_CHECK(run("card-reset-connected", "card-reset", nullptr, true, true, false, 0,
+                 "atr=3b:00\n"));
+    V1_CHECK(run("card-apdu-connected", "card-apdu", "00:a4:04:00",
+                 true, true, false, 0,
+                 "response=90:00\nresponse-length=2\ntransmit-count=1\n"));
     return true;
 }
 
@@ -3120,6 +3188,8 @@ int main()
          test_actual_ctl_list_formats_typed_topology},
         {"actual_ctl_list_marks_missing_serial_unknown",
          test_actual_ctl_list_marks_missing_serial_unknown},
+        {"actual_ctl_card_commands_use_typed_service",
+         test_actual_ctl_card_commands_use_typed_service},
         {"ctl_rejects_shared_serial_assertion", test_ctl_rejects_shared_serial_assertion},
         {"ctl_rejects_unverified_serial_assertion",
          test_ctl_rejects_unverified_serial_assertion},

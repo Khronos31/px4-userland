@@ -1,5 +1,7 @@
 # px4-userland
 
+> **v1.0.0隔離WIPの文書移行中（2026-10-20）:** 本READMEの旧例には公開v0.2.1時点のCLIが残っています。特に `px4d --list` は廃止され、USB列挙は `px4d --list-json`、稼働中の受信機一覧は `px4ctl list` です。旧 `--device` の裸シリアル・`px4-ts --frequency-khz` / `--duration-seconds` などの例も新しい製品CLIでは移行が必要です。現行WIPの具体的な引数は各バイナリの `--help` を参照し、最終RCの配布物と照合するまで旧例をそのまま実行しないでください。旧資料は履歴として残しており、全OSの新手順確認は未完了です。
+
 `px4-userland` は、PLEX PX-Q3U4、PX-M1UR、PX-S1UR、PX-W3U4、PX-MLT5PE、および e-Better DTV02A-5TS-P 向けのユーザー空間ドライバおよびツール群です。カーネルモジュールを使用せず、ユーザー空間からチューナーおよび内蔵 IC カードリーダーを制御し、MPEG-TS ストリームを出力します。機種ごとの認定範囲とOS/access path別の状態は下表を参照してください。
 
 ## 対応機種・動作環境
@@ -345,6 +347,8 @@ runtime_dir="$PREFIX/tmp/p4"
 
 ### `px4d`（デバイス所有デーモン）
 
+> **v1.0.0移行中の暫定案内:** 以下の `--list`・裸シリアル `--device`・`--usb-path` を含む例は**v0.2.1の履歴書式**であり、現在の隔離WIPのコマンドとしては実行できません。現行daemonは `--device serial:SERIAL` または `--device usb:PATH[,PATH]` を使用し、接続USB機器の列挙は `px4d --list-json`、対応機種の静的一覧は `px4d --models`、稼働中受信機一覧は `px4ctl list` に分離しています。正式v1.0.0公開前にこの章の旧例を更新・検証します。
+
 対象筐体の USB デバイス（PX-Q3U4 は 2 系統、DTV02A-5TS-P / PX-MLT5PE は 1 系統）、全受信機、内蔵 IC カードリーダーを一括して所有・管理します。フォアグラウンドで動作します。
 
 ```sh
@@ -382,6 +386,8 @@ receiver=0 device=1 local=0 system=ISDB-T,ISDB-S lnb_15v_supported=true
 同一Linuxホスト内のlocalhost usbipを利用する場合は、VHCI側の2ノードを事前にopenし、`--fd FD --fd FD`で指定する。同一libusbコンテキスト内にexport元の物理機能とimport先のVHCI機能が同一シリアルで現れ、通常列挙では重複スロット（`INVALID_ARGUMENT`）となるためである。なお、LAN経由のusbip構成は未検証である。
 
 ### `px4-ts`（MPEG-TS 受信ツール）
+
+> **v1.0.0移行中の暫定案内:** 以下の `--frequency-khz`・`--duration-seconds`・`--stream-id` 等はv0.2.1用の履歴書式で、現行製品CLIはそれぞれHz単位の `-f/--freq`、`-t/--time`、`--tsid` を使用します。単位や衛星選択の値を機械的に改名するだけでは不十分な場合があります。正しい形式は候補ビルドの `px4-ts --help` で確認し、この章の旧実行例は最終RCで更新します。
 
 `px4d` に接続し、指定した受信機から MPEG-TS ストリームを受信して標準出力またはファイルへ出力します。
 
@@ -458,17 +464,17 @@ mirakc の tuner command では、チャンネル表記をそのまま `--channe
 デバイスの状態確認や内蔵 IC カードリーダーの操作を行います。
 
 ```sh
-px4ctl (--device SERIAL | --instance TOKEN) [--runtime-dir PATH] [--group] <サブコマンド>
+px4ctl (--device serial:SERIAL | --device usb:BUS-PORT[,BUS-PORT...] | --instance TOKEN) [--runtime-dir PATH] [--group] <サブコマンド>
 ```
 
 #### サブコマンド一覧
 
 - `list`: 対象デーモンインスタンスのシリアル番号、ready 状態、USB present mask、および 8 つの受信機情報（受信機番号、デバイス番号、ローカル番号、放送方式）を表示します。
-- `status`: デバイス全体の稼働状態、各受信機の状態（free / leased / tuned / streaming / error）およびエラー統計を表示します。
+- `status`: デーモン・筐体・各受信機の状態とエラー統計を共通STATUSのJSON形式で表示します。旧バージョンの `key=value` テキスト出力とは互換ではありません。
 - `card-status`: 内蔵カードリーダーのカード挿入状態、初期化状態、ATR を表示します。
 - `card-atr`: カードの ATR（Answer to Reset）を取得して表示します。
 - `card-reset`: カードをリセットし、ATR を表示します。
-- `card-apdu HEX [--repeat N]`: コロン区切りの 16 進文字列（1〜4096 バイト、例: `00:a4:00:00`）で指定した APDU をカードへ送信し、応答を表示します。`--repeat N` で送信回数を指定可能です（指定範囲: 1〜100000）。
+- `card-apdu HEX`: コロン区切りの 16 進文字列（1〜4096 バイト、例: `00:a4:00:00`）で指定した APDU をカードへ**1回**送信し、応答を表示します。v0.2.1の `--repeat N` は通常の `px4ctl` では受け付けません。反復APDU診断は開発用の別コマンド `px4-card-probe --base BASE --firmware PATH --apdu HEX --repeat N`（1〜100000回）で行えますが、これはデーモンに接続する同等の代替ではなく、USBデバイスへ直接アクセスする診断用途です。
 
 ## 内蔵 IC カードリーダー
 

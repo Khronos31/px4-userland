@@ -1,5 +1,7 @@
 # Stable リリース前検証手順
 
+> **v1.0.0移行作業中（2026-10-20）:** 本文の一部は公開済みv0.2.1のCLI（例: 裸シリアルの`--device`、`px4d --list`、`--frequency-khz`、`--duration-seconds`）を前提にした履歴手順であり、現在のv1.0.0隔離WIPにそのまま実行できる完成手順ではありません。最終RCのCLIへ書式・単位・JSONを更新し、各OS実機で再検証するまで、この文書だけを根拠にRelease gateがPASSしたと判断しないでください。旧 `px4ctl card-apdu --repeat N` は廃止方向であり、新CLIは単発送信です。SPEC 10.2の「反復APDU」はdaemon経由の単発送信を10回個別に実行し、各回の終了値と応答を確認します。これは旧 `--repeat N` の**同一CARDセッション内での反復**をそのまま再現しないため、その追加負荷特性を検証済みと扱わないでください。
+
 この文書は Stable リリースごとの実行手順を定める。合否条件と認定条件の正本は [`SPEC.md`](../SPEC.md) 10章であり、両者に差があれば SPEC を優先し、手順書を更新する。
 
 Stable releaseは次の順で進める。
@@ -55,7 +57,7 @@ PX4/ASICEN共通の記録構造と空のmatrixは [`release-record.md`](release-
 | `android-aarch64` | E05 Termux aarch64 | 同上。2-FD launcher経由で受信する |
 | `android-armv7a` | E06 Termux armv7a | E05と同じ手順、armv7a archive |
 | `android-x86_64` | E07 Bliss OS Termux x86_64 | E05と同じ手順、x86_64 archive |
-| `windows-x86_64` | E17 Windows 11 x64 | E17のWindows手順。列挙・ready、短い受信、CARD ATR/reset/反復APDU、カード抜去・再挿入、USB切断・再接続後のdaemon再起動、cooperative shutdown後の残留確認 |
+| `windows-x86_64` | E17 Windows 11 x64 | E17のWindows手順。列挙・ready、短い受信、CARD ATR/reset/daemon経由APDUの10回逐次成功（旧同一セッション反復とは異なる）、カード抜去・再挿入、USB切断・再接続後のdaemon再起動、cooperative shutdown後の残留確認 |
 
 このmatrixはrelease archive manifestの9 binary target（8 tar archiveとWindows ZIP 1つ）と、Q3U4の既存実機記録に基づく。過去の受信・抜差し結果は[validation-results.md](platforms/validation-results.md)に記録されている。[PR #15](https://github.com/Khronos31/px4-userland/pull/15)はfinal candidate artifact auditとhardware canaryを記録し、[Issue #4](https://github.com/Khronos31/px4-userland/issues/4)はusbip・LSM・libusb/access pathなどディストリビューション名だけでは覆えない検証軸を整理している。過去記録は今回candidateのmatrix結果を代替しない。
 
@@ -118,7 +120,26 @@ wait "$R6"; echo "$?" > "$LOG/r6.rc"
 wait "$R7"; echo "$?" > "$LOG/r7.rc"
 ```
 
-受信中の監視は別の端末で実行する: `px4ctl status`、`px4ctl card-apdu 90:30:00:00:00 --repeat 10`、FD/RSSを記録する。受信確認の実行時間は30秒で、全手順やartifact gateの所要時間を制限しない。
+受信中の監視は別の端末で実行する。**SPEC 10.2.13 の並行APDU条件では、8 receiverが実際に同時capture中の区間で10回のAPDUを実行し、すべての終了値・応答とcapture重複時間を記録する。** 別端末に同じ候補artifactの `D`、canonical selectorの `ID`、`RT`、`LOG` を設定してから実行する。旧 `--repeat` と違い各回は別CARD接続である。最後の送信より前に受信が終了した場合、並行条件は未達なので成功扱いしない。
+
+```sh
+"$D/px4ctl" --device "$ID" --runtime-dir "$RT" status > "$LOG/concurrent-status.json"
+apdu_passes=0
+for attempt in $(seq 1 10); do
+  date -u +%Y-%m-%dT%H:%M:%SZ > "$LOG/concurrent-apdu.$attempt.time"
+  if "$D/px4ctl" --device "$ID" --runtime-dir "$RT" card-apdu 90:30:00:00:00 \
+    > "$LOG/concurrent-apdu.$attempt.txt" \
+    && grep -q 'response=90:00' "$LOG/concurrent-apdu.$attempt.txt"; then
+    apdu_passes=$((apdu_passes + 1))
+  else
+    echo "CARD APDU $attempt failed" >&2
+    break
+  fi
+done
+test "$apdu_passes" -eq 10
+```
+
+各receiverが上の全APDU実行期間に `streaming` だったか、`px4ctl status`と受信/終了ログで確認しFD/RSSも記録する。短時間確認は各receiver30秒で、時間内に反復を完了できなければ同時実行条件は未認定（検証条件に合わせて候補の試験手順を再構成する）。全手順やartifact gateの総所要時間は制限しない。
 
 Termux での起動（X-START-TERMUX）:
 
@@ -150,7 +171,19 @@ APDU=90:30:00:00:00
 "$CTL" --device "$ID" --runtime-dir "$RT" card-status | tee "$LOG/card-before.txt"
 "$CTL" --device "$ID" --runtime-dir "$RT" card-atr > "$LOG/card-before.atr"
 "$CTL" --device "$ID" --runtime-dir "$RT" card-reset > "$LOG/card-before.reset"
-"$CTL" --device "$ID" --runtime-dir "$RT" card-apdu "$APDU" --repeat 10 > "$LOG/card-before.apdu"
+# SPEC 10.2の反復APDU: daemon接続による単発送信を10回実施し、各回を個別に検証。
+# 旧 --repeat（1セッションで反復）とは異なり、毎回別のCARD接続を行う。
+apdu_passes=0
+for attempt in $(seq 1 10); do
+  if "$CTL" --device "$ID" --runtime-dir "$RT" card-apdu "$APDU" > "$LOG/card-before.$attempt.apdu" \
+    && grep -q 'response=90:00' "$LOG/card-before.$attempt.apdu"; then
+    apdu_passes=$((apdu_passes + 1))
+  else
+    echo "APDU attempt $attempt failed" >&2
+    break
+  fi
+done
+test "$apdu_passes" -eq 10
 ```
 
 カード抜去を要求する前にHAOS/SCS側で通知する:
@@ -181,10 +214,22 @@ beep   # Codex。Claude Codeは vibe
 "$CTL" --device "$ID" --runtime-dir "$RT" card-status | tee "$LOG/card-reinserted.txt"
 "$CTL" --device "$ID" --runtime-dir "$RT" card-atr > "$LOG/card-reinserted.atr"
 "$CTL" --device "$ID" --runtime-dir "$RT" card-reset > "$LOG/card-reinserted.reset"
-"$CTL" --device "$ID" --runtime-dir "$RT" card-apdu "$APDU" --repeat 10 > "$LOG/card-reinserted.apdu"
+# SPEC 10.2の反復APDU: daemon接続による単発送信を10回実施し、各回を個別に検証。
+# 旧 --repeat（1セッションで反復）とは異なり、毎回別のCARD接続を行う。
+apdu_passes=0
+for attempt in $(seq 1 10); do
+  if "$CTL" --device "$ID" --runtime-dir "$RT" card-apdu "$APDU" > "$LOG/card-reinserted.$attempt.apdu" \
+    && grep -q 'response=90:00' "$LOG/card-reinserted.$attempt.apdu"; then
+    apdu_passes=$((apdu_passes + 1))
+  else
+    echo "APDU attempt $attempt failed" >&2
+    break
+  fi
+done
+test "$apdu_passes" -eq 10
 ```
 
-判定: `card-status`の`present=no`とreader generationの変化、ATR/APDUの`NO_CARD`・exit 9を確認する。再挿入時は`present=yes`となりgenerationが再度変化し、ATR取得・reset・APDU 10回が成功することを確認する（過去の正常応答はSW `90 00`）。その後§0.1の8 receiverを30秒実行し、TS/counter条件はSPEC 10.2に従う。カード抜去・再挿入ができない場合、そのartifactの短時間gateは未完了。
+判定: `card-status`の`present=no`とreader generationの変化、ATR/APDUの`NO_CARD`・exit 9を確認する。再挿入時は`present=yes`となりgenerationが再度変化し、ATR取得・resetと、10個の独立したdaemon CARD接続によるAPDU応答が各回成功することを確認する（過去の正常応答はSW `90 00`）。旧 `--repeat` の同一接続内の連続性とは非等価。その後§0.1の8 receiverを30秒実行し、TS/counter条件はSPEC 10.2に従う。カード抜去・再挿入ができない場合、そのartifactの短時間gateは未完了。
 
 USBの物理切断・再接続（X-USB-HP、毎回必須）:
 
@@ -236,8 +281,19 @@ wait "$P"
 旧daemonがすでに終了している場合は`pgrep -fl '[p]x4d'`で残留がないことを確認する。どちらの場合も旧daemonを再利用せず、X-STARTのコマンド群を同じcandidate artifact・device ID・runtime dirで再実行し、`px4ctl status`でreadyを確認する。その後§0.1の8 receiver 30秒確認と、次のAPDU確認を行う:
 
 ```sh
-"$D/px4ctl" --device "$ID" --runtime-dir "$RT" card-apdu 90:30:00:00:00 --repeat 10 \
-  > "$LOG/card-after-usb-reconnect.apdu"
+# 各回のdaemon CARD接続と結果を独立して検証する（旧 --repeat と非同義）。
+apdu_passes=0
+for attempt in $(seq 1 10); do
+  if "$D/px4ctl" --device "$ID" --runtime-dir "$RT" card-apdu 90:30:00:00:00 \
+    > "$LOG/card-after-usb-reconnect.$attempt.apdu" \
+    && grep -q 'response=90:00' "$LOG/card-after-usb-reconnect.$attempt.apdu"; then
+    apdu_passes=$((apdu_passes + 1))
+  else
+    echo "APDU attempt $attempt failed" >&2
+    break
+  fi
+done
+test "$apdu_passes" -eq 10
 ```
 
 終了後にX-STOP / X-RESIDでdaemon/client process、FD、IPC socket/control endpointの残留がないことを確認する。USB切断・再接続ができない場合、そのartifactの短時間gateは未完了。
@@ -319,10 +375,10 @@ gh run view <run-id> --job <job-id> --log > "$LOG/run-<run-id>-job-<job-id>.log"
 1. 候補archiveのhash確認・展開、Q3U4のfirmware/RF/電源preflight、ログ先作成を済ませる。これらを含めて一連の確認に総時間上限は設けない。
 2. `px4d --list` と `--list-json` でQ3U4が8 receiver readyと列挙されることを確認し、JSON schema・boolean型・receiver capability値を照合する。M1UR/S1URのserial衝突やLNB非対応profile表示が変更対象なら、§0の該当する機種別追加確認も行う。
 3. daemonを起動したままreceiver captureを止め、X-CARD-HPのコマンド群を実行する。カード抜去を依頼する直前に通知し、依頼後最大5分待つ。`card-status`の`present=no`、ATR/APDUの`NO_CARD`（exit 9）を確認する。
-4. 再挿入を依頼する直前に通知し、依頼後最大5分待つ。generation更新、ATR/reset/APDU 10回の復帰を確認する。
+4. 再挿入を依頼する直前に通知し、依頼後最大5分待つ。generation更新、ATR/resetと、daemon経由10回の単発APDUの復帰を各回確認する。同一CARD接続の連続負荷試験は別で必要なら追加する。
 5. X-USB-HPで1 receiver clientを起動してUSB切断を観測する。USB切断を依頼する直前に通知し、依頼後最大5分待つ。clientが有限時間で`DISCONNECTED` / exit 7となり、ハングやclient process残留がないことを確認する。
 6. USB再接続を依頼する直前に通知し、依頼後最大5分待つ。`--list` / `--list-json`で再列挙を確認した後、旧daemonを停止して終了を待ち、X-STARTの手順で同じcandidateからdaemonを起動し直す。古いdaemonの自動復帰を合格条件にしない。
-7. 再起動後に`px4ctl status`でreadyを確認し、8 receiverを30秒実行してTS条件をSPEC 10.2の適用項目で確認する。APDU 10回も再確認し、最後にdaemon/client、FD、IPC socket/control endpointの残留がないことを確認する。
+7. 再起動後に`px4ctl status`でreadyを確認し、8 receiverを30秒実行してTS条件をSPEC 10.2の適用項目で確認する。10回のdaemon経由APDUを各回検証し（旧同一セッション反復のstress proofではない）、最後にdaemon/client、FD、IPC socket/control endpointの残留がないことを確認する。
 
 Linux musl aarch64はE15 Fedora aarch64上のAlpine arm64 Docker containerでcandidate artifactを実行する。hostがaarch64であることを`uname -m`等で確認し、CPU emulationを使わず、物理USB deviceをcontainerへ渡す。このartifact行はglibc aarch64の結果で代用せず、独立して実施・記録する。native aarch64 hostまたはUSB passthroughが利用できず物理確認を完了できない場合はgate未完了とする。
 
@@ -712,6 +768,14 @@ SPEC §1 の対象環境（Linux、Android、macOS）に含まれないため �
       if ($r -in 0,1,4,5) { $captures += Start-Ts $r 'isdb-s' 1318000 '0' }
       else { $captures += Start-Ts $r 'isdb-t' 527143 '' }
     }
+    # SPEC 10.2.13: 8 receiver同時capture中、daemon経由CARD APDUを10回検証。
+    # Windowsの同一接続反復ではなく10回の単発送信。capture完了前の重複をログで確認する。
+    foreach ($attempt in 1..10) {
+      (& "$D\px4ctl.exe" --device $ID --runtime-dir $RT card-apdu 90:30:00:00:00 2>> "$LOG\card-concurrent.err") | Out-File "$LOG\card-concurrent.$attempt.txt"
+      "$LASTEXITCODE" | Out-File "$LOG\card-concurrent.$attempt.rc"
+      if ($LASTEXITCODE -ne 0) { throw "concurrent APDU $attempt failed" }
+      if (-not (Select-String -Path "$LOG\card-concurrent.$attempt.txt" -Pattern 'response=90:00' -Quiet)) { throw "unexpected concurrent APDU response" }
+    }
     Wait-Captures $captures
     (& "$D\px4ctl.exe" --device $ID --runtime-dir $RT status 2>> "$LOG\px4ctl.err") | Out-File "$LOG\status-after.txt"
 
@@ -720,8 +784,13 @@ SPEC §1 の対象環境（Linux、Android、macOS）に含まれないため �
       (& "$D\px4ctl.exe" --device $ID --runtime-dir $RT $op 2>> "$LOG\card.err") | Out-File "$LOG\$op.txt"
       "$LASTEXITCODE" | Out-File "$LOG\$op.rc"
     }
-    (& "$D\px4ctl.exe" --device $ID --runtime-dir $RT card-apdu 90:30:00:00:00 --repeat 10 2>> "$LOG\card.err") | Out-File "$LOG\card-apdu.txt"
-    "$LASTEXITCODE" | Out-File "$LOG\card-apdu.rc"
+    # 独立したdaemon CARD接続を10回実施。旧 --repeatの同一セッション負荷とは別。
+    foreach ($attempt in 1..10) {
+      (& "$D\px4ctl.exe" --device $ID --runtime-dir $RT card-apdu 90:30:00:00:00 2>> "$LOG\card.err") | Out-File "$LOG\card-apdu.$attempt.txt"
+      "$LASTEXITCODE" | Out-File "$LOG\card-apdu.$attempt.rc"
+      if ($LASTEXITCODE -ne 0) { throw "CARD APDU attempt $attempt failed" }
+      if (-not (Select-String -Path "$LOG\card-apdu.$attempt.txt" -Pattern 'response=90:00' -Quiet)) { throw "CARD APDU attempt $attempt has unexpected response" }
+    }
   } catch {
     $primary = $_
   } finally {
@@ -747,7 +816,7 @@ SPEC §1 の対象環境（Linux、Android、macOS）に含まれないため �
   ```
 
   CARDの合否は`card-status`の`present=no`、`card-atr`/`card-apdu`の`NO_CARD`（exit 9）、再挿入後の
-  ATR/reset/APDU 10回成功をoutput fieldとexit値で確認する。これは直接CARD_*の証拠であり、次のWinSCard試験を代用しない。
+  ATR/resetとdaemon経由APDUを10回別々に実行し、各回のoutput fieldとexit値を確認する。同一セッション内の反復負荷は別の追加証拠が必要。これは直接CARD_*の証拠であり、次のWinSCard試験を代用しない。
 
 - Phase 2実機への引継ぎ（SPEC 7.6 / [Windows WinSCard手順](platforms/windows-winscard.md)）:
   - 以下のchild scriptを先に$LOG\winscard-smoke.ps1へ保存する。上のE17 X-START blockがready=yesを確認した直後に
