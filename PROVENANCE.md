@@ -52,7 +52,7 @@ keeps the same public API and seams; `userland/src/tuner_service.cpp` is now a G
 backend, nonce, ID, time, and stream-control seams and keeps the PX-Q3U4 receiver defaults, the px4_drv-referenced
 340 ms terrestrial settle policy, and the wire request validation in this product. The library's `PROVENANCE.json`
 records the moved expressions and the original source hashes. The current product pin is
-`80ccc7b7e9ccad7c9b3656f02a28d12f003c45a0`; its tree includes the earlier receiver lifecycle commit above and the
+`812b557e884c9d2250448cf7d5bd293cba686b89`; its tree includes the earlier receiver lifecycle commit above and the
 shared control client. The engine's receiver set is taken from the backend's
 `receiver_count()` when the service is constructed. The supported PX4 contexts have fixed descriptors: Q3U4 uses
 its fixed default count, `SingleReceiverFrontend` reports one, and `MltTunerBackend` sets `receiver_count_` in its
@@ -62,7 +62,7 @@ are absent from the engine's fixed slot set, and this increment does not impleme
 
 The C1 card ownership increment was reviewed against common card-engine commit
 `4301a498547cb1cebc0fc26897fdda9125d64cc6`; the active product lock now selects the pushed combined dependency
-commit `80ccc7b7e9ccad7c9b3656f02a28d12f003c45a0`. The optional `dtv::card` engine in
+commit `812b557e884c9d2250448cf7d5bd293cba686b89`. The optional `dtv::card` engine in
 `dtv/userland/detail/card_ownership_engine.h` and `.tpp` owns only generic card ownership, session transaction,
 presence/generation and cleanup state. The GPL `CardService` facade retains PX4 IPC mappings, `CardAtr`, the
 Native card-session adapter, Q3U4 policy and hardware behavior. The corresponding-source packager includes the
