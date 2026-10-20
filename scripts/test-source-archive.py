@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Isolated end-to-end corresponding-source archive fixture.
 
-Builds throwaway product/common Git snapshots, produces the corresponding-source
+Builds throwaway product Git snapshots against the supplied pinned common source, produces the corresponding-source
 archive with the production helper, audits it, and checks that the bundled
 foundation tree closes the dependency offline.  It never touches the product
 worktree, the network, or release metadata.
@@ -119,10 +119,23 @@ def make_product(base: Path, name: str, *, lock: str | None, module: Path,
     write(product / "VERSION", "0.0.0\n")
     for path, data in PRODUCT_DUMMY_FILES.items():
         write(product / path, data)
+    for name in ("gcc-COPYING.RUNTIME", "gcc-COPYING3", "musl-1.2.5-COPYRIGHT"):
+        source = module.parent.parent / "distribution" / "licenses" / name
+        destination = product / "distribution" / "licenses" / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
     if lock is not None:
         write(product / "cmake/dtv-userland-core.revision", lock + "\n")
     if with_module:
         shutil.copyfile(module, product / "cmake/DtvUserlandCoreDependency.cmake")
+        # The current product dependency module also builds host_runtime. Its
+        # nonce implementations consume these product declarations; IPC and
+        # tuner service definitions now come from the canonical Core adapters.
+        for name in ("posix_tuner_nonce.h", "windows_tuner_nonce.h"):
+            relative = Path("userland/include/px4") / name
+            destination = product / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(module.parent.parent / relative, destination)
         write(product / "CMakeLists.txt", (
             "cmake_minimum_required(VERSION 3.16)\n"
             "project(closure LANGUAGES CXX)\n"
@@ -165,13 +178,11 @@ def main() -> int:
     module = scripts.parent / "cmake" / "DtvUserlandCoreDependency.cmake"
     libusb = args.libusb_source_archive.resolve()
     common = args.common_core_source_root.resolve()
+    common_commit = subprocess.check_output(
+        ["git", "-C", str(common), "rev-parse", "HEAD"], text=True).strip()
+    receiver_main = common / "tests" / "consumer" / "card" / "main.cpp"
     with tempfile.TemporaryDirectory(prefix="px4-source-fixture-") as temporary:
         base = Path(temporary)
-        common_snapshot = base / "common"
-        shutil.copytree(common, common_snapshot,
-                        ignore=shutil.ignore_patterns(".git"))
-        common_commit = git_commit(common_snapshot, "fixture common source")
-        receiver_main = common_snapshot / "tests" / "consumer" / "card" / "main.cpp"
 
         # New snapshot: exact pin, whole-archive audit, offline closure.
         # Dirty the working-tree lock after committing; packaging --source-ref
@@ -180,8 +191,7 @@ def main() -> int:
                                with_module=True, receiver_main=receiver_main)
         write(product / "cmake/dtv-userland-core.revision", "f" * 40 + "\n")
         output = base / "out"
-        completed = package_source(helper, product, libusb, output,
-                                   str(common_snapshot))
+        completed = package_source(helper, product, libusb, output, str(common))
         if completed.returncode != 0:
             raise SystemExit(f"source packaging failed:\n{completed.stdout}")
         archive = output / "px4-userland-0.0.0-source.tar.gz"

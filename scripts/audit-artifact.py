@@ -1757,7 +1757,7 @@ def audit_source_archive(args: argparse.Namespace) -> dict:
                      .decode("utf-8") if "repository/CMakeLists.txt" in members else "")
     host_ts_product = "dtv::host_ts" in product_cmake
     host_daemon_product = "dtv::host_daemon" in product_cmake
-    winscard_product = winscard_document in members or any(
+    winscard_product = "dtv_add_windows_winscard_dll(" in product_cmake or winscard_document in members or any(
         name.startswith("repository/userland/tests/windows_winscard")
         for name in members)
     winscard_adapter = any(
@@ -1784,8 +1784,12 @@ def audit_source_archive(args: argparse.Namespace) -> dict:
         required |= HOST_DAEMON_ADAPTER_REQUIRED
     # A product that advertises WinSCard through its document/tests must ship
     # either the complete legacy product closure or the complete shared
-    # adapter/support closure.  The adapter prefix alone also triggers both.
-    if winscard_product or winscard_adapter or winscard_legacy:
+    # adapter/support closure. A bundled optional adapter must be complete, but
+    # its presence alone does not make a receiver/card-only consumer a WinSCard
+    # product or require product-owned IPC sources from an older layout.
+    if winscard_adapter:
+        required |= WINDOWS_WINSCARD_ADAPTER_REQUIRED
+    if winscard_product or winscard_legacy:
         if winscard_legacy:
             required |= WINDOWS_WINSCARD_LEGACY_SOURCE_REQUIRED
         if winscard_adapter or not winscard_legacy:
