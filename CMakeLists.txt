@@ -329,8 +329,6 @@ if(WIN32)
         userland/src/enclosure_context.cpp
         userland/src/control_server.cpp
         userland/src/control_workers.cpp
-        userland/src/windows/windows_ipc.cpp
-        userland/src/windows/windows_tuner_nonce.cpp
     )
     target_include_directories(px4_userland_windows_ipc
         PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
@@ -341,6 +339,7 @@ if(WIN32)
         px4_userland_core
         dtv::control
         dtv::identity
+        dtv::host_runtime
         px4_userland_windows_platform
         advapi32
         bcrypt
@@ -353,7 +352,6 @@ if(WIN32)
         add_library(px4_winscard_client STATIC
             userland/src/ipc.cpp
             userland/src/control_client.cpp
-            userland/src/windows/windows_ipc.cpp
             userland/src/windows/winscard_card_client.cpp
         )
         target_include_directories(px4_winscard_client PUBLIC
@@ -361,7 +359,8 @@ if(WIN32)
             ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
         )
         target_compile_features(px4_winscard_client PUBLIC cxx_std_17)
-        target_link_libraries(px4_winscard_client PUBLIC advapi32 bcrypt ws2_32 Threads::Threads dtv::core dtv::control)
+        target_link_libraries(px4_winscard_client PUBLIC
+            advapi32 bcrypt ws2_32 Threads::Threads dtv::core dtv::control dtv::host_runtime)
         target_link_libraries(px4_winscard_client PRIVATE dtv::identity)
         px4_enable_project_warnings(px4_winscard_client)
         add_library(px4_winscard SHARED
