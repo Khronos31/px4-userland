@@ -277,6 +277,11 @@ WINDOWS_WINSCARD_SOURCE_REQUIRED = {
     "repository/userland/tests/windows_winscard_proxy_tests.cpp",
     "repository/userland/tests/windows_winscard_import_tests.cpp",
 }
+WINDOWS_WINSCARD_PRODUCT_IPC_REQUIRED = {
+    "repository/userland/src/ipc.cpp",
+    "repository/userland/include/px4/ipc.h",
+    "repository/userland/include/px4/posix_ipc.h",
+}
 WINDOWS_WINSCARD_ADAPTER_REQUIRED = {
     WINSCARD_ADAPTER_PREFIX + "CMakeLists.txt",
     WINSCARD_ADAPTER_PREFIX + "README.md",
@@ -1785,6 +1790,9 @@ def audit_source_archive(args: argparse.Namespace) -> dict:
             required |= WINDOWS_WINSCARD_LEGACY_SOURCE_REQUIRED
         if winscard_adapter or not winscard_legacy:
             required |= WINDOWS_WINSCARD_SOURCE_REQUIRED
+            if "dtv::host_facade" in product_cmake:
+                required -= WINDOWS_WINSCARD_PRODUCT_IPC_REQUIRED
+                required |= HOST_FACADE_ADAPTER_REQUIRED
             required |= WINDOWS_WINSCARD_ADAPTER_REQUIRED
     if not required.issubset(members):
         fail(f"source archive is missing: {sorted(required-set(members))}")
