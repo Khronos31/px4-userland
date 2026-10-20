@@ -161,21 +161,83 @@ WINDOWS_SOURCE_ALLOWED = re.compile(
     r"|userland/include/px4/[\w.+-]*windows[\w.+-]*"
     r"|scripts/build-windows\.sh"
     r"|docs/[\w./+-]*windows[\w./+-]*"
+    r"|third_party/dtv-userland-core/adapters/windows_winscard/[\w./+-]+"
+    r"|third_party/dtv-userland-core/adapters/host_runtime/[\w./+-]+"
     r")$", re.IGNORECASE
 )
 WINDOWS_SOURCE_REQUIRED = {
     "repository/scripts/build-windows.sh",
     "repository/scripts/test-windows-static-relink.sh",
-    "repository/userland/src/windows/windows_ipc.cpp",
     "repository/userland/src/windows/windows_sleep.cpp",
-    "repository/userland/src/windows/windows_tuner_nonce.cpp",
     "repository/userland/tools/px4_ts_windows.cpp",
     "repository/userland/tools/px4_windows_args.h",
     "repository/userland/tests/windows_platform_tests.cpp",
     "repository/userland/tests/windows_worker_tests_main.cpp",
     "repository/userland/include/px4/windows_tuner_nonce.h",
 }
+# Snapshots before the host-runtime move still own the Windows IPC/nonce
+# implementation in the product tree.
+WINDOWS_PRODUCT_RUNTIME_REQUIRED = {
+    "repository/userland/src/windows/windows_ipc.cpp",
+    "repository/userland/src/windows/windows_tuner_nonce.cpp",
+}
+HOST_RUNTIME_ADAPTER_PREFIX = (
+    "repository/third_party/dtv-userland-core/adapters/host_runtime/"
+)
+WINDOWS_HOST_RUNTIME_REQUIRED = {
+    HOST_RUNTIME_ADAPTER_PREFIX + "COPYING",
+    HOST_RUNTIME_ADAPTER_PREFIX + "README.md",
+    HOST_RUNTIME_ADAPTER_PREFIX + "include/px4/posix_ipc_contract.h",
+    HOST_RUNTIME_ADAPTER_PREFIX + "include/px4/posix_tuner_nonce_internal.h",
+    HOST_RUNTIME_ADAPTER_PREFIX + "include/windows/windows_security.h",
+    HOST_RUNTIME_ADAPTER_PREFIX + "posix_ipc.cpp",
+    HOST_RUNTIME_ADAPTER_PREFIX + "posix_tuner_nonce.cpp",
+    HOST_RUNTIME_ADAPTER_PREFIX + "windows/windows_ipc.cpp",
+    HOST_RUNTIME_ADAPTER_PREFIX + "windows/windows_tuner_nonce.cpp",
+    "repository/cmake/DtvUserlandCoreDependency.cmake",
+    "repository/userland/include/px4/ipc.h",
+    "repository/userland/include/px4/posix_ipc.h",
+    "repository/userland/include/px4/posix_tuner_nonce.h",
+}
+# The shareable WinSCard proxy/client lives once in the optional GPL adapter of
+# the pinned common core.  The product keeps only the build wiring, the host
+# facade sources needed by the client-only support target, and the tests.
+WINSCARD_ADAPTER_PREFIX = (
+    "repository/third_party/dtv-userland-core/adapters/windows_winscard/"
+)
 WINDOWS_WINSCARD_SOURCE_REQUIRED = {
+    "repository/CMakeLists.txt",
+    "repository/" + WINDOWS_WINSCARD_DOCUMENT,
+    "repository/cmake/DtvUserlandCoreDependency.cmake",
+    "repository/userland/src/ipc.cpp",
+    "repository/userland/src/control_client.cpp",
+    "repository/userland/include/px4/control_client.h",
+    "repository/userland/include/px4/ipc.h",
+    "repository/userland/include/px4/posix_ipc.h",
+    "repository/userland/tests/windows_winscard_client_tests.cpp",
+    "repository/userland/tests/windows_winscard_proxy_tests.cpp",
+    "repository/userland/tests/windows_winscard_import_tests.cpp",
+}
+WINDOWS_WINSCARD_ADAPTER_REQUIRED = {
+    WINSCARD_ADAPTER_PREFIX + "CMakeLists.txt",
+    WINSCARD_ADAPTER_PREFIX + "README.md",
+    WINSCARD_ADAPTER_PREFIX + "COPYING",
+    WINSCARD_ADAPTER_PREFIX + "winscard.def",
+    WINSCARD_ADAPTER_PREFIX + "windows/winscard_card_client.h",
+    WINSCARD_ADAPTER_PREFIX + "windows/winscard_card_client.cpp",
+    WINSCARD_ADAPTER_PREFIX + "windows/winscard_native.h",
+    WINSCARD_ADAPTER_PREFIX + "windows/winscard_proxy.cpp",
+    WINSCARD_ADAPTER_PREFIX + "windows/winscard_product.h.in",
+}
+# Snapshots that predate the shared foundation still carry the product-owned
+# WinSCard tree.  They are audited exactly as before; the move must not make a
+# historical corresponding-source archive unverifiable.
+WINDOWS_WINSCARD_LEGACY_MARKERS = {
+    "repository/scripts/px4-winscard.def",
+    "repository/userland/src/windows/winscard_proxy.cpp",
+    "repository/userland/src/windows/winscard_card_client.cpp",
+}
+WINDOWS_WINSCARD_LEGACY_SOURCE_REQUIRED = {
     "repository/CMakeLists.txt",
     "repository/" + WINDOWS_WINSCARD_DOCUMENT,
     "repository/scripts/px4-winscard.def",
@@ -1614,12 +1676,41 @@ def audit_source_archive(args: argparse.Namespace) -> dict:
                 common_prefix + "include/dtv/userland/detail/card_ownership_engine.h",
                 common_prefix + "include/dtv/userland/detail/card_ownership_engine.tpp",
             }
-    if any(name.startswith("repository/userland/src/windows/") for name in members):
-        # A committed Windows tree must ship the complete adapter,
-        # test, build script, and header coverage; a partial tree is rejected.
+    winscard_document = "repository/" + WINDOWS_WINSCARD_DOCUMENT
+    windows_product = any(
+        name.startswith("repository/userland/src/windows/") for name in members)
+    product_runtime = any(
+        name in members for name in WINDOWS_PRODUCT_RUNTIME_REQUIRED)
+    host_runtime_adapter = any(
+        name.startswith(HOST_RUNTIME_ADAPTER_PREFIX) for name in members)
+    winscard_product = winscard_document in members or any(
+        name.startswith("repository/userland/tests/windows_winscard")
+        for name in members)
+    winscard_adapter = any(
+        name.startswith(WINSCARD_ADAPTER_PREFIX) for name in members)
+    winscard_legacy = any(
+        name in members for name in WINDOWS_WINSCARD_LEGACY_MARKERS)
+    if windows_product:
+        # A committed Windows tree must ship the complete platform, test, and
+        # build script coverage; a partial tree is rejected.
         required |= WINDOWS_SOURCE_REQUIRED
-    if any("winscard" in name.lower() for name in members):
-        required |= WINDOWS_WINSCARD_SOURCE_REQUIRED
+    # The product layout decides, not the lock: a pre-move snapshot still owns
+    # these two sources.  Otherwise the new shared runtime closure is mandatory
+    # even when the whole adapter directory is absent, so a vanished dependency
+    # cannot silently shrink the requirement.
+    if product_runtime:
+        required |= WINDOWS_PRODUCT_RUNTIME_REQUIRED
+    if host_runtime_adapter or (windows_product and not product_runtime):
+        required |= WINDOWS_HOST_RUNTIME_REQUIRED
+    # A product that advertises WinSCard through its document/tests must ship
+    # either the complete legacy product closure or the complete shared
+    # adapter/support closure.  The adapter prefix alone also triggers both.
+    if winscard_product or winscard_adapter or winscard_legacy:
+        if winscard_legacy:
+            required |= WINDOWS_WINSCARD_LEGACY_SOURCE_REQUIRED
+        if winscard_adapter or not winscard_legacy:
+            required |= WINDOWS_WINSCARD_SOURCE_REQUIRED
+            required |= WINDOWS_WINSCARD_ADAPTER_REQUIRED
     if not required.issubset(members):
         fail(f"source archive is missing: {sorted(required-set(members))}")
     for name, member in (

@@ -105,6 +105,30 @@ function(px4_add_dtv_userland_core)
             "${CMAKE_CURRENT_SOURCE_DIR}/userland/include" CACHE STRING
             "Private product facade include directories required by the GPL host runtime adapter" FORCE)
     endif()
+    if(WIN32 AND PX4_BUILD_WINSCARD)
+        # The shared WinSCard adapter is built from one GPL source with the
+        # product's explicit identity.  Never let a missing value fall back to
+        # another product's defaults.
+        set(DTV_USERLAND_BUILD_WINDOWS_WINSCARD ON CACHE BOOL
+            "Build the optional GPL-2.0-only Windows WinSCard adapter" FORCE)
+        set(DTV_WINDOWS_WINSCARD_NAMESPACE_COMPONENT "px4-userland" CACHE STRING
+            "Product runtime namespace component required by the WinSCard adapter" FORCE)
+        set(DTV_WINDOWS_WINSCARD_VERSION_COMPONENT "v1" CACHE STRING
+            "Product runtime version component required by the WinSCard adapter" FORCE)
+        set(DTV_WINDOWS_WINSCARD_PRODUCT_SLUG "px4-userland" CACHE STRING
+            "Expected UDTV LIST producer.product required by the WinSCard adapter" FORCE)
+        set(DTV_WINDOWS_WINSCARD_READER_PREFIX "PX4 userland (" CACHE STRING
+            "Reader display prefix shared by the WinSCard client and proxy" FORCE)
+        set(DTV_WINDOWS_WINSCARD_RUNTIME_ENV "PX4_WINSCARD_RUNTIME_DIR" CACHE STRING
+            "Runtime-root override environment variable for the WinSCard proxy" FORCE)
+        set(DTV_WINDOWS_WINSCARD_HOST_INCLUDE_DIRS
+            "${CMAKE_CURRENT_SOURCE_DIR}/userland/include"
+            "${CMAKE_CURRENT_SOURCE_DIR}/userland/src" CACHE STRING
+            "Private product host facade include directories required by the WinSCard adapter" FORCE)
+    else()
+        set(DTV_USERLAND_BUILD_WINDOWS_WINSCARD OFF CACHE BOOL
+            "Build the optional GPL-2.0-only Windows WinSCard adapter" FORCE)
+    endif()
     FetchContent_MakeAvailable(dtv_userland_core)
     set(BUILD_TESTING "${_saved_build_testing}")
 
@@ -138,5 +162,9 @@ function(px4_add_dtv_userland_core)
         get_target_property(_host_runtime_source_dir dtv_userland_host_runtime SOURCE_DIR)
         set(DTV_USERLAND_HOST_RUNTIME_SOURCE_DIR
             "${_host_runtime_source_dir}/adapters/host_runtime" PARENT_SCOPE)
+    endif()
+    if(WIN32 AND PX4_BUILD_WINSCARD AND NOT TARGET dtv::windows_winscard_client)
+        message(FATAL_ERROR
+            "dtv-userland-core did not define the optional Windows WinSCard adapter")
     endif()
 endfunction()

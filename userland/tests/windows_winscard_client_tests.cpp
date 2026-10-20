@@ -120,14 +120,15 @@ w::ListResponse fixture_list() noexcept
     return list;
 }
 
-w::StatusResponse fixture_status(const w::ListResponse& list, bool ready) noexcept
+w::StatusResponse fixture_status(const w::ListResponse& list, bool ready,
+                                 const std::string& instance) noexcept
 {
     w::StatusResponse status{};
     status.producer = list.producer;
     status.context.epoch = list.epoch;
     status.context.state = ready ? w::ContextState::ready : w::ContextState::starting;
     status.context.instance.present = true;
-    (void)set_text(status.context.instance.value, "instance");
+    (void)set_text(status.context.instance.value, instance.c_str());
     status.snapshot.sequence = 1U;
     status.snapshot.observed_at_ns = 5U;
     status.scope.kind = w::ScopeKind::enclosure;
@@ -207,7 +208,7 @@ struct PeerOptions final {
 class MockDaemon final {
 public:
     MockDaemon(const std::string& runtime, const std::string& instance,
-               PeerOptions options = {}) : options_(options)
+               PeerOptions options = {}) : instance_(instance), options_(options)
     {
         generation.store(options.generation);
         const EndpointConfig endpoint{runtime.c_str(), instance.c_str(),
@@ -246,6 +247,8 @@ public:
     std::atomic<TransmitBehavior> behavior{TransmitBehavior::echo};
 
 private:
+    const std::string instance_;
+
     template <typename Record>
     static bool encode_record(const Record& value,
                               dtv::userland::Result<std::size_t> (*encode)(
@@ -296,7 +299,7 @@ private:
                 if (!request) return fail();
                 const w::ListResponse list = fixture_list();
                 const w::StatusResponse status =
-                    fixture_status(list, owner_.options_.ready);
+                    fixture_status(list, owner_.options_.ready, owner_.instance_);
                 return reply(opcode, request_id, status, &w::encode_status_response);
             }
             case w::kOpcodeCardStatus: {
