@@ -94,6 +94,17 @@ function(px4_add_dtv_userland_core)
     set(DTV_USERLAND_HOST_CTL_FACADE_INCLUDE_DIRS
         "${CMAKE_CURRENT_SOURCE_DIR}/userland/include" CACHE STRING
         "Private host facade include directories required by the GPL host control frontend" FORCE)
+    if(UNIX)
+        set(DTV_USERLAND_BUILD_HOST_RUNTIME ON CACHE BOOL
+            "Build the optional GPL POSIX host runtime adapter" FORCE)
+        set(DTV_USERLAND_HOST_RUNTIME_PRODUCT "px4-userland" CACHE STRING
+            "Product runtime namespace component required by the GPL POSIX host runtime adapter" FORCE)
+        set(DTV_USERLAND_HOST_RUNTIME_INSTANCE_POLICY "lowercase" CACHE STRING
+            "Instance-name policy for the GPL POSIX host runtime adapter" FORCE)
+        set(DTV_USERLAND_HOST_RUNTIME_FACADE_INCLUDE_DIRS
+            "${CMAKE_CURRENT_SOURCE_DIR}/userland/include" CACHE STRING
+            "Private product facade include directories required by the GPL POSIX host runtime adapter" FORCE)
+    endif()
     FetchContent_MakeAvailable(dtv_userland_core)
     set(BUILD_TESTING "${_saved_build_testing}")
 
@@ -118,5 +129,14 @@ function(px4_add_dtv_userland_core)
     if(NOT TARGET dtv::host_ctl)
         message(FATAL_ERROR
             "dtv-userland-core did not define the optional dtv::host_ctl target")
+    endif()
+    if(UNIX)
+        if(NOT TARGET dtv::host_runtime)
+            message(FATAL_ERROR
+                "dtv-userland-core did not define the optional dtv::host_runtime target")
+        endif()
+        get_target_property(_host_runtime_source_dir dtv_userland_host_runtime SOURCE_DIR)
+        set(DTV_USERLAND_HOST_RUNTIME_SOURCE_DIR
+            "${_host_runtime_source_dir}/adapters/host_runtime" PARENT_SCOPE)
     endif()
 endfunction()

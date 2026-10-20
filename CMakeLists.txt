@@ -266,8 +266,6 @@ if(UNIX)
         userland/src/control_context.cpp
         userland/src/enclosure_context.cpp
         userland/src/control_server.cpp
-        userland/src/posix_ipc.cpp
-        userland/src/posix_tuner_nonce.cpp
     )
     target_include_directories(px4_userland_posix_ipc
         PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
@@ -275,7 +273,7 @@ if(UNIX)
     target_compile_features(px4_userland_posix_ipc PUBLIC cxx_std_17)
     # The control endpoint uses the shared UDTV connection serializer/codecs.
     target_link_libraries(px4_userland_posix_ipc PUBLIC
-        px4_userland_core dtv::control dtv::identity)
+        dtv::host_runtime px4_userland_core dtv::control dtv::identity)
     px4_enable_project_warnings(px4_userland_posix_ipc)
     if(NOT PX4_BUILD_TESTS)
         target_sources(px4_userland_posix_ipc PRIVATE userland/src/control_workers.cpp)
@@ -635,7 +633,8 @@ if(PX4_BUILD_PCSC_IFD AND UNIX AND NOT ANDROID)
     )
     if(PX4_PCSC_IFD_INCLUDE_DIR)
         set(PX4_PCSC_IFD_AVAILABLE ON)
-        set_target_properties(px4_userland_core px4_userland_posix_ipc PROPERTIES
+        set_target_properties(px4_userland_core px4_userland_posix_ipc
+            dtv_userland_host_runtime PROPERTIES
             POSITION_INDEPENDENT_CODE ON
         )
         add_library(px4_userland_pcsc_ifd_core STATIC
@@ -805,7 +804,7 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
 
     if(TARGET px4_userland_posix_ipc)
         target_sources(px4_userland_tests PRIVATE
-            userland/src/posix_ipc.cpp
+            ${DTV_USERLAND_HOST_RUNTIME_SOURCE_DIR}/posix_ipc.cpp
             userland/src/control_server.cpp
             userland/tests/control_integration_tests.cpp
             userland/tests/posix_ipc_tests.cpp
@@ -822,6 +821,8 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
         target_link_libraries(px4_userland_tests PRIVATE px4_userland_posix_ipc dtv::json)
         target_compile_definitions(px4_userland_tests PRIVATE
             PX4_POSIX_IPC_TEST_ACCESS=1
+            PX4_USERLAND_RUNTIME_PRODUCT="px4-userland"
+            PX4_USERLAND_RUNTIME_INSTANCE_LOWERCASE=1
         )
 
         add_executable(px4-ts-product-cli-tests
@@ -1158,13 +1159,15 @@ if(TARGET px4_userland_posix_ipc)
         add_executable(px4_posix_ipc_migration_tests
             userland/tests/posix_ipc_migration_main.cpp
             userland/tests/posix_ipc_tests.cpp
-            userland/src/posix_ipc.cpp)
+            ${DTV_USERLAND_HOST_RUNTIME_SOURCE_DIR}/posix_ipc.cpp)
         target_link_libraries(px4_posix_ipc_migration_tests
             PRIVATE px4_userland_posix_ipc dtv::identity)
         target_include_directories(px4_posix_ipc_migration_tests PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/userland/src)
         target_compile_definitions(px4_posix_ipc_migration_tests PRIVATE
-            PX4_POSIX_IPC_TEST_ACCESS=1)
+            PX4_POSIX_IPC_TEST_ACCESS=1
+            PX4_USERLAND_RUNTIME_PRODUCT="px4-userland"
+            PX4_USERLAND_RUNTIME_INSTANCE_LOWERCASE=1)
         target_compile_features(px4_posix_ipc_migration_tests PRIVATE cxx_std_17)
         px4_enable_project_warnings(px4_posix_ipc_migration_tests)
         add_test(NAME px4_posix_ipc_migration_tests

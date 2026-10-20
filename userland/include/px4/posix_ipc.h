@@ -2,6 +2,10 @@
 #ifndef PX4_USERLAND_POSIX_IPC_H
 #define PX4_USERLAND_POSIX_IPC_H
 
+#if !defined(_WIN32)
+#include "px4/posix_ipc_contract.h"
+#else
+
 #include "px4/ipc.h"
 
 #include <array>
@@ -198,5 +202,7 @@ private:
 };
 
 }  // namespace px4::userland::ipc::posix
+
+#endif  // !defined(_WIN32)
 
 #endif  // PX4_USERLAND_POSIX_IPC_H
