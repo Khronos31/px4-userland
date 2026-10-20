@@ -55,6 +55,8 @@ public:
                                   std::uint8_t lnb_voltage) noexcept override;
     Result<void> commit_tune_power(std::uint8_t receiver) noexcept override;
     Result<void> rollback_tune_power(std::uint8_t receiver) noexcept override;
+    Result<void> set_independent_lnb_power(bool enabled) noexcept override;
+    dtv::userland::wire::Optional<bool> independent_lnb_power_state() noexcept override;
     void mark_receiver_disconnected(std::uint8_t receiver) noexcept override;
     Result<void> shutdown() noexcept override;
 

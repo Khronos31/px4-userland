@@ -120,7 +120,7 @@ std::uint8_t Mlt5PeLnbPowerCoordinator::ref_count_locked() const noexcept
 
 Result<void> Mlt5PeLnbPowerCoordinator::apply_locked() noexcept
 {
-    const bool desired_on = ref_count_locked() != 0U;
+    const bool desired_on = manual_override_ ? manual_on_ : ref_count_locked() != 0U;
     if (physical_state_ == Q3U4LnbPhysicalState::disconnected) {
         return Result<void>::failure(Error::DISCONNECTED);
     }
@@ -159,6 +159,9 @@ Result<void> Mlt5PeLnbPowerCoordinator::begin_tune(std::uint8_t receiver,
     }
     ReceiverRequest& request = receivers_[receiver];
     if (request.pending) return Result<void>::failure(Error::BUSY);
+    request.pending_manual_override = manual_override_;
+    request.pending_manual_on = manual_on_;
+    manual_override_ = false;
     request.pending = true;
     request.pending_15v = voltage == 15U;
     const auto applied = apply_locked();
@@ -167,6 +170,8 @@ Result<void> Mlt5PeLnbPowerCoordinator::begin_tune(std::uint8_t receiver,
     // Restore the prior logical request and make one conservative attempt
     // to restore its aggregate state; keep the original error.
     request.pending = false;
+    manual_override_ = request.pending_manual_override;
+    manual_on_ = request.pending_manual_on;
     const auto restored = apply_locked();
     if (!restored && restored.error() == Error::DISCONNECTED) {
         return Result<void>::failure(Error::DISCONNECTED);
@@ -182,6 +187,8 @@ Result<void> Mlt5PeLnbPowerCoordinator::commit_tune(std::uint8_t receiver) noexc
     if (!request.pending) return Result<void>::failure(Error::INVALID_ARGUMENT);
     request.committed_15v = request.pending_15v;
     request.pending = false;
+    request.pending_manual_override = false;
+    request.pending_manual_on = false;
     return Result<void>::success();
 }
 
@@ -192,6 +199,12 @@ Result<void> Mlt5PeLnbPowerCoordinator::rollback_tune(std::uint8_t receiver) noe
     ReceiverRequest& request = receivers_[receiver];
     if (!request.pending) return Result<void>::failure(Error::INVALID_ARGUMENT);
     request.pending = false;
+    if (!manual_override_) {
+        manual_override_ = request.pending_manual_override;
+        manual_on_ = request.pending_manual_on;
+    }
+    request.pending_manual_override = false;
+    request.pending_manual_on = false;
     return apply_locked();
 }
 
@@ -207,6 +220,19 @@ Result<void> Mlt5PeLnbPowerCoordinator::shutdown() noexcept
 {
     std::lock_guard<std::mutex> lock(mutex_);
     receivers_.fill(ReceiverRequest{});
+    manual_override_ = false;
+    manual_on_ = false;
+    return apply_locked();
+}
+
+Result<void> Mlt5PeLnbPowerCoordinator::set_independent_power(bool enabled) noexcept
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (enabled && !allow_15v_) return Result<void>::failure(Error::UNSUPPORTED);
+    if (physical_state_ == Q3U4LnbPhysicalState::disconnected)
+        return Result<void>::failure(Error::DISCONNECTED);
+    manual_override_ = true;
+    manual_on_ = enabled;
     return apply_locked();
 }
 
@@ -216,12 +242,26 @@ void Mlt5PeLnbPowerCoordinator::disconnect() noexcept
     physical_state_ = Q3U4LnbPhysicalState::disconnected;
     cleanup_debt_ = false;
     receivers_.fill(ReceiverRequest{});
+    manual_override_ = false;
+    manual_on_ = false;
 }
 
 Mlt5PeLnbPowerSnapshot Mlt5PeLnbPowerCoordinator::snapshot() const noexcept
 {
     std::lock_guard<std::mutex> lock(mutex_);
     return Mlt5PeLnbPowerSnapshot{ref_count_locked(), physical_state_, cleanup_debt_};
+}
+
+dtv::userland::wire::Optional<bool> Mlt5PeLnbPowerCoordinator::enabled_state() const noexcept
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    dtv::userland::wire::Optional<bool> result{};
+    if ((physical_state_ == Q3U4LnbPhysicalState::off ||
+         physical_state_ == Q3U4LnbPhysicalState::on) && !cleanup_debt_) {
+        result.present = true;
+        result.value = physical_state_ == Q3U4LnbPhysicalState::on;
+    }
+    return result;
 }
 
 }  // namespace px4::userland

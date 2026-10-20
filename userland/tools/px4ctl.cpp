@@ -46,7 +46,7 @@ const dtv::userland::host_ctl::Profile& profile() noexcept
 {
     static const dtv::userland::host_ctl::Profile value{
         "px4ctl", "px4-userland", PX4_USERLAND_PRODUCT_VERSION,
-        identity::Product::px4, true, true, nullptr, &matches_px4_serial};
+        identity::Product::px4, true, true, nullptr, &matches_px4_serial, true};
     return value;
 }
 

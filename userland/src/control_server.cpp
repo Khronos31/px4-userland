@@ -1152,6 +1152,7 @@ struct PosixControlServer::Impl final {
         }
         return task.operation == ControlWorkerOperation::tuner_status ||
                        task.operation == ControlWorkerOperation::tuner_shutdown ||
+                       task.operation == ControlWorkerOperation::tuner_lnb_power ||
                        task.receiver < 4U ? ControlWorkerLane::tuner_dev1 :
                                             ControlWorkerLane::tuner_dev2;
     }
@@ -1208,6 +1209,9 @@ struct PosixControlServer::Impl final {
                 project_receiver(engine.value(), snapshot,
                                  response.receivers.value.items[index]);
             }
+        }
+        if (scope.kind == wire::ScopeKind::enclosure && response.enclosure.present) {
+            response.lnb_15v_enabled = tuner_service.independent_lnb_power_state();
         }
         if (response.readers.present) {
             for (std::size_t index = 0U; index < response.readers.value.count; ++index) {
@@ -1600,6 +1604,13 @@ struct PosixControlServer::Impl final {
             (void)submit(client, request.opcode, request.request_id, key.reader_id, task);
             return;
         }
+        case wire::ControlRequestKind::lnb_power: {
+            ControlWorkerTask task{};
+            task.operation = ControlWorkerOperation::tuner_lnb_power;
+            task.lnb_enabled = request.lnb_power.enabled;
+            (void)submit(client, request.opcode, request.request_id, 0U, task);
+            return;
+        }
         }
         reply_error(client, request.opcode, request.request_id, wire_code(Error::INTERNAL),
                     "request", enclosure_scope());
@@ -1856,6 +1867,19 @@ struct PosixControlServer::Impl final {
         const wire::Scope target = receiver_scope(outstanding.public_id);
         client.clear_outstanding();
         switch (completion.operation) {
+        case ControlWorkerOperation::tuner_lnb_power: {
+            if (completion.error != Error::OK) {
+                reply_error(client, outstanding.opcode, completion.request_id,
+                            wire_code(completion.error), "lnb_power", enclosure_scope());
+                return;
+            }
+            wire::LnbPowerResponse response{};
+            response.epoch = hello.epoch;
+            response.enabled = completion.lnb_enabled;
+            reply_record(client, outstanding.opcode, completion.request_id, response,
+                         &wire::encode_lnb_power_response, "lnb_power", enclosure_scope());
+            return;
+        }
         case ControlWorkerOperation::tuner_acquire: {
             if (completion.error != Error::OK) {
                 reply_error(client, outstanding.opcode, completion.request_id,

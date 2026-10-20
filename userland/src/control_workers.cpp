@@ -55,6 +55,7 @@ bool operation_lane_valid(ControlWorkerLane lane,
         return lane == (task.receiver < 4U ? ControlWorkerLane::tuner_dev1 :
                                              ControlWorkerLane::tuner_dev2);
     case ControlWorkerOperation::tuner_shutdown:
+    case ControlWorkerOperation::tuner_lnb_power:
         return lane == ControlWorkerLane::tuner_dev1;
     case ControlWorkerOperation::card_status:
     case ControlWorkerOperation::card_handle_status:
@@ -1015,6 +1016,12 @@ struct ControlWorkerLanes::Impl final {
                 completion.tuner_status = result.value();
                 completion.tuner_status_valid = true;
             }
+            break;
+        }
+        case ControlWorkerOperation::tuner_lnb_power: {
+            const auto result = tuner_service.set_independent_lnb_power(task.lnb_enabled);
+            if (!result) operation_error = result.error();
+            else completion.lnb_enabled = task.lnb_enabled;
             break;
         }
         case ControlWorkerOperation::tuner_shutdown: {

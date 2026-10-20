@@ -76,15 +76,19 @@ public:
     Result<void> commit_tune(std::uint8_t receiver) noexcept;
     Result<void> rollback_tune(std::uint8_t receiver) noexcept;
     Result<void> release_receiver(std::uint8_t receiver) noexcept;
+    Result<void> set_independent_power(bool enabled) noexcept;
     Result<void> shutdown() noexcept;
     void disconnect() noexcept;
     Mlt5PeLnbPowerSnapshot snapshot() const noexcept;
+    dtv::userland::wire::Optional<bool> enabled_state() const noexcept;
 
 private:
     struct ReceiverRequest final {
         bool committed_15v = false;
         bool pending = false;
         bool pending_15v = false;
+        bool pending_manual_override = false;
+        bool pending_manual_on = false;
     };
 
     std::uint8_t ref_count_locked() const noexcept;
@@ -94,6 +98,8 @@ private:
     bool allow_15v_;
     mutable std::mutex mutex_;
     std::array<ReceiverRequest, kMlt5PeReceiverCount> receivers_{};
+    bool manual_override_ = false;
+    bool manual_on_ = false;
     Q3U4LnbPhysicalState physical_state_ = Q3U4LnbPhysicalState::off;
     bool cleanup_debt_ = false;
 };

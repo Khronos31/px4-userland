@@ -3,6 +3,8 @@
 #define PX4_USERLAND_Q3U4_LNB_POWER_H
 
 #include "px4/error.h"
+
+#include <dtv/userland/records.h>
 #include "px4/it930x.h"
 #include "q3u4_power.h"
 
@@ -68,9 +70,11 @@ public:
     Result<void> rollback_tune(std::uint8_t global_receiver) noexcept;
     Result<void> release_receiver(std::uint8_t global_receiver) noexcept;
     Result<void> reconcile() noexcept;
+    Result<void> set_independent_power(bool enabled) noexcept;
     Result<void> shutdown() noexcept;
     Result<void> disconnect(Q3U4Bridge bridge) noexcept;
     Q3U4LnbPowerSnapshot snapshot() const noexcept;
+    dtv::userland::wire::Optional<bool> enabled_state() const noexcept;
 
 private:
     struct ReceiverRequest final {
@@ -78,6 +82,8 @@ private:
         bool committed_15v = false;
         bool pending = false;
         bool pending_15v = false;
+        bool pending_manual_override = false;
+        bool pending_manual_on = false;
     };
 
     static bool valid_satellite_receiver(std::uint8_t receiver) noexcept;
@@ -93,6 +99,8 @@ private:
     bool allow_15v_;
     mutable std::mutex mutex_;
     std::array<ReceiverRequest, 8U> receivers_{};
+    std::array<bool, 2U> manual_override_{{false, false}};
+    std::array<bool, 2U> manual_on_{{false, false}};
     std::array<Q3U4LnbPhysicalState, 2U> physical_state_{
         Q3U4LnbPhysicalState::off, Q3U4LnbPhysicalState::off};
     std::array<bool, 2U> cleanup_debt_{{false, false}};

@@ -474,7 +474,10 @@ px4ctl (--device serial:SERIAL | --device usb:BUS-PORT[,BUS-PORT...] | --instanc
 - `card-status`: 内蔵カードリーダーのカード挿入状態、初期化状態、ATR を表示します。
 - `card-atr`: カードの ATR（Answer to Reset）を取得して表示します。
 - `card-reset`: カードをリセットし、ATR を表示します。
+- `lnb-on` / `lnb-off`: 対応機種の筐体LNB給電を直接ON/OFFします。ONにはデーモン起動時の `--allow-lnb-power` が必要です。TUNER leaseの取得は不要で、receiver close後も設定を保持し、daemon停止時にOFFへ戻します。
 - `card-apdu HEX`: コロン区切りの 16 進文字列（1〜4096 バイト、例: `00:a4:00:00`）で指定した APDU をカードへ**1回**送信し、応答を表示します。v0.2.1の `--repeat N` は通常の `px4ctl` では受け付けません。反復APDU診断は開発用の別コマンド `px4-card-probe --base BASE --firmware PATH --apdu HEX --repeat N`（1〜100000回）で行えますが、これはデーモンに接続する同等の代替ではなく、USBデバイスへ直接アクセスする診断用途です。
+
+LNBの認識状態は `status` の `enclosure.lnb_15v_enabled`（true/false/null）で確認できます。Q3U4の内部2系統が不一致、状態不明、機能非対応の場合はnullです。端子電圧の実測値ではありません。独立OFFは受信中の別receiverへの給電も変更します。給電指定を省略したTUNEは独立設定を変えず、明示したTUNE電圧指定は従来の給電処理を通します。
 
 ## 内蔵 IC カードリーダー
 

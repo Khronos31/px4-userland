@@ -57,7 +57,8 @@ Result<void> Q3U4LnbPowerCoordinator::apply_bridge_locked(
     std::size_t bridge) noexcept
 {
     Q3U4LnbPhysicalState& state = physical_state_[bridge];
-    const bool desired_on = ref_count_locked(bridge) != 0U;
+    const bool desired_on = manual_override_[bridge] ? manual_on_[bridge]
+                                                     : ref_count_locked(bridge) != 0U;
     if (state == Q3U4LnbPhysicalState::disconnected) {
         return Result<void>::failure(Error::DISCONNECTED);
     }
@@ -115,9 +116,12 @@ Result<void> Q3U4LnbPowerCoordinator::begin_tune(
 
     ReceiverRequest& request = receivers_[global_receiver];
     if (request.pending) return Result<void>::failure(Error::BUSY);
+    const std::size_t bridge = bridge_index_for_receiver(global_receiver);
+    request.pending_manual_override = manual_override_[bridge];
+    request.pending_manual_on = manual_on_[bridge];
+    manual_override_[bridge] = false;
     request.pending = true;
     request.pending_15v = voltage == 15U;
-    const std::size_t bridge = bridge_index_for_receiver(global_receiver);
     const auto applied = apply_bridge_locked(bridge);
     if (applied) return Result<void>::success();
 
@@ -126,6 +130,8 @@ Result<void> Q3U4LnbPowerCoordinator::begin_tune(
     // restore its physical aggregate state. The original error remains the
     // tune result unless terminal disconnect is learned during cleanup.
     request.pending = false;
+    manual_override_[bridge] = request.pending_manual_override;
+    manual_on_[bridge] = request.pending_manual_on;
     const auto restored = apply_bridge_locked(bridge);
     if (!restored && restored.error() == Error::DISCONNECTED) {
         return Result<void>::failure(Error::DISCONNECTED);
@@ -144,6 +150,8 @@ Result<void> Q3U4LnbPowerCoordinator::commit_tune(
     request.committed = true;
     request.committed_15v = request.pending_15v;
     request.pending = false;
+    request.pending_manual_override = false;
+    request.pending_manual_on = false;
     return Result<void>::success();
 }
 
@@ -154,9 +162,16 @@ Result<void> Q3U4LnbPowerCoordinator::rollback_tune(
         return Result<void>::failure(Error::INVALID_ARGUMENT);
     std::lock_guard<std::mutex> lock(mutex_);
     ReceiverRequest& request = receivers_[global_receiver];
+    const std::size_t bridge = bridge_index_for_receiver(global_receiver);
     if (!request.pending) return Result<void>::failure(Error::INVALID_ARGUMENT);
     request.pending = false;
-    return apply_bridge_locked(bridge_index_for_receiver(global_receiver));
+    if (!manual_override_[bridge]) {
+        manual_override_[bridge] = request.pending_manual_override;
+        manual_on_[bridge] = request.pending_manual_on;
+    }
+    request.pending_manual_override = false;
+    request.pending_manual_on = false;
+    return apply_bridge_locked(bridge);
 }
 
 Result<void> Q3U4LnbPowerCoordinator::release_receiver(
@@ -175,10 +190,24 @@ Result<void> Q3U4LnbPowerCoordinator::reconcile() noexcept
     return apply_both_locked();
 }
 
+Result<void> Q3U4LnbPowerCoordinator::set_independent_power(bool enabled) noexcept
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (enabled && !allow_15v_) return Result<void>::failure(Error::UNSUPPORTED);
+    if (enabled && (physical_state_[0U] == Q3U4LnbPhysicalState::disconnected ||
+                    physical_state_[1U] == Q3U4LnbPhysicalState::disconnected))
+        return Result<void>::failure(Error::DISCONNECTED);
+    manual_override_.fill(true);
+    manual_on_.fill(enabled);
+    return apply_both_locked();
+}
+
 Result<void> Q3U4LnbPowerCoordinator::shutdown() noexcept
 {
     std::lock_guard<std::mutex> lock(mutex_);
     receivers_.fill(ReceiverRequest{});
+    manual_override_.fill(false);
+    manual_on_.fill(false);
     // Both bridges are always attempted. In particular a terminally lost
     // bridge must not prevent GPIO 11 low on its still-connected sibling.
     return apply_both_locked();
@@ -195,6 +224,8 @@ Result<void> Q3U4LnbPowerCoordinator::disconnect(Q3U4Bridge bridge) noexcept
     const std::size_t first = index == 0U ? 0U : 4U;
     receivers_[first] = ReceiverRequest{};
     receivers_[first + 1U] = ReceiverRequest{};
+    manual_override_[index] = false;
+    manual_on_[index] = false;
     return Result<void>::success();
 }
 
@@ -204,6 +235,20 @@ Q3U4LnbPowerSnapshot Q3U4LnbPowerCoordinator::snapshot() const noexcept
     return Q3U4LnbPowerSnapshot{
         {ref_count_locked(0U), ref_count_locked(1U)}, physical_state_,
         cleanup_debt_};
+}
+
+dtv::userland::wire::Optional<bool> Q3U4LnbPowerCoordinator::enabled_state() const noexcept
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    dtv::userland::wire::Optional<bool> result{};
+    if (physical_state_[0U] == physical_state_[1U] &&
+        (physical_state_[0U] == Q3U4LnbPhysicalState::off ||
+         physical_state_[0U] == Q3U4LnbPhysicalState::on) &&
+        !cleanup_debt_[0U] && !cleanup_debt_[1U]) {
+        result.present = true;
+        result.value = physical_state_[0U] == Q3U4LnbPhysicalState::on;
+    }
+    return result;
 }
 
 }  // namespace px4::userland

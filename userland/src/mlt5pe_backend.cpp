@@ -141,6 +141,17 @@ Result<void> Mlt5PeTunerBackend::rollback_tune_power(std::uint8_t receiver) noex
     return lnb_power_.rollback_tune(receiver);
 }
 
+Result<void> Mlt5PeTunerBackend::set_independent_lnb_power(bool enabled) noexcept
+{
+    return lnb_power_.set_independent_power(enabled);
+}
+
+dtv::userland::wire::Optional<bool>
+Mlt5PeTunerBackend::independent_lnb_power_state() noexcept
+{
+    return lnb_power_.enabled_state();
+}
+
 void Mlt5PeTunerBackend::mark_receiver_disconnected(std::uint8_t receiver) noexcept
 {
     if (receiver < kMlt5PeReceiverCount) lnb_power_.disconnect();
