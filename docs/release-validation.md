@@ -1,6 +1,6 @@
 # Stable リリース前検証手順
 
-> **v1.0.0移行作業中（2026-10-20）:** 本文の一部は公開済みv0.2.1のCLI（例: 裸シリアルの`--device`、`px4d --list`、`--frequency-khz`、`--duration-seconds`）を前提にした履歴手順であり、現在のv1.0.0隔離WIPにそのまま実行できる完成手順ではありません。最終RCのCLIへ書式・単位・JSONを更新し、各OS実機で再検証するまで、この文書だけを根拠にRelease gateがPASSしたと判断しないでください。旧 `px4ctl card-apdu --repeat N` は廃止方向であり、新CLIは単発送信です。SPEC 10.2の「反復APDU」はdaemon経由の単発送信を10回個別に実行し、各回の終了値と応答を確認します。これは旧 `--repeat N` の**同一CARDセッション内での反復**をそのまま再現しないため、その追加負荷特性を検証済みと扱わないでください。
+> **現行候補CLI:** 手順例は `serial:` / `usb:` selector、`px4d --list-json`、Hz単位の `--freq`、`--time` を使います。記載した受入結果は候補・OS・機種・access pathごとの既存記録の範囲に限り、全matrixのPASSを意味しません。旧 `px4ctl card-apdu --repeat N` は同一CARDセッション内の反復であり、現行手順のdaemon経由単発送信10回とは異なる負荷特性です。
 
 この文書は Stable リリースごとの実行手順を定める。合否条件と認定条件の正本は [`SPEC.md`](../SPEC.md) 10章であり、両者に差があれば SPEC を優先し、手順書を更新する。
 
@@ -73,7 +73,7 @@ PX4/ASICEN共通の記録構造と空のmatrixは [`release-record.md`](release-
 
 ### 0.1 共通コマンド
 
-`<version>`、`<platform>`、`$ID`、`$FW`、`$RT`、`$LOG` は実値に置き換える。artifact は候補 commit の `release-candidate`（§2）だけを使い、手元 build や旧 archive で代用しない。
+`<version>`、`<platform>`、`$ID`、`$FW`、`$RT`、`$LOG` は実値に置き換える。`$ID`は `serial:<値>` または `usb:<BUS-PORT[,BUS-PORT...]>` のselectorで、機器選択値である。`--instance TOKEN`はIPC endpoint名を指定する値で、selectorや物理identityを置き換えない。通常のserial選択では自動instanceを使い、曖昧なserialをUSB位置で選ぶ場合はdaemonと全clientに同じ明示instanceを指定する。artifact は候補 commit の `release-candidate`（§2）だけを使い、手元 build や旧 archive で代用しない。
 
 artifact 検証と展開（X-PREP）:
 
@@ -82,7 +82,7 @@ sha256sum -c SHA256SUMS                              # macOS: shasum -a 256 -c
 D=$(mktemp -d); tar -xzf px4-userland-<version>-<platform>.tar.gz -C "$D"
 sha256sum "$FW"                                      # 5213a5a38872661277a2cc1b2dfdfe88faf06f41205f460f3b51857f0568b484
 RT=$(mktemp -d "${TMPDIR:-/tmp}/px4-userland.XXXXXX"); LOG=<log dir>
-"$D/px4d" --list > "$LOG/list.txt"                   # model / usb / status=ready / receivers
+"$D/px4d" --list-json > "$LOG/list.json"             # USB inventory / status / receiver capabilities
 ```
 
 daemon 起動と準備完了確認（X-START）:
@@ -101,14 +101,14 @@ P=$!
 
 ```sh
 # Q3U4 8 receiver（受信継続: 0/1/4/5=S、2/3/6/7=T）
-"$D/px4-ts" --device "$ID" --receiver 0 --system isdb-s --frequency-khz 1318000 --slot 0 --runtime-dir "$RT" --output /dev/null --duration-seconds 30 2> "$LOG/r0.err" & R0=$!
-"$D/px4-ts" --device "$ID" --receiver 1 --system isdb-s --frequency-khz 1318000 --slot 0 --runtime-dir "$RT" --output /dev/null --duration-seconds 30 2> "$LOG/r1.err" & R1=$!
-"$D/px4-ts" --device "$ID" --receiver 4 --system isdb-s --frequency-khz 1318000 --slot 0 --runtime-dir "$RT" --output /dev/null --duration-seconds 30 2> "$LOG/r4.err" & R4=$!
-"$D/px4-ts" --device "$ID" --receiver 5 --system isdb-s --frequency-khz 1318000 --slot 0 --runtime-dir "$RT" --output /dev/null --duration-seconds 30 2> "$LOG/r5.err" & R5=$!
-"$D/px4-ts" --device "$ID" --receiver 2 --system isdb-t --frequency-khz 527143 --runtime-dir "$RT" --output /dev/null --duration-seconds 30 2> "$LOG/r2.err" & R2=$!
-"$D/px4-ts" --device "$ID" --receiver 3 --system isdb-t --frequency-khz 527143 --runtime-dir "$RT" --output /dev/null --duration-seconds 30 2> "$LOG/r3.err" & R3=$!
-"$D/px4-ts" --device "$ID" --receiver 6 --system isdb-t --frequency-khz 527143 --runtime-dir "$RT" --output /dev/null --duration-seconds 30 2> "$LOG/r6.err" & R6=$!
-"$D/px4-ts" --device "$ID" --receiver 7 --system isdb-t --frequency-khz 527143 --runtime-dir "$RT" --output /dev/null --duration-seconds 30 2> "$LOG/r7.err" & R7=$!
+"$D/px4-ts" --device "$ID" --receiver 0 --freq 1318000000 --system isdb-s --slot 0 --runtime-dir "$RT" --output /dev/null --time 30 2> "$LOG/r0.err" & R0=$!
+"$D/px4-ts" --device "$ID" --receiver 1 --freq 1318000000 --system isdb-s --slot 0 --runtime-dir "$RT" --output /dev/null --time 30 2> "$LOG/r1.err" & R1=$!
+"$D/px4-ts" --device "$ID" --receiver 4 --freq 1318000000 --system isdb-s --slot 0 --runtime-dir "$RT" --output /dev/null --time 30 2> "$LOG/r4.err" & R4=$!
+"$D/px4-ts" --device "$ID" --receiver 5 --freq 1318000000 --system isdb-s --slot 0 --runtime-dir "$RT" --output /dev/null --time 30 2> "$LOG/r5.err" & R5=$!
+"$D/px4-ts" --device "$ID" --receiver 2 --freq 527143000 --system isdb-t --runtime-dir "$RT" --output /dev/null --time 30 2> "$LOG/r2.err" & R2=$!
+"$D/px4-ts" --device "$ID" --receiver 3 --freq 527143000 --system isdb-t --runtime-dir "$RT" --output /dev/null --time 30 2> "$LOG/r3.err" & R3=$!
+"$D/px4-ts" --device "$ID" --receiver 6 --freq 527143000 --system isdb-t --runtime-dir "$RT" --output /dev/null --time 30 2> "$LOG/r6.err" & R6=$!
+"$D/px4-ts" --device "$ID" --receiver 7 --freq 527143000 --system isdb-t --runtime-dir "$RT" --output /dev/null --time 30 2> "$LOG/r7.err" & R7=$!
 # 8個それぞれの終了値を記録する（各waitは個別に実行）。
 wait "$R0"; echo "$?" > "$LOG/r0.rc"
 wait "$R1"; echo "$?" > "$LOG/r1.rc"
@@ -157,7 +157,7 @@ kill -TERM $P; wait $P           # 0 を期待
 pgrep -fl '[p]x4d'; rmdir "$RT"   # 残存 process / endpoint なし
 ```
 
-Q3U4 preflight: 両 USB device、15V adapter、両 RF lead を接続し、`px4d --list` が `status=ready receivers=8` を返すことを確認してから開始する。
+Q3U4 preflight: 両 USB device、15V adapter、両 RF lead を接続し、`px4d --list-json` のinventoryでQ3U4が `status=ready`、8 receiverとして観測されることを確認してから開始する。
 
 カードの物理抜去・再挿入（X-CARD-HP、毎回必須）:
 
@@ -238,8 +238,8 @@ USBの物理切断・再接続（X-USB-HP、毎回必須）:
 USB切断を観測するclientを起動する:
 
 ```sh
-"$D/px4-ts" --device "$ID" --receiver 0 --system isdb-s --frequency-khz 1318000 --slot 0 \
-  --runtime-dir "$RT" --output /dev/null --duration-seconds 300 2> "$LOG/usb-detach-client.err" &
+"$D/px4-ts" --device "$ID" --receiver 0 --freq 1318000000 --system isdb-s --slot 0 \
+  --runtime-dir "$RT" --output /dev/null --time 300 2> "$LOG/usb-detach-client.err" &
 USB_CLIENT=$!
 ```
 
@@ -265,11 +265,10 @@ beep   # Codex。Claude Codeは vibe
 ユーザーへUSB接続を戻すよう依頼し、操作完了まで最大5分待つ。再列挙・復旧コマンドを個別に実行する:
 
 ```sh
-"$D/px4d" --list | tee "$LOG/list-reconnected.txt"
 "$D/px4d" --list-json > "$LOG/list-reconnected.json"
 ```
 
-切断側clientが有限時間内に`DISCONNECTED` / exit 7で終了し、ハングやclient process残留がないことを確認する。過去の実機確認では切断後も旧daemonが生存し、USBを戻して再列挙されても自動復帰しなかった。再接続後の`--list` / `--list-json`で対象device（Q3U4は2つの内部USB device）が再列挙されたことを記録するが、これはdaemon復旧の合格とはしない。
+切断側clientが有限時間内に`DISCONNECTED` / exit 7で終了し、ハングやclient process残留がないことを確認する。過去の実機確認では切断後も旧daemonが生存し、USBを戻して再列挙されても自動復帰しなかった。再接続後の`--list-json`で対象device（Q3U4は2つの内部USB device）が再列挙されたことを記録するが、これはdaemon復旧の合格とはしない。
 
 旧daemonが生存している場合は、同じ候補のdaemonを停止して終了を待つ:
 
@@ -373,11 +372,11 @@ gh run view <run-id> --job <job-id> --log > "$LOG/run-<run-id>-job-<job-id>.log"
 §0の9行すべてについて、candidate artifactそのものを使い、対応する環境で独立に実施する。Windows行はE17のWindows手順に従い、native Windows 11 x64で実施する。必須確認の一連の操作に総時間上限は設けない。B-CAS/USBの物理操作はユーザーが行い、各操作を依頼した時点から最大5分待つ。各物理操作を依頼する直前にHAOS/SCS側でCodexは`beep`、Claude Codeは`vibe`を実行する。各runの記録にはarchive名/SHA-256、source commit、環境ID/OS version/architecture、機種/USB path、実施時刻、コマンド、終了値、card status/generation/ATR/APDU応答、TS/counter、残留の有無を残す。
 
 1. 候補archiveのhash確認・展開、Q3U4のfirmware/RF/電源preflight、ログ先作成を済ませる。これらを含めて一連の確認に総時間上限は設けない。
-2. `px4d --list` と `--list-json` でQ3U4が8 receiver readyと列挙されることを確認し、JSON schema・boolean型・receiver capability値を照合する。M1UR/S1URのserial衝突やLNB非対応profile表示が変更対象なら、§0の該当する機種別追加確認も行う。
+2. `px4d --list-json` でQ3U4が8 receiver readyと列挙されることを確認し、JSON schema・boolean型・receiver capability値を照合する。M1UR/S1URのserial衝突やLNB非対応profile表示が変更対象なら、§0の該当する機種別追加確認も行う。
 3. daemonを起動したままreceiver captureを止め、X-CARD-HPのコマンド群を実行する。カード抜去を依頼する直前に通知し、依頼後最大5分待つ。`card-status`の`present=no`、ATR/APDUの`NO_CARD`（exit 9）を確認する。
 4. 再挿入を依頼する直前に通知し、依頼後最大5分待つ。generation更新、ATR/resetと、daemon経由10回の単発APDUの復帰を各回確認する。同一CARD接続の連続負荷試験は別で必要なら追加する。
 5. X-USB-HPで1 receiver clientを起動してUSB切断を観測する。USB切断を依頼する直前に通知し、依頼後最大5分待つ。clientが有限時間で`DISCONNECTED` / exit 7となり、ハングやclient process残留がないことを確認する。
-6. USB再接続を依頼する直前に通知し、依頼後最大5分待つ。`--list` / `--list-json`で再列挙を確認した後、旧daemonを停止して終了を待ち、X-STARTの手順で同じcandidateからdaemonを起動し直す。古いdaemonの自動復帰を合格条件にしない。
+6. USB再接続を依頼する直前に通知し、依頼後最大5分待つ。`--list-json`で再列挙を確認した後、旧daemonを停止して終了を待ち、X-STARTの手順で同じcandidateからdaemonを起動し直す。古いdaemonの自動復帰を合格条件にしない。
 7. 再起動後に`px4ctl status`でreadyを確認し、8 receiverを30秒実行してTS条件をSPEC 10.2の適用項目で確認する。10回のdaemon経由APDUを各回検証し（旧同一セッション反復のstress proofではない）、最後にdaemon/client、FD、IPC socket/control endpointの残留がないことを確認する。
 
 Linux musl aarch64はE15 Fedora aarch64上のAlpine arm64 Docker containerでcandidate artifactを実行する。hostがaarch64であることを`uname -m`等で確認し、CPU emulationを使わず、物理USB deviceをcontainerへ渡す。このartifact行はglibc aarch64の結果で代用せず、独立して実施・記録する。native aarch64 hostまたはUSB passthroughが利用できず物理確認を完了できない場合はgate未完了とする。
@@ -406,9 +405,9 @@ Linux musl aarch64はE15 Fedora aarch64上のAlpine arm64 Docker containerでcan
 
 ### PX-M1UR / PX-S1UR の同一serial確認
 
-v0.26 の識別変更が対象のとき、両機種を同時接続できる環境では、§2 の exact candidate を使って `px4d --list` と `px4d --list-json` を個別に実行し、同じ serial の2筐体が別機種・別USB位置として現れ、双方の `serial_unique` が `false` であることを記録する。通常列挙を許さない Termux では、このコマンドの成功を要求しない。
+v0.26 の識別変更が対象のとき、両機種を同時接続できる環境では、§2 の exact candidate を使って `px4d --list-json` を実行し、同じ serial の2筐体が別機種・別USB位置として現れ、双方の `serial_unique` が `false` であることを記録する。通常列挙を許さない Termux では、このコマンドの成功を要求しない。
 
-実施可能なら、同じ状態で `px4d --device 000000000000001 --firmware "$FW" --runtime-dir "$RT"` の曖昧指定が候補と `--usb-path` を示して exit 2 となり、USB interface の claim と endpoint 公開の前に失敗することを確認する。stdout/stderr・終了コードとendpoint残存の有無を保存し、claim前拒否の根拠には模擬USB試験も対応付ける。この同時接続中は、受信・カード・LNB給電・電源制御の試験を行わない。物理USBの抜き差しは利用者の確認を得て行う。実施できない環境では未実施と理由を記録し、順次接続のcanaryや認定結果を同時接続時の識別結果へ流用しない。
+実施可能なら、同じ状態で `px4d --device serial:000000000000001 --firmware "$FW" --runtime-dir "$RT"` の曖昧指定が候補のUSB位置を示して exit 2 となり、USB interface の claim と endpoint 公開の前に失敗することを確認する。候補から選ぶ場合は `--device usb:BUS-PORT[,BUS-PORT] --instance TOKEN` を指定し、daemonと全clientで同じinstanceを使う。stdout/stderr・終了コードとendpoint残存の有無を保存し、claim前拒否の根拠には模擬USB試験も対応付ける。この同時接続中は、受信・カード・LNB給電・電源制御の試験を行わない。物理USBの抜き差しは利用者の確認を得て行う。実施できない環境では未実施と理由を記録し、順次接続のcanaryや認定結果を同時接続時の識別結果へ流用しない。
 
 ### LNB capability表示・15V非対応profileの拒否確認
 
@@ -417,8 +416,8 @@ v0.26 の識別変更が対象のとき、両機種を同時接続できる環�
 PX-M1URのISDB-SはLNB 0Vで受信できるが、15V要求は`--allow-lnb-power`の有無によらず`UNSUPPORTED`（exit 3）で拒否され、LNB用GPIOへ書き込まない。LNB/GPIO動作を変更したcandidateでは、PX-M1URだけを接続し、同じS受信要求をdaemonのopt-inなし・ありの両方で試す。daemon起動には毎回X-STARTのコマンド群を使い、なしのrunは通常のX-START、ありのrunは`--allow-lnb-power`を追加して起動し、各run後にdaemonを停止する。各daemon起動後に、次のコマンドを実行してexit 3を記録する:
 
 ```sh
-if "$D/px4-ts" --device "$ID" --receiver 0 --system isdb-s --frequency-khz 1318000 --slot 0 \
-  --runtime-dir "$RT" --lnb-voltage 15 --duration-seconds 1 --output /dev/null \
+if "$D/px4-ts" --device "$ID" --receiver 0 --freq 1318000000 --system isdb-s --slot 0 \
+  --runtime-dir "$RT" --lnb-voltage 15 --time 1 --output /dev/null \
   > "$LOG/lnb-15v-rejected.out" 2> "$LOG/lnb-15v-rejected.err"; then rc=0; else rc=$?; fi
 echo "$rc" > "$LOG/lnb-15v-rejected.rc"
 ```
@@ -626,12 +625,14 @@ SPEC §1 の対象環境（Linux、Android、macOS）に含まれないため �
   if (-not $parentRoot) { $parentRoot = [System.Environment]::GetEnvironmentVariable('TEMP') }
   $RT = Join-Path $parentRoot ('px4e17-' + [guid]::NewGuid().ToString('N').Substring(0,8))
   if (Test-Path $RT) { throw "refusing to reuse existing runtime parent: $RT" }
-  $ID = '<device serial>'   # daemonの--device
-  # AF_UNIX sun_pathは108 byte未満。worker socketとendpoint socket（<RT>\px4-userland\<ID>\<name>.sock）の
+  $SERIAL = '<device serial>'
+  $DEVICE = "serial:$SERIAL"   # hardware selector
+  $INSTANCE = 'rc-e17'          # IPC endpoint名。daemon/clientで共有
+  # AF_UNIX sun_pathは108 byte未満。worker socketとendpoint socket（<RT>\px4-userland\<INSTANCE>\<name>.sock）の
   # full sampleをUTF-8 byte数で確認する。
   $sampleWorker = Join-Path $RT ('px4-wake-' + ('0' * 16) + '\w.sock')
-  $sampleControl = Join-Path (Join-Path (Join-Path $RT 'px4-userland') $ID) 'control.sock'
-  $sampleStream = Join-Path (Join-Path (Join-Path $RT 'px4-userland') $ID) 'stream.sock'
+  $sampleControl = Join-Path (Join-Path (Join-Path $RT 'px4-userland') $INSTANCE) 'control.sock'
+  $sampleStream = Join-Path (Join-Path (Join-Path $RT 'px4-userland') $INSTANCE) 'stream.sock'
   $workerBytes = [System.Text.Encoding]::UTF8.GetByteCount($sampleWorker)
   $controlBytes = [System.Text.Encoding]::UTF8.GetByteCount($sampleControl)
   $streamBytes = [System.Text.Encoding]::UTF8.GetByteCount($sampleStream)
@@ -697,10 +698,10 @@ SPEC §1 の対象環境（Linux、Android、macOS）に含まれないため �
     "$($owned.Process.ExitCode)" | Out-File (Join-Path $LOG "$name.rc")
     return $owned.Process.ExitCode
   }
-  function Start-Ts([int]$receiver, [string]$system, [int]$frequency, [string]$slot) {
-    $a = @('--device', $ID, '--receiver', "$receiver", '--system', $system, '--frequency-khz', "$frequency")
+  function Start-Ts([int]$receiver, [string]$system, [int]$frequencyHz, [string]$slot) {
+    $a = @('--device', $DEVICE, '--instance', $INSTANCE, '--receiver', "$receiver", '--system', $system, '--freq', "$frequencyHz")
     if ($slot) { $a += @('--slot', $slot) }
-    $a += @('--runtime-dir', $RT, '--output', 'NUL', '--duration-seconds', '30')
+    $a += @('--runtime-dir', $RT, '--output', 'NUL', '--time', '30')
     return Start-OwnedProcess (Join-Path $D 'px4-ts.exe') $a $false
   }
   function Wait-Captures($captures) {
@@ -726,12 +727,13 @@ SPEC §1 の対象環境（Linux、Android、macOS）に含まれないため �
       throw "TS capture(s) exceeded the 90s bound without Kill; evidence in $LOG\ts-timeout.txt: $($timeout -join ', ')"
     }
   }
-  & "$D\px4d.exe" --list | Tee-Object "$LOG\list.txt"
   & "$D\px4d.exe" --list-json | Out-File "$LOG\list.json"
   ```
 
-  daemon起動・ready確認・受信・CARD・停止（X-START/X-LOAD/X-MON/X-CARD-HP/X-STOP相当）。`$ID`は`--device`、
-  `$FW`は利用者提供firmware。daemonとCLIは同じ明示的な`--runtime-dir $RT`を使い、`LOCALAPPDATA`はそのまま継承する。
+  daemon起動・ready確認・受信・CARD・停止（X-START/X-LOAD/X-MON/X-CARD-HP/X-STOP相当）。`$DEVICE`はhardware selector、
+  `$INSTANCE`は全clientと共有するIPC endpoint名、`$SERIAL`は機器の観測serial、`$FW`は利用者提供firmware。
+  下のWinSCard smokeの既存引数名`-DeviceSerial`には、reader名を作るためdaemonと同じinstance tokenを渡す。
+  daemonとCLIは同じ明示的な`--runtime-dir $RT`を使い、`LOCALAPPDATA`はそのまま継承する。
   標準入力をredirectし、`--exit-on-stdin-eof`でcooperative shutdownする。
   ready判定はexit codeだけでなくstatusの`ready=yes` fieldを確認する。CARDは**daemon停止前**に実行する。
   受信はQ3U4では8 receiverを**同時に**起動し（逐次実行で代用しない）、各processを有限時間で待つ。他profileは
@@ -740,12 +742,12 @@ SPEC §1 の対象環境（Linux、Android、macOS）に含まれないため �
 
   ```powershell
   $owned = Start-OwnedProcess (Join-Path $D 'px4d.exe') `
-    @('--device', $ID, '--firmware', $FW, '--runtime-dir', $RT, '--exit-on-stdin-eof') $true
+    @('--device', $DEVICE, '--instance', $INSTANCE, '--firmware', $FW, '--runtime-dir', $RT, '--exit-on-stdin-eof') $true
   $primary = $null
   try {
     $ready = $false
     for ($i = 0; $i -lt 30; $i++) {
-      $status = (& "$D\px4ctl.exe" --device $ID --runtime-dir $RT status 2>> "$LOG\px4ctl.err") | Out-String
+      $status = (& "$D\px4ctl.exe" --device $DEVICE --instance $INSTANCE --runtime-dir $RT status 2>> "$LOG\px4ctl.err") | Out-String
       $status | Out-File -Append "$LOG\status-start.txt"
       if ($LASTEXITCODE -eq 0 -and $status -match 'ready=yes') { $ready = $true; break }
       Start-Sleep -Seconds 1
@@ -757,7 +759,7 @@ SPEC §1 の対象環境（Linux、Android、macOS）に含まれないため �
     if (-not (Test-Path -LiteralPath $probePath -PathType Leaf)) { throw "missing WinSCard smoke script: $probePath" }
     $probe = Start-OwnedProcess $childPowerShell @(
       '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $probePath,
-      '-DllPath', (Join-Path $D 'winscard\WinSCard.dll'), '-RuntimeDir', $RT, '-DeviceSerial', $ID
+      '-DllPath', (Join-Path $D 'winscard\WinSCard.dll'), '-RuntimeDir', $RT, '-DeviceSerial', $INSTANCE
     ) $true
     $probeExit = Stop-OwnedProcess $probe 30000 'winscard-smoke'
     if ($probeExit -ne 0) { throw "WinSCard smoke child exit code was $probeExit" }
@@ -765,28 +767,28 @@ SPEC §1 の対象環境（Linux、Android、macOS）に含まれないため �
     $captures = @()
     # Q3U4: 0/1/4/5=ISDB-S、2/3/6/7=ISDB-T。8 receiverを同時起動する。他profileはSPEC 10.2.7の該当のみ。
     foreach ($r in 0..7) {
-      if ($r -in 0,1,4,5) { $captures += Start-Ts $r 'isdb-s' 1318000 '0' }
-      else { $captures += Start-Ts $r 'isdb-t' 527143 '' }
+      if ($r -in 0,1,4,5) { $captures += Start-Ts $r 'isdb-s' 1318000000 '0' }
+      else { $captures += Start-Ts $r 'isdb-t' 527143000 '' }
     }
     # SPEC 10.2.13: 8 receiver同時capture中、daemon経由CARD APDUを10回検証。
     # Windowsの同一接続反復ではなく10回の単発送信。capture完了前の重複をログで確認する。
     foreach ($attempt in 1..10) {
-      (& "$D\px4ctl.exe" --device $ID --runtime-dir $RT card-apdu 90:30:00:00:00 2>> "$LOG\card-concurrent.err") | Out-File "$LOG\card-concurrent.$attempt.txt"
+      (& "$D\px4ctl.exe" --device $DEVICE --instance $INSTANCE --runtime-dir $RT card-apdu 90:30:00:00:00 2>> "$LOG\card-concurrent.err") | Out-File "$LOG\card-concurrent.$attempt.txt"
       "$LASTEXITCODE" | Out-File "$LOG\card-concurrent.$attempt.rc"
       if ($LASTEXITCODE -ne 0) { throw "concurrent APDU $attempt failed" }
       if (-not (Select-String -Path "$LOG\card-concurrent.$attempt.txt" -Pattern 'response=90:00' -Quiet)) { throw "unexpected concurrent APDU response" }
     }
     Wait-Captures $captures
-    (& "$D\px4ctl.exe" --device $ID --runtime-dir $RT status 2>> "$LOG\px4ctl.err") | Out-File "$LOG\status-after.txt"
+    (& "$D\px4ctl.exe" --device $DEVICE --instance $INSTANCE --runtime-dir $RT status 2>> "$LOG\px4ctl.err") | Out-File "$LOG\status-after.txt"
 
     # CARD（daemon停止前）。抜去/再挿入の物理操作を挟み、各出力とexit値を保存する。
     foreach ($op in 'card-status','card-atr','card-reset') {
-      (& "$D\px4ctl.exe" --device $ID --runtime-dir $RT $op 2>> "$LOG\card.err") | Out-File "$LOG\$op.txt"
+      (& "$D\px4ctl.exe" --device $DEVICE --instance $INSTANCE --runtime-dir $RT $op 2>> "$LOG\card.err") | Out-File "$LOG\$op.txt"
       "$LASTEXITCODE" | Out-File "$LOG\$op.rc"
     }
     # 独立したdaemon CARD接続を10回実施。旧 --repeatの同一セッション負荷とは別。
     foreach ($attempt in 1..10) {
-      (& "$D\px4ctl.exe" --device $ID --runtime-dir $RT card-apdu 90:30:00:00:00 2>> "$LOG\card.err") | Out-File "$LOG\card-apdu.$attempt.txt"
+      (& "$D\px4ctl.exe" --device $DEVICE --instance $INSTANCE --runtime-dir $RT card-apdu 90:30:00:00:00 2>> "$LOG\card.err") | Out-File "$LOG\card-apdu.$attempt.txt"
       "$LASTEXITCODE" | Out-File "$LOG\card-apdu.$attempt.rc"
       if ($LASTEXITCODE -ne 0) { throw "CARD APDU attempt $attempt failed" }
       if (-not (Select-String -Path "$LOG\card-apdu.$attempt.txt" -Pattern 'response=90:00' -Quiet)) { throw "CARD APDU attempt $attempt has unexpected response" }
