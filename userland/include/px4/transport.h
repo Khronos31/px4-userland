@@ -2,12 +2,8 @@
 #ifndef PX4_USERLAND_TRANSPORT_H
 #define PX4_USERLAND_TRANSPORT_H
 
-#include "px4/error.h"
-
-// The neutral byte-view/transport types live in the MIT dtv-userland-core
-// foundation library.  The product keeps its device endpoint/transfer
-// constants here and aliases the shared types into px4::userland.
 #include "dtv/userland/transport.h"
+#include "px4/error.h"
 
 #include <cstddef>
 #include <cstdint>

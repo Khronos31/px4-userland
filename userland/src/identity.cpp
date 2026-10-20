@@ -7,6 +7,7 @@
 // Source snapshot maintained by tsukumijima.
 // SPDX-License-Identifier: GPL-2.0-only
 #include "px4/identity.h"
+#include <dtv/userland/host_facade/identity.h>
 
 #include <algorithm>
 #include <charconv>
@@ -235,15 +236,7 @@ bool valid_device_instance(std::string_view value) noexcept
 
 bool valid_runtime_instance(std::string_view value) noexcept
 {
-    if (value.empty() || value.size() > 80U || value == "." || value == "..") return false;
-    for (const unsigned char character : value) {
-        const bool accepted = (character >= '0' && character <= '9') ||
-                              (character >= 'a' && character <= 'z') ||
-                              (character >= 'A' && character <= 'Z') ||
-                              character == '_' || character == '-' || character == '.';
-        if (!accepted) return false;
-    }
-    return true;
+    return dtv::userland::host_facade::valid_runtime_instance(value);
 }
 
 Result<ParsedQ3U4Serial> parse_q3u4_serial(std::string_view serial) noexcept

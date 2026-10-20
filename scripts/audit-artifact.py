@@ -161,13 +161,12 @@ WINDOWS_SOURCE_ALLOWED = re.compile(
     r"|userland/include/px4/[\w.+-]*windows[\w.+-]*"
     r"|scripts/build-windows\.sh"
     r"|docs/[\w./+-]*windows[\w./+-]*"
-    r"|third_party/dtv-userland-core/adapters/(?:windows_winscard|host_runtime|host_ts)/[\w./+-]+"
+    r"|third_party/dtv-userland-core/adapters/(?:windows_winscard|host_runtime|host_ts|host_facade|host_daemon)/[\w./+-]+"
     r")$", re.IGNORECASE
 )
 WINDOWS_SOURCE_REQUIRED = {
     "repository/scripts/build-windows.sh",
     "repository/scripts/test-windows-static-relink.sh",
-    "repository/userland/src/windows/windows_sleep.cpp",
     "repository/userland/tools/px4_ts_windows.cpp",
     "repository/userland/tools/px4_windows_args.h",
     "repository/userland/tests/windows_platform_tests.cpp",
@@ -185,6 +184,12 @@ HOST_RUNTIME_ADAPTER_PREFIX = (
 )
 HOST_TS_ADAPTER_PREFIX = (
     "repository/third_party/dtv-userland-core/adapters/host_ts/"
+)
+HOST_FACADE_ADAPTER_PREFIX = (
+    "repository/third_party/dtv-userland-core/adapters/host_facade/"
+)
+HOST_DAEMON_ADAPTER_PREFIX = (
+    "repository/third_party/dtv-userland-core/adapters/host_daemon/"
 )
 HOST_TS_ADAPTER_REQUIRED = {
     HOST_TS_ADAPTER_PREFIX + "COPYING",
@@ -211,9 +216,48 @@ WINDOWS_HOST_RUNTIME_REQUIRED = {
     HOST_RUNTIME_ADAPTER_PREFIX + "windows/windows_ipc.cpp",
     HOST_RUNTIME_ADAPTER_PREFIX + "windows/windows_tuner_nonce.cpp",
     "repository/cmake/DtvUserlandCoreDependency.cmake",
-    "repository/userland/include/px4/ipc.h",
-    "repository/userland/include/px4/posix_ipc.h",
     "repository/userland/include/px4/posix_tuner_nonce.h",
+    "repository/userland/include/px4/windows_tuner_nonce.h",
+}
+HOST_FACADE_ADAPTER_REQUIRED = {
+    HOST_FACADE_ADAPTER_PREFIX + "COPYING",
+    HOST_FACADE_ADAPTER_PREFIX + "README.md",
+    HOST_FACADE_ADAPTER_PREFIX + "PROVENANCE.json",
+    HOST_FACADE_ADAPTER_PREFIX + "include/dtv/userland/host_facade/px4d_signals.h",
+    HOST_FACADE_ADAPTER_PREFIX + "include/dtv/userland/host_facade/px4d_windows_stdin.h",
+    HOST_FACADE_ADAPTER_PREFIX + "include/dtv/userland/host_facade/identity.h",
+    HOST_FACADE_ADAPTER_PREFIX + "include/px4/card_atr_bytes.h",
+    HOST_FACADE_ADAPTER_PREFIX + "include/px4/error.h",
+    HOST_FACADE_ADAPTER_PREFIX + "include/px4/ipc.h",
+    HOST_FACADE_ADAPTER_PREFIX + "include/px4/platform_sleep.h",
+    HOST_FACADE_ADAPTER_PREFIX + "include/px4/posix_ipc.h",
+    HOST_FACADE_ADAPTER_PREFIX + "include/px4/transport.h",
+    HOST_FACADE_ADAPTER_PREFIX + "src/ipc.cpp",
+    HOST_FACADE_ADAPTER_PREFIX + "src/identity.cpp",
+    HOST_FACADE_ADAPTER_PREFIX + "src/px4d_signals.cpp",
+    HOST_FACADE_ADAPTER_PREFIX + "src/px4d_windows_stdin.cpp",
+    HOST_FACADE_ADAPTER_PREFIX + "src/windows_sleep.cpp",
+    "repository/CMakeLists.txt",
+}
+HOST_DAEMON_ADAPTER_REQUIRED = {
+    HOST_DAEMON_ADAPTER_PREFIX + "COPYING",
+    HOST_DAEMON_ADAPTER_PREFIX + "README.md",
+    HOST_DAEMON_ADAPTER_PREFIX + "PROVENANCE.json",
+    HOST_DAEMON_ADAPTER_PREFIX + "include/dtv/userland/host_daemon/card_service.h",
+    HOST_DAEMON_ADAPTER_PREFIX + "include/dtv/userland/host_daemon/control_server_test_access.h",
+    HOST_DAEMON_ADAPTER_PREFIX + "include/dtv/userland/host_daemon/control_workers.h",
+    HOST_DAEMON_ADAPTER_PREFIX + "include/px4/card_service.h",
+    HOST_DAEMON_ADAPTER_PREFIX + "include/px4/control_execution_layout.h",
+    HOST_DAEMON_ADAPTER_PREFIX + "include/px4/control_server.h",
+    HOST_DAEMON_ADAPTER_PREFIX + "include/px4/enclosure_context.h",
+    HOST_DAEMON_ADAPTER_PREFIX + "include/px4/tuner_service.h",
+    HOST_DAEMON_ADAPTER_PREFIX + "src/card_service.cpp",
+    HOST_DAEMON_ADAPTER_PREFIX + "src/control_server.cpp",
+    HOST_DAEMON_ADAPTER_PREFIX + "src/control_workers.cpp",
+    HOST_DAEMON_ADAPTER_PREFIX + "src/enclosure_context.cpp",
+    HOST_DAEMON_ADAPTER_PREFIX + "src/tuner_service.cpp",
+    HOST_DAEMON_ADAPTER_PREFIX + "src/windows_pthread_compat.h",
+    "repository/CMakeLists.txt",
 }
 # The shareable WinSCard proxy/client lives once in the optional GPL adapter of
 # the pinned common core.  The product keeps only the build wiring, the host
@@ -1700,9 +1744,14 @@ def audit_source_archive(args: argparse.Namespace) -> dict:
         name.startswith(HOST_RUNTIME_ADAPTER_PREFIX) for name in members)
     host_ts_adapter = any(
         name.startswith(HOST_TS_ADAPTER_PREFIX) for name in members)
+    host_facade_adapter = any(
+        name.startswith(HOST_FACADE_ADAPTER_PREFIX) for name in members)
+    host_daemon_adapter = any(
+        name.startswith(HOST_DAEMON_ADAPTER_PREFIX) for name in members)
     product_cmake = (read_archive_file(args.archive.resolve(), "repository/CMakeLists.txt")
                      .decode("utf-8") if "repository/CMakeLists.txt" in members else "")
     host_ts_product = "dtv::host_ts" in product_cmake
+    host_daemon_product = "dtv::host_daemon" in product_cmake
     winscard_product = winscard_document in members or any(
         name.startswith("repository/userland/tests/windows_winscard")
         for name in members)
@@ -1724,6 +1773,10 @@ def audit_source_archive(args: argparse.Namespace) -> dict:
         required |= WINDOWS_HOST_RUNTIME_REQUIRED
     if host_ts_adapter or host_ts_product:
         required |= HOST_TS_ADAPTER_REQUIRED
+    if host_facade_adapter or host_daemon_adapter or host_daemon_product:
+        required |= HOST_FACADE_ADAPTER_REQUIRED
+    if host_daemon_adapter or host_daemon_product:
+        required |= HOST_DAEMON_ADAPTER_REQUIRED
     # A product that advertises WinSCard through its document/tests must ship
     # either the complete legacy product closure or the complete shared
     # adapter/support closure.  The adapter prefix alone also triggers both.

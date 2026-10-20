@@ -57,7 +57,7 @@ jobs:
       - name: Build static executables in Alpine 3.22
         run: |
           docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src alpine:3.22 sh -euxc '
-            apk add --no-cache cmake samurai gcc g++ make pkgconf libusb-dev pcsc-lite-dev python3 binutils curl tar bzip2 linux-headers;
+            apk add --no-cache cmake samurai gcc g++ make pkgconf libusb-dev pcsc-lite-dev python3 binutils curl tar bzip2 linux-headers git;
             cmake -S . -B build-userland -G Ninja -DCMAKE_BUILD_TYPE=Release -DPX4_BUILD_TESTS=ON -DPX4_REQUIRE_PCSC_IFD=ON;
             cmake --build build-userland;
             ctest --test-dir build-userland --output-on-failure;
@@ -81,7 +81,7 @@ jobs:
                 attempt=$((attempt + 1));
               done
             };
-            apt_install_retry cmake ninja-build g++ pkg-config libpcsclite-dev binutils python3;
+            apt_install_retry cmake ninja-build g++ pkg-config libpcsclite-dev binutils python3 git ca-certificates;
             scripts/build-linux-ifd.sh --libc glibc --output /src/build-ifd-glibc;
             python3 -c "import ctypes; getattr(ctypes.CDLL(\"/src/build-ifd-glibc/px4-userland-ifd.so\"), \"IFDHCreateChannel\")";
             scripts/package-artifact.sh --platform linux-glibc-x86_64 --version "$(tr -d "\n" < VERSION)" --static-build-dir build-static --ifd-library build-ifd-glibc/px4-userland-ifd.so --reader-template packaging/pcsc/reader.conf.d/px4-userland.conf.in --source-ref "$GITHUB_SHA" --output-dir release-candidate;
@@ -89,7 +89,7 @@ jobs:
       - name: Build and test matching musl IFD
         run: |
           docker run --rm -e GITHUB_SHA="$GITHUB_SHA" -v "$GITHUB_WORKSPACE:/src" -w /src alpine:3.22 sh -euxc '
-            apk add --no-cache cmake samurai g++ pkgconf pcsc-lite-dev python3 binutils tar bzip2 linux-headers;
+            apk add --no-cache cmake samurai g++ pkgconf pcsc-lite-dev python3 binutils tar bzip2 linux-headers git;
             scripts/build-linux-ifd.sh --libc musl --output /src/build-ifd-musl;
             python3 -c "import ctypes; getattr(ctypes.CDLL(\"/src/build-ifd-musl/px4-userland-ifd.so\"), \"IFDHCreateChannel\")";
             scripts/package-artifact.sh --platform linux-musl-x86_64 --version "$(tr -d "\n" < VERSION)" --static-build-dir build-static --ifd-library build-ifd-musl/px4-userland-ifd.so --reader-template packaging/pcsc/reader.conf.d/px4-userland.conf.in --source-ref "$GITHUB_SHA" --output-dir release-candidate;
@@ -125,7 +125,7 @@ jobs:
       - name: Build static and matching IFD variants in Alpine 3.22
         run: |
           docker run --rm -e GITHUB_SHA="$GITHUB_SHA" -v "$GITHUB_WORKSPACE:/src" -w /src alpine:3.22 sh -euxc '
-            apk add --no-cache cmake samurai gcc g++ make pkgconf libusb-dev pcsc-lite-dev python3 binutils curl tar bzip2 linux-headers;
+            apk add --no-cache cmake samurai gcc g++ make pkgconf libusb-dev pcsc-lite-dev python3 binutils curl tar bzip2 linux-headers git;
             cmake -S . -B build-userland -G Ninja -DCMAKE_BUILD_TYPE=Release -DPX4_BUILD_TESTS=ON -DPX4_REQUIRE_PCSC_IFD=ON;
             cmake --build build-userland;
             ctest --test-dir build-userland --output-on-failure;
@@ -154,7 +154,7 @@ jobs:
                 attempt=$((attempt + 1));
               done
             };
-            apt_install_retry cmake ninja-build g++ pkg-config libpcsclite-dev python3 binutils;
+            apt_install_retry cmake ninja-build g++ pkg-config libpcsclite-dev python3 binutils git ca-certificates;
             scripts/build-linux-ifd.sh --libc glibc --output /src/build-ifd-glibc;
             python3 -c "import ctypes; getattr(ctypes.CDLL(\"/src/build-ifd-glibc/px4-userland-ifd.so\"), \"IFDHCreateChannel\")";
             scripts/package-artifact.sh --platform linux-glibc-aarch64 --version "$(tr -d "\n" < VERSION)" --static-build-dir build-static --ifd-library build-ifd-glibc/px4-userland-ifd.so --reader-template packaging/pcsc/reader.conf.d/px4-userland.conf.in --source-ref "$GITHUB_SHA" --output-dir release-candidate'
@@ -234,7 +234,7 @@ jobs:
           mkdir -p "$source_root"
           tar -xzf "$RUNNER_TEMP"/source-archive/*.tar.gz -C "$source_root"
           docker run --rm -v "$source_root:/src" -w /src/repository alpine:3.22 sh -euxc '
-            apk add --no-cache cmake samurai gcc g++ make pkgconf python3 binutils curl tar bzip2 linux-headers;
+            apk add --no-cache cmake samurai gcc g++ make pkgconf python3 binutils curl tar bzip2 linux-headers git;
             test -f /src/third_party/libusb-1.0.30.tar.bz2;
             scripts/test-static-relink.sh --libusb-source-archive /src/third_party/libusb-1.0.30.tar.bz2'
           find "$source_root" -depth -delete
@@ -255,7 +255,7 @@ jobs:
           mkdir -p "$source_root"
           tar -xzf "$RUNNER_TEMP"/source-archive/*.tar.gz -C "$source_root"
           docker run --rm -v "$source_root:/src" -w /src/repository alpine:3.22 sh -euxc '
-            apk add --no-cache cmake samurai gcc g++ make pkgconf python3 binutils curl tar bzip2 linux-headers;
+            apk add --no-cache cmake samurai gcc g++ make pkgconf python3 binutils curl tar bzip2 linux-headers git;
             test -f /src/third_party/libusb-1.0.30.tar.bz2;
             scripts/test-static-relink.sh --libusb-source-archive /src/third_party/libusb-1.0.30.tar.bz2'
           find "$source_root" -depth -delete
@@ -410,10 +410,19 @@ jobs:
           curl -fsSL --retry 2 -o "$libusb" \
             https://github.com/libusb/libusb/releases/download/v1.0.30/libusb-1.0.30.tar.bz2
           echo 'fea36f34f9156400209595e300840767ab1a385ede1dc7ee893015aea9c6dbaf  '"$libusb" | sha256sum -c -
+          scripts/package-source.py --self-test
+          core_pin="$(tr -d '\n' < cmake/dtv-userland-core.revision)"
+          common_core="$RUNNER_TEMP/dtv-userland-core"
+          git clone --no-checkout https://github.com/Khronos31/dtv-userland-core.git "$common_core"
+          git -C "$common_core" checkout --detach "$core_pin"
+          test "$(git -C "$common_core" rev-parse HEAD)" = "$core_pin"
+          scripts/test-source-archive.py --libusb-source-archive "$libusb" \
+            --common-core-source-root "$common_core"
           version="$(tr -d '\n' < VERSION)"
           mkdir -p "$RUNNER_TEMP/release-candidate/source"
           scripts/package-source.sh --version "$version" --source-root "$GITHUB_WORKSPACE" \
             --source-ref "$GITHUB_SHA" --libusb-source-archive "$libusb" \
+            --common-core-source-root "$common_core" \
             --output-dir "$RUNNER_TEMP/release-candidate/source"
       - name: Upload source candidate archive
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

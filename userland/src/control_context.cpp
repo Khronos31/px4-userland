@@ -160,6 +160,7 @@ Result<void> build_px4_control_context(const Px4ContextInput& input,
 
     list.receivers.present = true;
     list.receivers.value.count = receivers;
+    out.execution.receiver_count = receivers;
     for (std::uint8_t receiver = 0U; receiver < receivers; ++receiver) {
         wire::ReceiverDescriptor& descriptor = list.receivers.value.items[receiver];
         descriptor = wire::ReceiverDescriptor{};
@@ -188,6 +189,9 @@ Result<void> build_px4_control_context(const Px4ContextInput& input,
                 descriptor.capabilities.controls |= wire::kControlBitLnb;
         }
         out.receiver_index[receiver] = receiver;
+        out.execution.receiver_lane[receiver] =
+            profile.bridge_count == 2U && receiver >= 4U
+                ? ControlWorkerLane::tuner_dev2 : ControlWorkerLane::tuner_dev1;
     }
 
     list.readers.present = true;

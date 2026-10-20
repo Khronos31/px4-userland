@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "px4/card.h"
 #include "px4/card_service.h"
+#include "px4/native_card_protocol_session.h"
 #include "px4/control_context.h"
 #include "px4/control_server.h"
 #include "px4/enclosure_context.h"
