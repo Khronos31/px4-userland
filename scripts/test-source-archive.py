@@ -119,6 +119,11 @@ def make_product(base: Path, name: str, *, lock: str | None, module: Path,
     write(product / "VERSION", "0.0.0\n")
     for path, data in PRODUCT_DUMMY_FILES.items():
         write(product / path, data)
+    for name in ("gcc-COPYING.RUNTIME", "gcc-COPYING3", "musl-1.2.5-COPYRIGHT"):
+        source = module.parent.parent / "distribution" / "licenses" / name
+        destination = product / "distribution" / "licenses" / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
     if lock is not None:
         write(product / "cmake/dtv-userland-core.revision", lock + "\n")
     if with_module:
