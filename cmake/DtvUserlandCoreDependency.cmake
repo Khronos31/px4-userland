@@ -104,6 +104,11 @@ function(px4_add_dtv_userland_core)
         set(DTV_USERLAND_HOST_RUNTIME_FACADE_INCLUDE_DIRS
             "${CMAKE_CURRENT_SOURCE_DIR}/userland/include" CACHE STRING
             "Private product facade include directories required by the GPL host runtime adapter" FORCE)
+        set(DTV_USERLAND_BUILD_HOST_TS ON CACHE BOOL
+            "Build the optional GPL host TS consumer" FORCE)
+        set(DTV_USERLAND_HOST_TS_FACADE_INCLUDE_DIRS
+            "${CMAKE_CURRENT_SOURCE_DIR}/userland/include" CACHE STRING
+            "Private product facade include directories required by the GPL host TS consumer" FORCE)
     endif()
     if(WIN32 AND PX4_BUILD_WINSCARD)
         # The shared WinSCard adapter is built from one GPL source with the
@@ -162,6 +167,10 @@ function(px4_add_dtv_userland_core)
         get_target_property(_host_runtime_source_dir dtv_userland_host_runtime SOURCE_DIR)
         set(DTV_USERLAND_HOST_RUNTIME_SOURCE_DIR
             "${_host_runtime_source_dir}/adapters/host_runtime" PARENT_SCOPE)
+        if(NOT TARGET dtv::host_ts)
+            message(FATAL_ERROR
+                "dtv-userland-core did not define the optional dtv::host_ts target")
+        endif()
     endif()
     if(WIN32 AND PX4_BUILD_WINSCARD AND NOT TARGET dtv::windows_winscard_client)
         message(FATAL_ERROR

@@ -161,8 +161,7 @@ WINDOWS_SOURCE_ALLOWED = re.compile(
     r"|userland/include/px4/[\w.+-]*windows[\w.+-]*"
     r"|scripts/build-windows\.sh"
     r"|docs/[\w./+-]*windows[\w./+-]*"
-    r"|third_party/dtv-userland-core/adapters/windows_winscard/[\w./+-]+"
-    r"|third_party/dtv-userland-core/adapters/host_runtime/[\w./+-]+"
+    r"|third_party/dtv-userland-core/adapters/(?:windows_winscard|host_runtime|host_ts)/[\w./+-]+"
     r")$", re.IGNORECASE
 )
 WINDOWS_SOURCE_REQUIRED = {
@@ -184,6 +183,23 @@ WINDOWS_PRODUCT_RUNTIME_REQUIRED = {
 HOST_RUNTIME_ADAPTER_PREFIX = (
     "repository/third_party/dtv-userland-core/adapters/host_runtime/"
 )
+HOST_TS_ADAPTER_PREFIX = (
+    "repository/third_party/dtv-userland-core/adapters/host_ts/"
+)
+HOST_TS_ADAPTER_REQUIRED = {
+    HOST_TS_ADAPTER_PREFIX + "COPYING",
+    HOST_TS_ADAPTER_PREFIX + "README.md",
+    HOST_TS_ADAPTER_PREFIX + "control_client.cpp",
+    HOST_TS_ADAPTER_PREFIX + "include/dtv/host_ts/control_client.h",
+    HOST_TS_ADAPTER_PREFIX + "include/dtv/host_ts/px4_ts_core.h",
+    HOST_TS_ADAPTER_PREFIX + "include/dtv/host_ts/px4_ts_posix.h",
+    HOST_TS_ADAPTER_PREFIX + "include/dtv/host_ts/px4_ts_windows_output.h",
+    HOST_TS_ADAPTER_PREFIX + "include/px4/control_client.h",
+    HOST_TS_ADAPTER_PREFIX + "px4_ts_core.cpp",
+    HOST_TS_ADAPTER_PREFIX + "posix/px4_ts_posix.cpp",
+    HOST_TS_ADAPTER_PREFIX + "windows/px4_ts_windows_output.cpp",
+    "repository/CMakeLists.txt",
+}
 WINDOWS_HOST_RUNTIME_REQUIRED = {
     HOST_RUNTIME_ADAPTER_PREFIX + "COPYING",
     HOST_RUNTIME_ADAPTER_PREFIX + "README.md",
@@ -210,7 +226,6 @@ WINDOWS_WINSCARD_SOURCE_REQUIRED = {
     "repository/" + WINDOWS_WINSCARD_DOCUMENT,
     "repository/cmake/DtvUserlandCoreDependency.cmake",
     "repository/userland/src/ipc.cpp",
-    "repository/userland/src/control_client.cpp",
     "repository/userland/include/px4/control_client.h",
     "repository/userland/include/px4/ipc.h",
     "repository/userland/include/px4/posix_ipc.h",
@@ -1683,6 +1698,11 @@ def audit_source_archive(args: argparse.Namespace) -> dict:
         name in members for name in WINDOWS_PRODUCT_RUNTIME_REQUIRED)
     host_runtime_adapter = any(
         name.startswith(HOST_RUNTIME_ADAPTER_PREFIX) for name in members)
+    host_ts_adapter = any(
+        name.startswith(HOST_TS_ADAPTER_PREFIX) for name in members)
+    product_cmake = (read_archive_file(args.archive.resolve(), "repository/CMakeLists.txt")
+                     .decode("utf-8") if "repository/CMakeLists.txt" in members else "")
+    host_ts_product = "dtv::host_ts" in product_cmake
     winscard_product = winscard_document in members or any(
         name.startswith("repository/userland/tests/windows_winscard")
         for name in members)
@@ -1702,6 +1722,8 @@ def audit_source_archive(args: argparse.Namespace) -> dict:
         required |= WINDOWS_PRODUCT_RUNTIME_REQUIRED
     if host_runtime_adapter or (windows_product and not product_runtime):
         required |= WINDOWS_HOST_RUNTIME_REQUIRED
+    if host_ts_adapter or host_ts_product:
+        required |= HOST_TS_ADAPTER_REQUIRED
     # A product that advertises WinSCard through its document/tests must ship
     # either the complete legacy product closure or the complete shared
     # adapter/support closure.  The adapter prefix alone also triggers both.

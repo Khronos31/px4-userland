@@ -2,8 +2,9 @@
 // Windows px4-ts front end. The binary sink lives in px4_ts_windows_output so
 // it can be exercised by isolated tests; the portable protocol runner in
 // px4_ts_core.cpp is shared with the POSIX front end.
-#include "px4_ts_core.h"
-#include "px4_ts_windows_output.h"
+#include <dtv/host_ts/px4_ts_core.h>
+#include <dtv/host_ts/px4_ts_windows_output.h>
+#include "px4/identity.h"
 #include "px4_windows_args.h"
 
 #if defined(_WIN32)
@@ -18,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
@@ -26,6 +28,26 @@ namespace {
 
 using namespace px4::userland;
 using namespace px4::userland::cli;
+
+bool matches_px4_serial_identity(
+    const dtv::userland::wire::ListResponse& list,
+    const dtv::userland::identity::ResolvedIdentity& expected) noexcept
+{
+    const auto& observed = list.enclosure.value.identity;
+    const auto* profile = px4::userland::device_profile_for_usb_id(
+        list.functions.items[0].vid, list.functions.items[0].pid);
+    if (profile == nullptr || !profile->serial_identity_supported) return false;
+    for (std::size_t i = 1U; i < list.functions.count; ++i) {
+        const auto* other = px4::userland::device_profile_for_usb_id(
+            list.functions.items[i].vid, list.functions.items[i].pid);
+        if (other == nullptr || other->model != profile->model) return false;
+    }
+    return observed.serial_state == dtv::userland::wire::IdentitySerialState::present &&
+           observed.uniqueness == dtv::userland::wire::Uniqueness::unique_in_scan &&
+           observed.serial.present && observed.serial.value.length == expected.serial.length &&
+           std::memcmp(observed.serial.value.bytes.data(), expected.serial.bytes.data(),
+                       expected.serial.length) == 0;
+}
 
 std::atomic<bool> stop_flag{false};
 HANDLE cleanup_event = nullptr;
@@ -101,6 +123,9 @@ void print_counters(const char* label, const ipc::CountersPayload& counters) noe
 
 int main(int argc, char** argv)
 {
+    static const TsClientProfile profile{
+        "px4-ts", "px4-userland", dtv::userland::identity::Product::px4, true, false,
+        &matches_px4_serial_identity};
     const std::vector<std::string> owned =
         px4::userland::cli::windows_argv_utf8(argc, argv);
     std::vector<const char*> views;
@@ -109,14 +134,14 @@ int main(int argc, char** argv)
         views.push_back(value.c_str());
     }
     const Px4TsArguments arguments =
-        parse_px4_ts_product_arguments(static_cast<int>(views.size()), views.data());
+        parse_px4_ts_product_arguments(static_cast<int>(views.size()), views.data(), profile);
     if (!arguments.valid) {
         std::fprintf(stderr, "argument error: %s\n", arguments.error.c_str());
-        print_px4_ts_usage(stderr);
+        print_px4_ts_usage(profile, stderr);
         return 2;
     }
     if (arguments.help) {
-        print_px4_ts_usage(stdout);
+        print_px4_ts_usage(profile, stdout);
         return 0;
     }
     if (arguments.version) {
@@ -158,7 +183,7 @@ int main(int argc, char** argv)
     WindowsSignal signal;
     Px4TsFailureKind failure_kind = Px4TsFailureKind::ipc;
     Px4TsRunDiagnostics diagnostics;
-    const auto result = Px4TsRunner::run_wire(arguments, *output, clock, signal,
+    const auto result = Px4TsRunner::run_wire(arguments, profile, *output, clock, signal,
                                               &failure_kind, &diagnostics);
     const auto finished = output->finish();
     const std::uint64_t completed = output->completed_packets();

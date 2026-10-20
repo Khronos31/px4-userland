@@ -262,7 +262,6 @@ endif()
 # platform headers out of the portable core and exclude only non-POSIX hosts.
 if(UNIX)
     add_library(px4_userland_posix_ipc STATIC
-        userland/src/control_client.cpp
         userland/src/control_context.cpp
         userland/src/enclosure_context.cpp
         userland/src/control_server.cpp
@@ -273,7 +272,7 @@ if(UNIX)
     target_compile_features(px4_userland_posix_ipc PUBLIC cxx_std_17)
     # The control endpoint uses the shared UDTV connection serializer/codecs.
     target_link_libraries(px4_userland_posix_ipc PUBLIC
-        dtv::host_runtime px4_userland_core dtv::control dtv::identity)
+        dtv::host_runtime dtv::host_ts px4_userland_core dtv::control dtv::identity)
     px4_enable_project_warnings(px4_userland_posix_ipc)
     if(NOT PX4_BUILD_TESTS)
         target_sources(px4_userland_posix_ipc PRIVATE userland/src/control_workers.cpp)
@@ -324,7 +323,6 @@ if(WIN32)
     px4_enable_project_warnings(px4_userland_windows_platform)
 
     add_library(px4_userland_windows_ipc STATIC
-        userland/src/control_client.cpp
         userland/src/control_context.cpp
         userland/src/enclosure_context.cpp
         userland/src/control_server.cpp
@@ -340,6 +338,7 @@ if(WIN32)
         dtv::control
         dtv::identity
         dtv::host_runtime
+        dtv::host_ts
         px4_userland_windows_platform
         advapi32
         bcrypt
@@ -351,7 +350,6 @@ if(WIN32)
         # Client-only IPC: the proxy has no USB backend, daemon, or firmware code.
         add_library(px4_winscard_client STATIC
             userland/src/ipc.cpp
-            userland/src/control_client.cpp
         )
         target_include_directories(px4_winscard_client PUBLIC
             ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
@@ -360,6 +358,7 @@ if(WIN32)
         target_compile_features(px4_winscard_client PUBLIC cxx_std_17)
         target_link_libraries(px4_winscard_client PUBLIC
             advapi32 bcrypt ws2_32 Threads::Threads dtv::core dtv::control dtv::host_runtime)
+        target_link_libraries(px4_winscard_client PUBLIC dtv::host_ts)
         target_link_libraries(px4_winscard_client PRIVATE dtv::identity)
         px4_enable_project_warnings(px4_winscard_client)
         # One GPL proxy source in Core; this product supplies only its
@@ -383,10 +382,8 @@ if(WIN32)
     px4_enable_project_warnings(px4ctl)
     add_executable(px4-ts
         userland/tools/px4_ts_windows.cpp
-        userland/tools/px4_ts_windows_output.cpp
-        userland/tools/px4_ts_core.cpp
     )
-    target_link_libraries(px4-ts PRIVATE px4_userland_windows_ipc dtv::tuning shell32)
+    target_link_libraries(px4-ts PRIVATE px4_userland_windows_ipc dtv::host_ts shell32)
     target_include_directories(px4-ts PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
         ${CMAKE_CURRENT_SOURCE_DIR}/userland/tools
@@ -538,13 +535,11 @@ if(WIN32)
 
         add_executable(px4_windows_ts_output_tests
             userland/tests/windows_ts_output_tests.cpp
-            userland/tools/px4_ts_windows_output.cpp
-            userland/tools/px4_ts_core.cpp
         )
         target_link_libraries(px4_windows_ts_output_tests PRIVATE
             px4_userland_core
             px4_userland_windows_ipc
-            dtv::tuning
+            dtv::host_ts
         )
         target_include_directories(px4_windows_ts_output_tests PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
@@ -809,15 +804,13 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
             userland/tests/posix_ipc_tests.cpp
             userland/tests/posix_tuner_nonce_tests.cpp
             userland/tests/control_workers_tests.cpp
-            userland/tools/px4_ts_core.cpp
-            userland/tools/px4_ts_posix.cpp
             userland/tests/px4_ts_tests.cpp
             userland/tools/px4ctl_format.cpp
             userland/tests/px4ctl_format_tests.cpp
             userland/tools/px4d_list_format.cpp
             userland/tests/px4d_list_format_tests.cpp
         )
-        target_link_libraries(px4_userland_tests PRIVATE px4_userland_posix_ipc dtv::json)
+        target_link_libraries(px4_userland_tests PRIVATE px4_userland_posix_ipc dtv::host_ts dtv::json)
         target_compile_definitions(px4_userland_tests PRIVATE
             PX4_POSIX_IPC_TEST_ACCESS=1
             PX4_USERLAND_RUNTIME_PRODUCT="px4-userland"
@@ -825,10 +818,9 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
         )
 
         add_executable(px4-ts-product-cli-tests
-            userland/tests/px4_ts_product_cli_tests.cpp
-            userland/tools/px4_ts_core.cpp)
+            userland/tests/px4_ts_product_cli_tests.cpp)
         target_link_libraries(px4-ts-product-cli-tests PRIVATE
-            px4_userland_posix_ipc dtv::tuning)
+            px4_userland_posix_ipc dtv::host_ts dtv::tuning)
         target_include_directories(px4-ts-product-cli-tests PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/userland/tools)
         px4_enable_project_warnings(px4-ts-product-cli-tests)
@@ -1005,10 +997,9 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
             userland/src/control_server.cpp
             userland/src/control_workers.cpp
             userland/src/q3u4_stream.cpp
-            userland/tools/px4_ts_core.cpp
-            userland/tools/px4_ts_posix.cpp)
+        )
         target_link_libraries(px4_runtime_v1_server_tests
-            PRIVATE px4_userland_core px4_userland_posix_ipc dtv::json dtv::tuning)
+            PRIVATE px4_userland_core px4_userland_posix_ipc dtv::host_ts dtv::json)
         if(PX4_PCSC_IFD_AVAILABLE)
             target_link_libraries(px4_runtime_v1_server_tests PRIVATE
                 px4_userland_pcsc_ifd_core)
@@ -1048,10 +1039,9 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
             userland/src/control_server.cpp
             userland/src/control_workers.cpp
             userland/src/q3u4_stream.cpp
-            userland/tools/px4_ts_core.cpp
-            userland/tools/px4_ts_posix.cpp)
+        )
         target_link_libraries(px4_ts_product_process_proof
-            PRIVATE px4_userland_core px4_userland_posix_ipc dtv::json dtv::tuning)
+            PRIVATE px4_userland_core px4_userland_posix_ipc dtv::host_ts dtv::json)
         target_include_directories(px4_ts_product_process_proof PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
             ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
@@ -1073,11 +1063,9 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
             userland/tests/normal_wire_idle_timeout_tests.cpp
             userland/src/control_server.cpp
             userland/src/control_workers.cpp
-            userland/src/q3u4_stream.cpp
-            userland/tools/px4_ts_core.cpp
-            userland/tools/px4_ts_posix.cpp)
+            userland/src/q3u4_stream.cpp)
         target_link_libraries(px4_normal_wire_idle_timeout_tests
-            PRIVATE px4_userland_core px4_userland_posix_ipc dtv::json dtv::tuning)
+            PRIVATE px4_userland_core px4_userland_posix_ipc dtv::host_ts dtv::json)
         target_include_directories(px4_normal_wire_idle_timeout_tests PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
             ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
@@ -1176,10 +1164,8 @@ if(TARGET px4_userland_posix_ipc)
 
     add_executable(px4-ts
         userland/tools/px4_ts.cpp
-        userland/tools/px4_ts_core.cpp
-        userland/tools/px4_ts_posix.cpp
     )
-    target_link_libraries(px4-ts PRIVATE px4_userland_posix_ipc dtv::tuning)
+    target_link_libraries(px4-ts PRIVATE px4_userland_posix_ipc dtv::host_ts)
     target_include_directories(px4-ts PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
         ${CMAKE_CURRENT_SOURCE_DIR}/userland/tools
