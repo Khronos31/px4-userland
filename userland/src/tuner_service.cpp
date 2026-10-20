@@ -727,6 +727,17 @@ Result<engine::ReceiverEngineStatus> TunerService::engine_status() const noexcep
     return engine_.status();
 }
 
+bool TunerService::supports_internal_card_observation() const noexcept
+{
+    return backend_.legacy().supports_internal_card_observation();
+}
+
+dtv::userland::wire::Optional<bool>
+TunerService::sample_internal_card_inserted() noexcept
+{
+    return backend_.legacy().sample_internal_card_inserted();
+}
+
 Result<void> TunerService::set_independent_lnb_power(bool enabled) noexcept
 {
     return backend_.set_independent_lnb_power(enabled);

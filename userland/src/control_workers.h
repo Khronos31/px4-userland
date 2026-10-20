@@ -133,6 +133,7 @@ struct ControlWorkerTask final {
     // Exact v1 attachment ticket for prepare and the physical cleanup.
     dtv::userland::detail::StreamAttachTicket stream_ticket{};
     bool lnb_enabled = false;
+    dtv::userland::wire::Scope status_scope{};
 };
 
 struct ControlWorkerCompletion final {
@@ -149,6 +150,8 @@ struct ControlWorkerCompletion final {
     TunerAcquireResult tuner_acquire{};
     TunerStatus tuner_status{};
     bool tuner_status_valid = false;
+    dtv::userland::wire::Optional<bool> internal_card_inserted{};
+    dtv::userland::wire::Scope status_scope{};
     bool lnb_enabled = false;
     TuneResponsePayload tune_response{};
     // Admitted TUNE only: the committed tune metadata of task.receiver, read on

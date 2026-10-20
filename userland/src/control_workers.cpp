@@ -868,6 +868,7 @@ struct ControlWorkerLanes::Impl final {
         completion.receiver = task.receiver;
         completion.lease_id = task.lease_id;
         completion.card_handle = task.card_handle;
+        completion.status_scope = task.status_scope;
         Error operation_error = Error::OK;
         switch (task.operation) {
         case ControlWorkerOperation::tuner_acquire: {
@@ -1015,6 +1016,9 @@ struct ControlWorkerLanes::Impl final {
             else {
                 completion.tuner_status = result.value();
                 completion.tuner_status_valid = true;
+                if (tuner_service.supports_internal_card_observation())
+                    completion.internal_card_inserted =
+                        tuner_service.sample_internal_card_inserted();
             }
             break;
         }

@@ -98,6 +98,14 @@ public:
     {
         return false;
     }
+    virtual bool supports_internal_card_observation() const noexcept
+    {
+        return false;
+    }
+    virtual dtv::userland::wire::Optional<bool> sample_internal_card_inserted() noexcept
+    {
+        return {};
+    }
     virtual Result<void> open_receiver(std::uint8_t receiver) noexcept = 0;
     virtual Result<void> tune_terrestrial(std::uint8_t receiver,
                                           std::uint32_t frequency_khz,
@@ -393,6 +401,8 @@ public:
         std::uint64_t client_id, std::uint64_t lease_id,
         const std::array<std::uint8_t, ipc::kNonceLength>& nonce) noexcept;
     Result<TunerStatus> status() const noexcept;
+    bool supports_internal_card_observation() const noexcept;
+    dtv::userland::wire::Optional<bool> sample_internal_card_inserted() noexcept;
     Result<void> disconnect_client(std::uint64_t client_id) noexcept;
     Result<void> shutdown() noexcept;
 

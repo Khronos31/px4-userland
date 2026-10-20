@@ -1122,6 +1122,11 @@ struct PosixControlServer::Impl final {
                         card_operation_name(opcode), reader_scope(public_id));
             return Result<void>::success();
         }
+        if (task.operation == ControlWorkerOperation::tuner_status) {
+            reply_error(client, opcode, request_id, wire_code(submitted.error()),
+                        "status", task.status_scope);
+            return Result<void>::success();
+        }
         reply_error(client, opcode, request_id, wire_code(submitted.error()),
                     opcode == wire::kOpcodeTune ? "tune"
                     : opcode == wire::kOpcodeRelease ? "release"
@@ -1172,9 +1177,9 @@ struct PosixControlServer::Impl final {
                      &wire::encode_list_response, "list", enclosure_scope());
     }
 
-    // STATUS is served on the poll thread from cached state only: one engine
-    // registry snapshot (no backend call) and the immutable descriptors.  It
-    // never reaches CardService, power, UART or a worker lane.
+    // Normal STATUS is served on the poll thread from cached engine state and
+    // immutable descriptors. Internal-card products sample enclosure state
+    // in a worker before reaching this cached response path.
     void serve_status(Client& client, const wire::ControlRequest& request) noexcept
     {
         const wire::Scope scope = request.status.scope;
@@ -1212,6 +1217,9 @@ struct PosixControlServer::Impl final {
         }
         if (scope.kind == wire::ScopeKind::enclosure && response.enclosure.present) {
             response.lnb_15v_enabled = tuner_service.independent_lnb_power_state();
+            response.card_inserted = internal_card_inserted;
+        } else {
+            response.card_inserted = wire::Optional<bool>{};
         }
         if (response.readers.present) {
             for (std::size_t index = 0U; index < response.readers.value.count; ++index) {
@@ -1299,6 +1307,14 @@ struct PosixControlServer::Impl final {
             serve_list(client, request);
             return;
         case wire::ControlRequestKind::status:
+            if (request.status.scope.kind == wire::ScopeKind::enclosure &&
+                tuner_service.supports_internal_card_observation()) {
+                ControlWorkerTask task{};
+                task.operation = ControlWorkerOperation::tuner_status;
+                task.status_scope = request.status.scope;
+                (void)submit(client, request.opcode, request.request_id, 0U, task);
+                return;
+            }
             serve_status(client, request);
             return;
         case wire::ControlRequestKind::acquire: {
@@ -1867,6 +1883,20 @@ struct PosixControlServer::Impl final {
         const wire::Scope target = receiver_scope(outstanding.public_id);
         client.clear_outstanding();
         switch (completion.operation) {
+        case ControlWorkerOperation::tuner_status: {
+            if (completion.error != Error::OK) {
+                reply_error(client, outstanding.opcode, completion.request_id,
+                            wire_code(completion.error), "status", completion.status_scope);
+                return;
+            }
+            internal_card_inserted = completion.internal_card_inserted;
+            wire::ControlRequest request{};
+            request.opcode = outstanding.opcode;
+            request.request_id = completion.request_id;
+            request.status.scope = completion.status_scope;
+            serve_status(client, request);
+            return;
+        }
         case ControlWorkerOperation::tuner_lnb_power: {
             if (completion.error != Error::OK) {
                 reply_error(client, outstanding.opcode, completion.request_id,
@@ -2621,6 +2651,7 @@ struct PosixControlServer::Impl final {
     std::unique_ptr<wire::StatusResponse> status_scratch;
     std::uint64_t context_start_ms = 0U;
     std::uint64_t snapshot_sequence = 0U;
+    wire::Optional<bool> internal_card_inserted{};
     std::vector<std::unique_ptr<Client>> clients;
     std::atomic<std::size_t> client_count{0U};
     // Data clients are fixed-capacity so an accepted socket never depends on
