@@ -195,6 +195,14 @@ public:
     Result<void> tune_satellite_with_timeout(
         std::uint8_t local_receiver, std::uint32_t frequency_khz,
         std::uint32_t timeout_ms) noexcept;
+    // R3 native-Hz entrances to the same bank sequence; the kHz entrances
+    // above are these at frequency_khz * 1000.
+    Result<void> tune_terrestrial_hz_with_timeout(
+        std::uint8_t local_receiver, std::uint64_t frequency_hz,
+        std::uint32_t timeout_ms) noexcept;
+    Result<void> tune_satellite_hz_with_timeout(
+        std::uint8_t local_receiver, std::uint64_t frequency_hz,
+        std::uint32_t timeout_ms) noexcept;
     Result<void> select_satellite_slot(std::uint8_t local_receiver,
                                        std::uint8_t slot) noexcept;
     Result<void> select_satellite_slot_with_timeout(
@@ -230,7 +238,7 @@ private:
     Result<void> open_receiver(std::uint8_t local_receiver,
                                Tc90522System system) noexcept;
     Result<void> tune_receiver(std::uint8_t local_receiver,
-                               std::uint32_t frequency_khz,
+                               std::uint64_t frequency_hz,
                                Tc90522System system,
                                std::uint32_t timeout_ms) noexcept;
     Result<void> start_capture(std::uint8_t local_receiver,
@@ -317,6 +325,12 @@ public:
                                 std::uint32_t frequency_khz) noexcept;
     Result<void> tune_satellite_with_timeout(
         std::uint8_t global_receiver, std::uint32_t frequency_khz,
+        std::uint32_t timeout_ms) noexcept;
+    Result<void> tune_terrestrial_hz_with_timeout(
+        std::uint8_t global_receiver, std::uint64_t frequency_hz,
+        std::uint32_t timeout_ms) noexcept;
+    Result<void> tune_satellite_hz_with_timeout(
+        std::uint8_t global_receiver, std::uint64_t frequency_hz,
         std::uint32_t timeout_ms) noexcept;
     Result<void> select_satellite_slot(std::uint8_t global_receiver,
                                        std::uint8_t slot) noexcept;

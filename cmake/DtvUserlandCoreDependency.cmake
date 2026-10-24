@@ -82,10 +82,32 @@ function(px4_add_dtv_userland_core)
     # The foundation's own tests must never turn on as product tests.
     set(_saved_build_testing "${BUILD_TESTING}")
     set(BUILD_TESTING OFF)
+    # TunerService is a facade over the shared receiver lifecycle engine, and
+    # the Q3U4 data plane stores its packet session in the shared capture
+    # component.
+    set(DTV_USERLAND_BUILD_RECEIVER ON)
+    # CardService is a facade over the shared card ownership engine.
+    set(DTV_USERLAND_BUILD_CARD ON)
+    set(DTV_USERLAND_BUILD_CAPTURE ON)
     FetchContent_MakeAvailable(dtv_userland_core)
     set(BUILD_TESTING "${_saved_build_testing}")
 
     if(NOT TARGET dtv::core)
         message(FATAL_ERROR "dtv-userland-core did not define the dtv::core target")
+    endif()
+    if(NOT TARGET dtv::receiver)
+        message(FATAL_ERROR
+            "dtv-userland-core did not define the dtv::receiver target; "
+            "the pinned commit predates the receiver lifecycle engine")
+    endif()
+    if(NOT TARGET dtv::card)
+        message(FATAL_ERROR
+            "dtv-userland-core did not define the dtv::card target; "
+            "the pinned commit predates the card ownership engine")
+    endif()
+    if(NOT TARGET dtv::capture)
+        message(FATAL_ERROR
+            "dtv-userland-core did not define the dtv::capture target; "
+            "the pinned commit predates the packet-session storage")
     endif()
 endfunction()

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "q3u4_tuner_backend.h"
 
+#include "strict_frequency_profiles.h"
+
 namespace px4::userland {
 
 namespace {
@@ -39,6 +41,35 @@ Result<void> Q3U4FrontendTunerBackend::tune_satellite(
 {
     return enclosure_.tune_satellite_with_timeout(receiver, frequency_khz,
                                                   timeout_ms);
+}
+
+Result<TunerHzProgramming> Q3U4FrontendTunerBackend::tune_terrestrial_hz(
+    std::uint8_t receiver, std::uint64_t frequency_hz, std::uint32_t timeout_ms) noexcept
+{
+    const auto tuned =
+        enclosure_.tune_terrestrial_hz_with_timeout(receiver, frequency_hz, timeout_ms);
+    if (!tuned) return Result<TunerHzProgramming>::failure(tuned.error());
+    return Result<TunerHzProgramming>::success(TunerHzProgramming{});
+}
+
+Result<TunerHzProgramming> Q3U4FrontendTunerBackend::tune_satellite_hz(
+    std::uint8_t receiver, std::uint64_t frequency_hz, std::uint32_t timeout_ms) noexcept
+{
+    const auto tuned =
+        enclosure_.tune_satellite_hz_with_timeout(receiver, frequency_hz, timeout_ms);
+    if (!tuned) return Result<TunerHzProgramming>::failure(tuned.error());
+    return Result<TunerHzProgramming>::success(TunerHzProgramming{});
+}
+
+TunerStrictProfile Q3U4FrontendTunerBackend::strict_profile(
+    std::uint8_t receiver, ipc::System system) const noexcept
+{
+    if (!valid_receiver(receiver)) return TunerStrictProfile{};
+    if (is_satellite(receiver))
+        return system == ipc::System::ISDB_S ? rt710_satellite_strict_profile()
+                                             : TunerStrictProfile{};
+    return system == ipc::System::ISDB_T ? r850_terrestrial_strict_profile()
+                                         : TunerStrictProfile{};
 }
 
 Result<bool> Q3U4FrontendTunerBackend::is_locked(

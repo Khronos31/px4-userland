@@ -1,9 +1,18 @@
 # px4-userland 仕様
 
-Status: Frozen v0.37 (2026-10-11)
+Status: Frozen v0.39 (2026-10-20)
 
 本書の`MUST`、`MUST NOT`、`SHOULD`は規範要件を示す。実機観測で前提の誤りが判明した場合も暗黙に
 実装だけを変えず、本書のversionと変更理由を更新してから実装する。
+
+### v0.39 change record (2026-10-20)
+
+- 公開ctlの受信機一覧の単数キー system= を維持し、複数方式を ISDB-T,ISDB-S のように正式名称のカンマ区切りで表示する。旧略号 ISDB-T/S は新規テキスト出力では使わない。将来ISDB-Cに対応した場合のみ、該当受信機のカンマ区切りの値に ISDB-C を追加できる（現Core v1は未対応）。
+- receiver/device/local、USB presence、serialなどは保持。公開discovery JSONの systems[] 配列には変更を加えない。下記の旧版JSON説明にある system 文字列はhistorical v0.26の記録であり、現行discovery JSONへの復帰を意味しない。denpa上流パーサの追従は他CLI変更とまとめて後で伝える。
+
+### v0.38 change record (2026-10-19)
+
+- 4.1節と`px4d` native起動の`-d|--device`をcanonical selectorへ変更する。serial/topologyの意味を明示prefixで選び、既存のidentity parserと筐体groupingで一意性を検査する。裸serialと`--usb-path`を通常daemon公開文法から削除し、曖昧・未解決selectorを入力syntax errorと分ける。
 
 ### v0.37 change record (2026-10-11)
 
@@ -449,30 +458,22 @@ v0.18の対応USB IDと筐体識別子は次のとおりとする。未掲載の
   `invalid_serial`とする。MLT5系ではserial末尾を`dev_id`として解釈しない。
 - MLT5系のtopologyとspeedはQ3U4と同じ条件（interface 0 alt 0、bulk endpoint `0x81`/`0x02`/`0x84`/`0x85`、
   各512 byte、high speed以上）を要求する。
-- `--device`、PC/SCの`device=`、runtime instance名は、14桁（2 bridge機種）または15桁（単一USB機種）のASCII数字だけを受理する。
-  桁数で機種群を判別できるため、Q3U4 base serialとMLT5系serialは衝突しない。
+- `px4d -d|--device`は`serial:`または`usb:` prefixを必須とする。`serial:`の値はPX4 profileで筐体serialへ正規化し、14桁（2 bridge機種）または15桁（単一USB機種）のASCII数字だけを選択候補とする。PC/SCの`device=`とruntime instance名の規則はこのdaemon option変更では変えない。
 - 単一USB機種は`dev_id 1`として扱い、物理カードスロットを1つ公開する。カードreader有無がupstreamで確認できない機種は
   card reader hardware-unverifiedとする。
 
 v0.26では、上記のserialは**観測された値**であり、全機種を通じて一意な筐体IDではない。
-上記の「runtime instance名は数字だけ」の規則を次のように改訂する。
+v0.38で`px4d` native起動のdevice選択を次のように改訂する。
 
 - groupingは機種とserialを併用する。単一USB機種は同機種・同serialの複数観測もそれぞれ1筐体として保持し、
   USB位置で区別する。2 bridge機種は同機種・同base serialのdev 1とdev 2が各1件のときだけreadyにする。
   片側欠落はincomplete、いずれかが複数ならduplicateとして全候補を診断に残す。位置の近さから相方を推測しない。
-- `px4d --device SERIAL`は従来どおり14桁または15桁の数字を受け付ける。native列挙で同じserialに
-  readyな筐体が複数あるか、該当するduplicate群がある場合は、任意の1台を選ばずclaim前にusage error
-  （exit 2）とし、候補の機種・bus・address・portと`--usb-path`指定をstderrへ示す。
-  対象が1筐体のときだけserial単独で開く。
-- native起動では`--device SERIAL`に加え`--usb-path PATH`を1回または2回指定できる。
-  `PATH`は現在のUSB接続を表す`BUS:ADDRESS`（各1..255）または`BUS-PORT[.PORT...]`
-  （BUSと各PORTは1..255、PORTは1..8要素）であり、後者は`--list`の`port`と同じ表記とする。
-  単一USB機種は1パス、2 bridge機種はdev 1/dev 2の2パスを要求する。serial・機種・bridgeの整合、
-  パスの一意性、観測した場所の存在をclaim前に検査する。一致しない、または場所が取得できない場合は失敗し、
-  未知の場所を推測で補わない。`--fd`と`--usb-path`は併用しない。FD経路は渡されたFD自体を選択子とする。
+- `px4d --device serial:SERIAL`はPX4 profileで正規化したserialに対応する筐体だけを選ぶ。serialなしは対象なし（exit 3）、同じserialにreadyな筐体が複数ある場合またはduplicate群の場合は曖昧（exit 3）としてclaim前に拒否し、候補の機種・bus・address・portと`--device usb:...`による指定方法をstderrへ示す。候補の先頭を選ぶfallbackはしない。裸serialはsyntax error（exit 2）とする。
+- native起動では`--device usb:PATH[,PATH]`で現在のUSB接続topologyを指定できる。`PATH`は`BUS-PORT[.PORT...]`（各値は正のASCII十進数、先頭zeroなし、uint32範囲）だけを使い、`BUS:ADDRESS`は受け付けない。単一USB機種は1 path、2 bridge機種は1または2 pathを受理する。1 pathで2 bridge機種を選ぶ場合は既存grouping内で対応する相方が一意に証明できる場合に限る。2 pathは同じ筐体の別functionとして一意に一致しなければならない。serial selectorとtopology selectorは同じ`--device`値の別形式であり、同時指定しない。`--usb-path`はunknown argument（exit 2）とする。
+- `--fd`は渡されたFD集合そのものを選択子とする。既存の`--fd`と`--device serial:SERIAL`併用はserial assertionとして維持し、`--fd`と`--device usb:...`は拒否する。USB位置selectorはnative enumerationだけに使う。観測した場所がない、path集合が異なる筐体へ分かれる、または筐体対応を一意に証明できない場合は対象/状態不整合（exit 3）として失敗し、場所を推測で補わない。
 - 選択したgroupと実際にopen/claimするUSB候補は同じ列挙オブジェクト、FD経路では同じFD indexで対応付ける。
   serialだけで候補を再照合してはならない。2 bridgeの明示パスも、指定順ではなく観測されたdev 1/2に配置する。
-- runtime endpointの`instance`はobserved serialとは別の単一パス要素とする。`--usb-path`指定時は
+- runtime endpointの`instance`はobserved serialとは別の単一パス要素とする。`--device usb:...`指定時は
   `px4d --instance TOKEN`を必須とし、TOKENは1..80文字のASCII英数字・`_`・`-`・`.`だけを受理する
   （`.`と`..`単体、および他機種のserialとの混同を避けるため14桁または15桁の数字列は不可）。
   FD起動でも`--instance`を任意に指定できる。
@@ -625,7 +626,7 @@ slotとTSIDはIPC上で別fieldとし、値の大きさから暗黙判定しな�
     `status`はgroupingの結果（`ready`、`incomplete`、`duplicate`、`invalid_observation`）とする。
     `ready`以外の筐体では`px4d --device`は起動できない。
   - 続く`receivers`個のreceiver行: `px4ctl list`（6.4節`LIST`）と同じ書式
-    `receiver=<ID> device=<dev_id> local=<local_id> system=<ISDB-T|ISDB-S|ISDB-T/S>`で、4.2節の表をそのまま出す。
+    `receiver=<ID> device=<dev_id> local=<local_id> system=<ISDB-T|ISDB-S|ISDB-T,ISDB-S>`で、4.2節の表をそのまま出す。
 - 対象機種のUSB IDを持ちながら筐体にまとめられなかったUSBデバイスは、筐体行の後に
   `rejected serial=<serial> model=<機種名> usb=<vid>:<pid> status=<理由>`として1台1行で出す。理由は
   serialを読めない、または4.1節の形式に合わない`invalid_serial`、もしくはopenまたはdescriptor取得に

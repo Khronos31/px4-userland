@@ -109,7 +109,7 @@ int main(int argc, char** argv)
         views.push_back(value.c_str());
     }
     const Px4TsArguments arguments =
-        parse_px4_ts_arguments(static_cast<int>(views.size()), views.data());
+        parse_px4_ts_product_arguments(static_cast<int>(views.size()), views.data());
     if (!arguments.valid) {
         std::fprintf(stderr, "argument error: %s\n", arguments.error.c_str());
         print_px4_ts_usage(stderr);
@@ -117,6 +117,10 @@ int main(int argc, char** argv)
     }
     if (arguments.help) {
         print_px4_ts_usage(stdout);
+        return 0;
+    }
+    if (arguments.version) {
+        std::printf("px4-ts %s\n", PX4_USERLAND_PRODUCT_VERSION);
         return 0;
     }
     if (!install_handlers()) {
@@ -154,8 +158,8 @@ int main(int argc, char** argv)
     WindowsSignal signal;
     Px4TsFailureKind failure_kind = Px4TsFailureKind::ipc;
     Px4TsRunDiagnostics diagnostics;
-    const auto result = Px4TsRunner::run(arguments, *output, clock, signal,
-                                         &failure_kind, &diagnostics);
+    const auto result = Px4TsRunner::run_wire(arguments, *output, clock, signal,
+                                              &failure_kind, &diagnostics);
     const auto finished = output->finish();
     const std::uint64_t completed = output->completed_packets();
     // Release a blocked console/termination handler only when the worker has

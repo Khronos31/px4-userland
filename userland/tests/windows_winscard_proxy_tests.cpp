@@ -402,12 +402,16 @@ Result<std::unique_ptr<CardClient>> CardClient::connect(const std::string&,const
 {
     CHECK(instance == "mock" && (mode == ipc::ShareMode::shared || mode == ipc::ShareMode::exclusive));
     local_initialized = true;
-    return Result<std::unique_ptr<CardClient>>::success(std::unique_ptr<CardClient>(new CardClient(nullptr,0xfedcba9876543210ULL)));
+    dtv::userland::wire::CardClientSession session{};
+    session.card_handle = 0xfedcba9876543210ULL;
+    session.bound_generation = 1U;
+    return Result<std::unique_ptr<CardClient>>::success(
+        std::unique_ptr<CardClient>(new CardClient(nullptr, session, {})));
 }
 CardClient::~CardClient() noexcept { ++local_closes; }
 Result<std::vector<std::uint8_t>> CardClient::transmit(ByteView) noexcept
 {
-    CHECK(handle_ == 0xfedcba9876543210ULL); ++local_transmits;
+    CHECK(session_.card_handle == 0xfedcba9876543210ULL); ++local_transmits;
     return Result<std::vector<std::uint8_t>>::success({0x90U,0U});
 }
 Result<void> CardClient::disconnect(ipc::Disposition disposition) noexcept

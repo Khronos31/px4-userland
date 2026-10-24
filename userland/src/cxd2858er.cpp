@@ -188,6 +188,19 @@ Result<void> Cxd2858er::set_params_t(std::uint32_t frequency_khz) noexcept
     return gated([this, frequency_khz]() noexcept { return set_params_t_gated(frequency_khz); });
 }
 
+Result<std::uint64_t> Cxd2858er::set_params_t_hz(std::uint64_t frequency_hz) noexcept
+{
+    const std::uint64_t field = frequency_hz / 1000U;
+    if (field == 0U || field > kMaxFrequencyField) {
+        return Result<std::uint64_t>::failure(Error::INVALID_ARGUMENT);
+    }
+    const auto field32 = static_cast<std::uint32_t>(field);
+    const auto result =
+        gated([this, field32]() noexcept { return set_params_t_gated(field32); });
+    if (!result) return Result<std::uint64_t>::failure(result.error());
+    return Result<std::uint64_t>::success(field * 1000U);
+}
+
 Result<void> Cxd2858er::set_params_t_gated(std::uint32_t frequency_khz) noexcept
 {
     if (system_ == Cxd2858erSystem::isdb_s) {
@@ -230,10 +243,29 @@ Result<void> Cxd2858er::set_params_s(std::uint32_t frequency_khz) noexcept
     if (frequency_khz == 0U || (frequency_khz + 2U) / 4U > kMaxFrequencyField) {
         return Result<void>::failure(Error::INVALID_ARGUMENT);
     }
-    return gated([this, frequency_khz]() noexcept { return set_params_s_gated(frequency_khz); });
+    const std::uint32_t field = (frequency_khz + 2U) / 4U;
+    return gated([this, field]() noexcept { return set_params_s_gated(field); });
 }
 
-Result<void> Cxd2858er::set_params_s_gated(std::uint32_t frequency_khz) noexcept
+Result<std::uint64_t> Cxd2858er::set_params_s_hz(std::uint64_t frequency_hz) noexcept
+{
+    // Checked before the half-up addition; any value this large is far
+    // outside the 20-bit field anyway.
+    if (frequency_hz > static_cast<std::uint64_t>(kMaxFrequencyField) * 4000U) {
+        return Result<std::uint64_t>::failure(Error::INVALID_ARGUMENT);
+    }
+    const std::uint64_t field = (frequency_hz + 2000U) / 4000U;
+    if (field == 0U || field > kMaxFrequencyField) {
+        return Result<std::uint64_t>::failure(Error::INVALID_ARGUMENT);
+    }
+    const auto field32 = static_cast<std::uint32_t>(field);
+    const auto result =
+        gated([this, field32]() noexcept { return set_params_s_gated(field32); });
+    if (!result) return Result<std::uint64_t>::failure(result.error());
+    return Result<std::uint64_t>::success(field * 4000U);
+}
+
+Result<void> Cxd2858er::set_params_s_gated(std::uint32_t field) noexcept
 {
     if (system_ == Cxd2858erSystem::isdb_t) {
         if (const auto result = stop_t(); !result) return result;
@@ -249,7 +281,6 @@ Result<void> Cxd2858er::set_params_s_gated(std::uint32_t frequency_khz) noexcept
         {0x01U, 0x01U, 0xffU},
     };
     if (const auto result = apply(mode); !result) return result;
-    const std::uint32_t field = (frequency_khz + 2U) / 4U;
     const std::array<std::uint8_t, 18U> tune{
         0xc4U, 0x40U, kXtalTune, 0x00U, 0xb4U, 0x78U, 0x08U, 0x30U, kSatelliteLna,
         0x02U, 0x1eU, 0x16U,

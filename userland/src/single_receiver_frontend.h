@@ -26,6 +26,15 @@ public:
                                   std::uint32_t timeout_ms) noexcept override;
     Result<void> tune_satellite(std::uint8_t receiver, std::uint32_t frequency_khz,
                                 std::uint32_t timeout_ms) noexcept override;
+    // Native-Hz entrances sharing the kHz sequences above.
+    Result<TunerHzProgramming> tune_terrestrial_hz(std::uint8_t receiver,
+                                                   std::uint64_t frequency_hz,
+                                                   std::uint32_t timeout_ms) noexcept override;
+    Result<TunerHzProgramming> tune_satellite_hz(std::uint8_t receiver,
+                                                 std::uint64_t frequency_hz,
+                                                 std::uint32_t timeout_ms) noexcept override;
+    TunerStrictProfile strict_profile(std::uint8_t receiver,
+                                      ipc::System system) const noexcept override;
     Result<bool> is_locked(std::uint8_t receiver, ipc::System system) noexcept override;
     // px4_drv enables PTX_CHRDEV_WAIT_AFTER_LOCK_TC_T for every one-receiver model.
     bool requires_terrestrial_lock_settle() const noexcept override { return true; }
@@ -46,6 +55,11 @@ public:
     Result<void> initialize_uart() noexcept override;
     Result<bool> detect_card() noexcept override;
 private:
+    // One tune sequence per system for both entrances, in Hz.
+    Result<void> tune_terrestrial_frequency(std::uint8_t receiver,
+                                            std::uint64_t frequency_hz) noexcept;
+    Result<void> tune_satellite_frequency(std::uint8_t receiver,
+                                          std::uint64_t frequency_hz) noexcept;
     Result<void> select_satellite_tsid_locked(std::uint16_t tsid,
                                                std::uint32_t timeout_ms) noexcept;
     Result<void> acquire_power() noexcept;

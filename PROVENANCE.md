@@ -42,6 +42,31 @@ default-constructible `MockTransport` facade that supplies the PX4 policy explic
 befriends `dtv::userland::Result` because `Result` is now the shared type. The product remains GPL-2.0-only; the
 foundation library carries the MIT license recorded in its own `LICENSE`/`PROVENANCE.json`, which the
 corresponding-source archive bundles under `repository/third_party/dtv-userland-core`.
+The receiver lifecycle was first included in the product's dtv-userland-core pin at commit
+`643b5af25aed20210ba45a30eed41ec3bbc3739c`, which contains the foundation and internal receiver engine,
+including strict queued tune admission, cancellation and deadline accounting.
+
+The receiver lifecycle increment moves the lease, tune, and stream-attachment lifecycle of `TunerService` into the
+library's internal `dtv::receiver` engine (`dtv/userland/detail/receiver_engine.h`). `userland/include/px4/tuner_service.h`
+keeps the same public API and seams; `userland/src/tuner_service.cpp` is now a GPL-2.0-only facade that adapts the PX4
+backend, nonce, ID, time, and stream-control seams and keeps the PX-Q3U4 receiver defaults, the px4_drv-referenced
+340 ms terrestrial settle policy, and the wire request validation in this product. The library's `PROVENANCE.json`
+records the moved expressions and the original source hashes. The current product pin is
+`812b557e884c9d2250448cf7d5bd293cba686b89`; its tree includes the earlier receiver lifecycle commit above and the
+shared control client. The engine's receiver set is taken from the backend's
+`receiver_count()` when the service is constructed. The supported PX4 contexts have fixed descriptors: Q3U4 uses
+its fixed default count, `SingleReceiverFrontend` reports one, and `MltTunerBackend` sets `receiver_count_` in its
+constructor. ASICEN selects its profile and completes its initial open/close sequence before constructing the
+service. A custom backend whose count changes while the service runs is not supported: newly appearing receivers
+are absent from the engine's fixed slot set, and this increment does not implement topology changes.
+
+The C1 card ownership increment was reviewed against common card-engine commit
+`4301a498547cb1cebc0fc26897fdda9125d64cc6`; the active product lock now selects the pushed combined dependency
+commit `812b557e884c9d2250448cf7d5bd293cba686b89`. The optional `dtv::card` engine in
+`dtv/userland/detail/card_ownership_engine.h` and `.tpp` owns only generic card ownership, session transaction,
+presence/generation and cleanup state. The GPL `CardService` facade retains PX4 IPC mappings, `CardAtr`, the
+Native card-session adapter, Q3U4 policy and hardware behavior. The corresponding-source packager includes the
+card engine templates, and the source archive audit rejects a bundled card engine missing its `.tpp` file.
 
 ## Date and audit scope
 

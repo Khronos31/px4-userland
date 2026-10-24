@@ -2,6 +2,14 @@
 #include "px4_ts_core.h"
 
 #include "px4/control_client.h"
+#include "px4/identity.h"
+
+#include "dtv/userland/control_client.h"
+#include "dtv/userland/control_connection.h"
+#include "dtv/userland/identity.h"
+#include "dtv/userland/records.h"
+#include "dtv/userland/tuning.h"
+#include "dtv/userland/wire.h"
 
 #include <algorithm>
 #include <array>
@@ -50,13 +58,25 @@ bool parse_unsigned(std::string_view value, T& output) noexcept
     return true;
 }
 
+// CLI input names are ASCII identifiers: fold A-Z only (not locale-dependent).
+bool ascii_system_equals(std::string_view value, std::string_view expected) noexcept
+{
+    if (value.size() != expected.size()) return false;
+    for (std::size_t i = 0U; i < value.size(); ++i) {
+        char ch = value[i];
+        if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch - 'A' + 'a');
+        if (ch != expected[i]) return false;
+    }
+    return true;
+}
+
 bool parse_system(std::string_view value, System& system) noexcept
 {
-    if (value == "isdb-t") {
+    if (ascii_system_equals(value, "isdb-t")) {
         system = System::ISDB_T;
         return true;
     }
-    if (value == "isdb-s") {
+    if (ascii_system_equals(value, "isdb-s")) {
         system = System::ISDB_S;
         return true;
     }
@@ -125,11 +145,42 @@ bool valid_frequency(System system, std::uint64_t frequency) noexcept
 
 bool valid_arguments(const Px4TsArguments& arguments) noexcept
 {
+    if (arguments.product_cli) {
+        constexpr std::uint64_t kMaxRequestedHz = (std::uint64_t{1U} << 53U) - 1U;
+        if ((!arguments.device.empty() &&
+             !dtv::userland::identity::parse_device_selector(arguments.device)) ||
+            (!arguments.instance.empty() && !valid_instance(arguments.instance)) ||
+            (arguments.device.empty() && arguments.instance.empty()) ||
+            arguments.frequency_hz == 0U || arguments.frequency_hz > kMaxRequestedHz ||
+            arguments.frequency_khz != 0U || arguments.tune_timeout_ms < 100U ||
+            arguments.tune_timeout_ms > 30000U ||
+            (arguments.duration_set && arguments.duration_seconds == 0U) ||
+            (arguments.duration_set &&
+             arguments.duration_seconds > std::numeric_limits<std::uint64_t>::max() / 1000U) ||
+            (arguments.packet_count_set && arguments.packet_count == 0U) ||
+            (arguments.duration_set && arguments.packet_count_set)) {
+            return false;
+        }
+        if (arguments.system == System::ISDB_T) {
+            return arguments.stream_id == 0xffffU && arguments.slot == 0xffffU &&
+                   arguments.lnb_voltage == 0U;
+        }
+        return arguments.system == System::ISDB_S && arguments.bandwidth_hz == 0U &&
+               arguments.lnb_voltage <= 15U &&
+               (arguments.stream_id != 0xffffU) != (arguments.slot != 0xffffU) &&
+               (arguments.slot == 0xffffU || arguments.slot <= 11U);
+    }
+    const bool have_khz = arguments.frequency_khz != 0U;
+    const bool have_hz = arguments.frequency_hz != 0U;
+    constexpr std::uint64_t kMaxRequestedHz = (std::uint64_t{1U} << 53U) - 1U;
+    const bool valid_frequency_entrance =
+        have_khz != have_hz &&
+        (have_khz ? valid_frequency(arguments.system, arguments.frequency_khz)
+                  : arguments.frequency_hz <= kMaxRequestedHz);
     if ((arguments.instance.empty() ? !valid_serial(arguments.device) :
                                       (!arguments.device.empty() ||
                                        !valid_instance(arguments.instance))) ||
-        arguments.frequency_khz == 0U ||
-        !valid_frequency(arguments.system, arguments.frequency_khz) ||
+        !valid_frequency_entrance ||
         arguments.tune_timeout_ms < 100U || arguments.tune_timeout_ms > 30000U ||
         (arguments.duration_set && arguments.duration_seconds == 0U) ||
         (arguments.duration_set &&
@@ -369,22 +420,198 @@ Px4TsArguments parse_px4_ts_arguments(int argc,
     return result;
 }
 
+Px4TsArguments parse_px4_ts_product_arguments(int argc,
+                                              const char* const* argv) noexcept
+{
+    using WireSystem = dtv::userland::wire::System;
+    if (argc < 1 || argv == nullptr || argv[0] == nullptr)
+        return invalid("invalid argument vector");
+    Px4TsArguments result;
+    result.product_cli = true;
+    result.bandwidth_hz = 6000000U;
+    bool have_device = false;
+    bool have_instance = false;
+    bool have_receiver = false;
+    bool have_channel = false;
+    bool have_frequency = false;
+    bool have_system = false;
+    bool have_slot = false;
+    bool have_tsid = false;
+    bool have_output = false;
+    bool have_lnb = false;
+    bool have_timeout = false;
+    bool have_time = false;
+    std::string_view channel;
+    std::optional<std::uint64_t> frequency_hz;
+    std::optional<WireSystem> system;
+    std::optional<std::uint16_t> slot;
+    std::optional<std::uint16_t> tsid;
+
+    for (int index = 1; index < argc; ++index) {
+        if (argv[index] == nullptr) return invalid("null argument");
+        const std::string_view option(argv[index]);
+        if (option == "-h" || option == "--help") {
+            if (argc != 2) return invalid("--help cannot be combined");
+            result.valid = true;
+            result.help = true;
+            return result;
+        }
+        if (option == "--version") {
+            if (argc != 2) return invalid("--version cannot be combined");
+            result.valid = true;
+            result.version = true;
+            return result;
+        }
+        if (option == "--group") {
+            if (result.group) return invalid("duplicate --group");
+            result.group = true;
+            continue;
+        }
+        const bool takes_value = option == "-d" || option == "--device" ||
+                                 option == "--instance" || option == "--runtime-dir" ||
+                                 option == "--receiver" || option == "-c" ||
+                                 option == "--channel" || option == "-f" ||
+                                 option == "--freq" || option == "-s" ||
+                                 option == "--system" || option == "--slot" ||
+                                 option == "--tsid" || option == "-t" ||
+                                 option == "--time" || option == "-o" ||
+                                 option == "--output" || option == "--packet-count" ||
+                                 option == "--lnb-voltage" ||
+                                 option == "--tune-timeout-ms";
+        if (!takes_value) return invalid("unknown argument");
+        if (index + 1 >= argc || argv[index + 1] == nullptr)
+            return invalid("option requires a value");
+        const std::string_view value(argv[++index]);
+        if (value.empty() || (value.rfind("--", 0U) == 0U && value != "--"))
+            return invalid("option requires a value");
+
+        if (option == "-d" || option == "--device") {
+            if (have_device) return invalid("duplicate --device");
+            have_device = true;
+            result.device.assign(value.data(), value.size());
+        } else if (option == "--instance") {
+            if (have_instance) return invalid("duplicate --instance");
+            have_instance = true;
+            result.instance.assign(value.data(), value.size());
+        } else if (option == "--runtime-dir") {
+            if (!result.runtime_directory.empty()) return invalid("duplicate --runtime-dir");
+            result.runtime_directory.assign(value.data(), value.size());
+        } else if (option == "--receiver") {
+            if (have_receiver || !parse_unsigned(value, result.receiver) ||
+                result.receiver >= kReceiverCount)
+                return invalid("receiver must be 0..7");
+            have_receiver = true;
+        } else if (option == "-c" || option == "--channel") {
+            if (have_channel) return invalid("duplicate --channel");
+            have_channel = true;
+            channel = value;
+        } else if (option == "-f" || option == "--freq") {
+            std::uint64_t parsed = 0U;
+            if (have_frequency || !parse_unsigned(value, parsed))
+                return invalid("freq must be an unsigned decimal Hz value");
+            have_frequency = true;
+            frequency_hz = parsed;
+        } else if (option == "-s" || option == "--system") {
+            if (have_system) return invalid("duplicate --system");
+            have_system = true;
+            if (ascii_system_equals(value, "isdb-t")) system = WireSystem::isdb_t;
+            else if (ascii_system_equals(value, "isdb-s")) system = WireSystem::isdb_s;
+            else return invalid("system must be isdb-t or isdb-s");
+        } else if (option == "--slot") {
+            std::uint16_t parsed = 0U;
+            if (have_slot || !parse_unsigned(value, parsed))
+                return invalid("slot is invalid");
+            have_slot = true;
+            slot = parsed;
+        } else if (option == "--tsid") {
+            std::uint16_t parsed = 0U;
+            if (have_tsid || !parse_unsigned(value, parsed))
+                return invalid("tsid is invalid");
+            have_tsid = true;
+            tsid = parsed;
+        } else if (option == "-t" || option == "--time") {
+            if (have_time) return invalid("duplicate --time");
+            have_time = true;
+            if (value != "-") {
+                if (!parse_unsigned(value, result.duration_seconds))
+                    return invalid("time must be seconds or -");
+                result.duration_set = true;
+            }
+        } else if (option == "-o" || option == "--output") {
+            if (have_output) return invalid("duplicate --output");
+            have_output = true;
+            result.output.assign(value.data(), value.size());
+        } else if (option == "--packet-count") {
+            if (result.packet_count_set || !parse_unsigned(value, result.packet_count))
+                return invalid("packet-count is invalid");
+            result.packet_count_set = true;
+        } else if (option == "--lnb-voltage") {
+            if (have_lnb || !parse_unsigned(value, result.lnb_voltage) ||
+                (result.lnb_voltage != 0U && result.lnb_voltage != 15U))
+                return invalid("lnb-voltage must be 0 or 15");
+            have_lnb = true;
+        } else {
+            if (have_timeout || !parse_unsigned(value, result.tune_timeout_ms))
+                return invalid("tune-timeout-ms is invalid");
+            have_timeout = true;
+        }
+    }
+    if (!have_device && !have_instance)
+        return invalid("--device or --instance is required");
+    if (have_device && !dtv::userland::identity::parse_device_selector(result.device))
+        return invalid("device must be a canonical serial: or usb: selector");
+    if (!have_receiver) return invalid("--receiver is required");
+    if (have_channel == have_frequency)
+        return invalid("exactly one of --channel or --freq is required");
+    if (have_frequency && !have_system)
+        return invalid("--freq requires --system");
+    if (result.output.empty()) result.output = "-";
+    if (result.duration_set && result.duration_seconds == 0U)
+        return invalid("time must be greater than zero");
+    if (result.duration_set && result.packet_count_set)
+        return invalid("--time and --packet-count are exclusive");
+
+    const dtv::tuning::Request request{have_channel
+                                           ? std::optional<std::string_view>(channel)
+                                           : std::nullopt,
+                                       frequency_hz, system, slot, tsid};
+    const auto resolved = dtv::tuning::resolve(request);
+    if (!resolved)
+        return invalid("channel, frequency, system, slot, or tsid is invalid");
+    result.system = resolved.value().system == WireSystem::isdb_t
+                        ? System::ISDB_T : System::ISDB_S;
+    result.frequency_hz = resolved.value().frequency_hz;
+    if (resolved.value().selection == dtv::userland::wire::Selection::slot) {
+        result.slot = resolved.value().selection_value;
+    } else if (resolved.value().selection == dtv::userland::wire::Selection::tsid) {
+        result.stream_id = resolved.value().selection_value;
+    }
+    if (result.system == System::ISDB_S) result.bandwidth_hz = 0U;
+    if (result.system == System::ISDB_T && have_lnb)
+        return invalid("lnb-voltage is satellite-only");
+    if (!valid_arguments(result)) return invalid("argument value is out of range");
+    result.valid = true;
+    return result;
+}
+
 void print_px4_ts_usage(void* output) noexcept
 {
     FILE* file = static_cast<FILE*>(output);
     if (file == nullptr) return;
     std::fprintf(file,
-                 "usage: px4-ts (--device BASE_SERIAL | --instance TOKEN) --receiver 0..7 "
-                 "--system isdb-t|isdb-s --frequency-khz N [options]\n"
-                 "       px4-ts (--device BASE_SERIAL | --instance TOKEN) --receiver 0..7 "
-                 "--channel CH [options]\n"
-                 "  --channel CH                   (T13..T62 | 13..62 | BS<nn>[_<slot>] | CS<n>)\n"
-                 "  --stream-id N | --slot 0..11   (isdb-s, exactly one)\n"
-                 "  --bandwidth-hz N               (isdb-t default 6000000)\n"
-                 "  --lnb-voltage 0|15             (isdb-s; 15 is daemon-dependent)\n"
-                 "  --tune-timeout-ms 100..30000  (default 10000)\n"
-                 "  --output PATH|- --duration-seconds N | --packet-count N\n"
-                 "  --runtime-dir PATH --group --help\n");
+                 "usage: px4-ts (-d|--device SELECTOR [--instance TOKEN] | --instance TOKEN) --receiver 0..7 "
+                 "(-c|--channel CH | -f|--freq HZ -s|--system isdb-t|isdb-s) [options]\n"
+                 "  -c, --channel CH              (T13..T62 | 13..62 | BS<nn>[_<slot>] | CS<n>)\n"
+                 "  -f, --freq HZ                 (unsigned decimal Hz)\n"
+                 "  -s, --system isdb-t|isdb-s    (required with --freq)\n"
+                 "      --slot N | --tsid N       (satellite selection, exactly one)\n"
+                 "  -t, --time SECONDS|-          (default unlimited)\n"
+                 "  -o, --output PATH|-           (default stdout)\n"
+                 "  -d, --device serial:...|usb:... [--instance TOKEN]\n"
+                 "      --receiver 0..7 --runtime-dir PATH --group\n"
+                 "      --packet-count N --lnb-voltage 0|15 --tune-timeout-ms N\n"
+                 "  -h, --help\n"
+                 "      --version\n");
 }
 
 int px4_ts_exit_status(Error error, Px4TsFailureKind kind) noexcept
@@ -408,6 +635,7 @@ int px4_ts_exit_status(Error error, Px4TsFailureKind kind) noexcept
     case Error::CARD_REMOVED:
     case Error::BUFFER_TOO_SMALL: return 9;
     case Error::FIRMWARE_REJECTED: return 10;
+    case Error::RESOURCE_LIMIT: return 4;
     case Error::INTERNAL: return 70;
     }
     return 70;
@@ -622,6 +850,688 @@ private:
 
 }  // namespace
 
+namespace {
+
+namespace wire = dtv::userland::wire;
+
+class SocketClientTransport final : public wire::ClientTransport {
+public:
+    explicit SocketClientTransport(SocketStream& stream) noexcept : stream_(stream) {}
+    Result<void> write_all(ByteView bytes, Timeout timeout) noexcept override
+    {
+        return stream_.write_all(bytes, timeout);
+    }
+    Result<std::size_t> read_some(MutableByteView bytes, Timeout timeout) noexcept override
+    {
+        return stream_.read_some(bytes, timeout);
+    }
+    std::uint64_t monotonic_ms() noexcept override
+    {
+        return static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count());
+    }
+    void close() noexcept override { stream_.close(); }
+
+private:
+    SocketStream& stream_;
+};
+
+Error wire_error(std::uint32_t code) noexcept
+{
+    switch (code) {
+    case 1U: return Error::INVALID_ARGUMENT;
+    case 2U: return Error::VERSION_MISMATCH;
+    case 3U: return Error::NOT_FOUND;
+    case 4U: return Error::BUSY;
+    case 5U: return Error::NOT_READY;
+    case 6U: return Error::TIMEOUT;
+    case 7U: return Error::USB_IO;
+    case 8U: return Error::DISCONNECTED;
+    case 9U: return Error::PROTOCOL_ERROR;
+    case 10U: return Error::FIRMWARE_REJECTED;
+    case 11U: return Error::UNSUPPORTED;
+    case 12U: return Error::NO_CARD;
+    case 13U: return Error::CARD_REMOVED;
+    case 14U: return Error::BUFFER_TOO_SMALL;
+    case 15U: return Error::SLOW_CONSUMER;
+    case 17U: return Error::RESOURCE_LIMIT;
+    case 255U: return Error::INTERNAL;
+    default: return Error::PROTOCOL_ERROR;
+    }
+}
+
+CountersPayload wire_counters(const wire::StreamCounters& counters) noexcept
+{
+    CountersPayload result{};
+    for (std::size_t index = 0U; index < counters.entries.count; ++index) {
+        const auto& entry = counters.entries.items[index];
+        if (entry.counter.measurement.state != wire::MeasureState::valid) continue;
+        if (entry.id == wire::kCounterIdTransmittedPackets)
+            result.packets = entry.counter.measurement.value;
+        else if (entry.id == wire::kCounterIdQueueDroppedPackets)
+            result.queue_drops = entry.counter.measurement.value;
+    }
+    result.bytes = result.packets * 188U;
+    return result;
+}
+
+ErrorCode wire_end_error(wire::StreamEndReason reason) noexcept
+{
+    switch (reason) {
+    case wire::StreamEndReason::stopped:
+    case wire::StreamEndReason::shutdown: return ErrorCode::OK;
+    case wire::StreamEndReason::slow_consumer: return ErrorCode::SLOW_CONSUMER;
+    case wire::StreamEndReason::device_lost: return ErrorCode::DISCONNECTED;
+    case wire::StreamEndReason::backend_error: return ErrorCode::INTERNAL;
+    default: return ErrorCode::PROTOCOL_ERROR;
+    }
+}
+
+bool wire_system(ipc::System system, wire::System& output) noexcept
+{
+    if (system == ipc::System::ISDB_T) {
+        output = wire::System::isdb_t;
+        return true;
+    }
+    if (system == ipc::System::ISDB_S) {
+        output = wire::System::isdb_s;
+        return true;
+    }
+    return false;
+}
+
+template <typename Record>
+Result<std::size_t> encode_request(std::uint16_t opcode, std::uint32_t request_id,
+                                   const Record& value,
+                                   Result<std::size_t> (*encode)(const Record&,
+                                                                 MutableByteView) noexcept,
+                                   MutableByteView output) noexcept
+{
+    return wire::encode_record_frame(wire::Kind::request, opcode, request_id, value,
+                                     encode, output);
+}
+
+class WireTsReceiver final : public wire::FrameHandler {
+public:
+    WireTsReceiver(Px4TsOutput& output, const Px4TsArguments& arguments,
+                   Px4TsClock& clock, const Px4TsSignal& signal,
+                   std::uint64_t stream_id,
+                   Px4TsFailureKind& failure_kind) noexcept
+        : output_(output), arguments_(arguments), clock_(clock), signal_(signal),
+          stream_id_(stream_id), failure_kind_(failure_kind)
+    {
+    }
+
+    Result<void> on_frame(const wire::Frame& frame) noexcept override
+    {
+        if (frame.header.kind == wire::Kind::error_response) {
+            const auto error = wire::decode_error_response(frame.payload);
+            if (!error) return fail(error.error(), Px4TsFailureKind::ipc);
+            failure_ = wire_error(error.value().error.code);
+            return Result<void>::failure(failure_);
+        }
+        if (frame.header.kind == wire::Kind::response &&
+            frame.header.opcode == wire::kOpcodeAttachStream) {
+            if (attached_) return fail(Error::PROTOCOL_ERROR, Px4TsFailureKind::ipc);
+            const auto response = wire::decode_attach_response(frame.payload);
+            if (!response || response.value().stream_id != stream_id_)
+                return fail(Error::PROTOCOL_ERROR, Px4TsFailureKind::ipc);
+            attached_ = true;
+            duration_started_ = true;
+            duration_started_ms_ = clock_.monotonic_ms();
+            last_progress_ms_ = duration_started_ms_;
+            return Result<void>::success();
+        }
+        if (frame.header.kind == wire::Kind::event &&
+            frame.header.opcode == wire::kOpcodeTsDataEvent) {
+            if (!attached_) return fail(Error::PROTOCOL_ERROR, Px4TsFailureKind::ipc);
+            const auto data = wire::decode_ts_data(frame.payload);
+            if (!data || data.value().stream_id != stream_id_ ||
+                data.value().packets.size == 0U ||
+                (data.value().packets.size % 188U) != 0U ||
+                data.value().packets.size > wire::kMaxTsPacketBytes)
+                return fail(Error::PROTOCOL_ERROR, Px4TsFailureKind::ts_integrity);
+            if (data.value().sequence != expected_sequence_)
+                return fail(Error::PROTOCOL_ERROR, Px4TsFailureKind::ts_integrity);
+            ++expected_sequence_;
+            for (std::size_t offset = 0U; offset < data.value().packets.size;
+                 offset += 188U) {
+                if (data.value().packets.data[offset] != 0x47U)
+                    return fail(Error::PROTOCOL_ERROR, Px4TsFailureKind::ts_integrity);
+            }
+            std::size_t write_size = data.value().packets.size;
+            if (arguments_.packet_count_set) {
+                const std::uint64_t remaining = arguments_.packet_count - packets_written_;
+                const std::uint64_t available = data.value().packets.size / 188U;
+                write_size = static_cast<std::size_t>(
+                    std::min<std::uint64_t>(remaining, available) * 188U);
+            }
+            const std::size_t packets = write_size / 188U;
+            for (std::size_t packet = 0U; packet < packets; ++packet) {
+                const auto written = output_.write(
+                    ByteView{data.value().packets.data + packet * 188U, 188U}, signal_);
+                if (!written) return fail(written.error(), Px4TsFailureKind::output);
+            }
+            packets_written_ += packets;
+            last_progress_ms_ = clock_.monotonic_ms();
+            if (arguments_.packet_count_set &&
+                packets_written_ >= arguments_.packet_count)
+                limit_reached_ = true;
+            return Result<void>::success();
+        }
+        if (frame.header.kind == wire::Kind::event &&
+            frame.header.opcode == wire::kOpcodeStreamEndEvent) {
+            if (!attached_ || final_valid_)
+                return fail(Error::PROTOCOL_ERROR, Px4TsFailureKind::ipc);
+            const auto end = wire::decode_stream_end_event(frame.payload);
+            if (!end || end.value().final.id != stream_id_)
+                return fail(Error::PROTOCOL_ERROR, Px4TsFailureKind::ipc);
+            final_ = end.value().final;
+            final_valid_ = true;
+            return Result<void>::success();
+        }
+        return fail(Error::PROTOCOL_ERROR, Px4TsFailureKind::ipc);
+    }
+
+    Result<void> fail(Error error, Px4TsFailureKind kind) noexcept
+    {
+        failure_ = error;
+        failure_kind_ = kind;
+        return Result<void>::failure(error);
+    }
+
+    bool attached() const noexcept { return attached_; }
+    bool limit_reached() const noexcept { return limit_reached_; }
+    bool final_valid() const noexcept { return final_valid_; }
+    const wire::StreamFinal& final() const noexcept { return final_; }
+    std::uint64_t packets_written() const noexcept { return packets_written_; }
+    std::uint64_t last_progress_ms() const noexcept { return last_progress_ms_; }
+    bool duration_started() const noexcept { return duration_started_; }
+    std::uint64_t duration_started_ms() const noexcept { return duration_started_ms_; }
+    Px4TsFailureKind failure_kind() const noexcept { return failure_kind_; }
+    Error failure() const noexcept { return failure_; }
+
+private:
+    Px4TsOutput& output_;
+    const Px4TsArguments& arguments_;
+    Px4TsClock& clock_;
+    const Px4TsSignal& signal_;
+    std::uint64_t stream_id_ = 0U;
+    Px4TsFailureKind& failure_kind_;
+    Error failure_ = Error::OK;
+    bool attached_ = false;
+    bool limit_reached_ = false;
+    bool final_valid_ = false;
+    bool duration_started_ = false;
+    std::uint64_t duration_started_ms_ = 0U;
+    std::uint64_t packets_written_ = 0U;
+    std::uint64_t expected_sequence_ = 0U;
+    std::uint64_t last_progress_ms_ = 0U;
+    wire::StreamFinal final_{};
+};
+
+struct ProductStatusAssertion final {
+    const dtv::userland::identity::ResolvedIdentity* identity = nullptr;
+    std::string_view instance;
+    const wire::StatusSnapshot* discovered = nullptr;
+};
+
+template <std::size_t N>
+bool equal_text(const dtv::userland::wire::WString<N>& text,
+                std::string_view value) noexcept
+{
+    return text.length == value.size() &&
+           std::memcmp(text.bytes.data(), value.data(), value.size()) == 0;
+}
+
+bool matches_product_identity(const wire::ListResponse& list,
+                              const dtv::userland::identity::ResolvedIdentity& expected) noexcept
+{
+    if (!list.enclosure.present || list.functions.count == 0U ||
+        list.topology.state != wire::TopologyState::complete ||
+        !list.topology.expected_function_count.present ||
+        list.topology.expected_function_count.value != list.functions.count)
+        return false;
+    if (expected.kind == dtv::userland::identity::IdentityKind::serial) {
+        const auto& observed = list.enclosure.value.identity;
+        if (observed.serial_state != wire::IdentitySerialState::present ||
+            observed.uniqueness != wire::Uniqueness::unique_in_scan ||
+            !observed.serial.present ||
+            observed.serial.value.length != expected.serial.length ||
+            std::memcmp(observed.serial.value.bytes.data(), expected.serial.bytes.data(),
+                        expected.serial.length) != 0)
+            return false;
+        const auto* profile = px4::userland::device_profile_for_usb_id(
+            list.functions.items[0].vid, list.functions.items[0].pid);
+        if (profile == nullptr || !profile->serial_identity_supported) return false;
+        for (std::size_t i = 1U; i < list.functions.count; ++i) {
+            const auto* other = px4::userland::device_profile_for_usb_id(
+                list.functions.items[i].vid, list.functions.items[i].pid);
+            if (other == nullptr || other->model != profile->model) return false;
+        }
+        return true;
+    }
+    if (expected.topology.count == 0U) return false;
+    std::size_t matched = 0U;
+    for (std::size_t i = 0U; i < list.functions.count; ++i) {
+        const auto& path = list.functions.items[i].location.usb_path;
+        if (!path.present) return false;
+        for (std::size_t j = 0U; j < i; ++j) {
+            const auto& prior = list.functions.items[j].location.usb_path;
+            if (prior.present && prior.value.length == path.value.length &&
+                std::memcmp(prior.value.bytes.data(), path.value.bytes.data(),
+                            path.value.length) == 0)
+                return false;
+        }
+        for (std::size_t j = 0U; j < expected.topology.count; ++j) {
+            const auto& wanted = expected.topology.paths[j];
+            if (path.value.length == wanted.length &&
+                std::memcmp(path.value.bytes.data(), wanted.bytes.data(), wanted.length) == 0)
+                ++matched;
+        }
+    }
+    return expected.topology.count == 1U ? matched == 1U
+                                          : matched == list.functions.count &&
+                                                list.functions.count == expected.topology.count;
+}
+
+Error validate_product_status(const wire::StatusSnapshot& snapshot,
+                              void* context) noexcept
+{
+    const auto* assertion = static_cast<const ProductStatusAssertion*>(context);
+    if (assertion == nullptr ||
+        !equal_text(snapshot.status.producer.product, "px4-userland") ||
+        !snapshot.status.context.instance.present ||
+        (!assertion->instance.empty() &&
+         !equal_text(snapshot.status.context.instance.value, assertion->instance)) ||
+        (assertion->identity != nullptr &&
+         !matches_product_identity(snapshot.list, *assertion->identity)))
+        return Error::NOT_FOUND;
+    if (assertion->discovered != nullptr) {
+        const auto& prior = *assertion->discovered;
+        if (snapshot.status.context.epoch != prior.status.context.epoch ||
+            snapshot.list.functions.count != prior.list.functions.count ||
+            snapshot.list.enclosure.present != prior.list.enclosure.present ||
+            snapshot.list.enclosure.value.model.present !=
+                prior.list.enclosure.value.model.present ||
+            (snapshot.list.enclosure.value.model.present &&
+             !equal_text(snapshot.list.enclosure.value.model.value.id,
+                         std::string_view(prior.list.enclosure.value.model.value.id.bytes.data(),
+                                          prior.list.enclosure.value.model.value.id.length))))
+            return Error::NOT_FOUND;
+        const auto& current_identity = snapshot.list.enclosure.value.identity;
+        const auto& prior_identity = prior.list.enclosure.value.identity;
+        if (current_identity.serial_state != prior_identity.serial_state ||
+            current_identity.serial.present != prior_identity.serial.present ||
+            (current_identity.serial.present &&
+             (current_identity.serial.value.length != prior_identity.serial.value.length ||
+              std::memcmp(current_identity.serial.value.bytes.data(),
+                          prior_identity.serial.value.bytes.data(),
+                          current_identity.serial.value.length) != 0)))
+            return Error::NOT_FOUND;
+        for (std::size_t i = 0U; i < snapshot.list.functions.count; ++i) {
+            const auto& current = snapshot.list.functions.items[i];
+            bool found = false;
+            for (std::size_t j = 0U; j < prior.list.functions.count; ++j) {
+                const auto& old = prior.list.functions.items[j];
+                if (current.vid == old.vid && current.pid == old.pid &&
+                    current.location.usb_path.present == old.location.usb_path.present &&
+                    (!current.location.usb_path.present ||
+                     (current.location.usb_path.value.length == old.location.usb_path.value.length &&
+                      std::memcmp(current.location.usb_path.value.bytes.data(),
+                                  old.location.usb_path.value.bytes.data(),
+                                  current.location.usb_path.value.length) == 0))) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return Error::NOT_FOUND;
+        }
+    }
+    return Error::OK;
+}
+
+}  // namespace
+
+Result<Px4TsRunResult> Px4TsRunner::run_wire(
+    const Px4TsArguments& arguments, Px4TsOutput& output, Px4TsClock& clock,
+    const Px4TsSignal& signal, Px4TsFailureKind* failure_kind,
+    Px4TsRunDiagnostics* diagnostics) noexcept
+{
+    if (failure_kind != nullptr) *failure_kind = Px4TsFailureKind::ipc;
+    if (diagnostics != nullptr) *diagnostics = Px4TsRunDiagnostics{};
+    Px4TsFailureKind local_failure_kind = Px4TsFailureKind::ipc;
+    Px4TsFailureKind& result_failure_kind =
+        failure_kind != nullptr ? *failure_kind : local_failure_kind;
+    if (!arguments.valid || !valid_arguments(arguments))
+        return Result<Px4TsRunResult>::failure(Error::INVALID_ARGUMENT);
+
+    const EndpointAccess access = arguments.group ? EndpointAccess::shared_group
+                                                  : EndpointAccess::private_user;
+    dtv::userland::identity::ResolvedIdentity resolved_identity{};
+    bool has_device_assertion = false;
+    if (arguments.product_cli && !arguments.device.empty()) {
+        const auto selector = dtv::userland::identity::parse_device_selector(arguments.device);
+        if (!selector) return Result<Px4TsRunResult>::failure(Error::INVALID_ARGUMENT);
+        const auto resolved = dtv::userland::identity::resolve_selector(
+            dtv::userland::identity::Product::px4, selector.value());
+        if (!resolved) return Result<Px4TsRunResult>::failure(Error::INVALID_ARGUMENT);
+        resolved_identity = resolved.value();
+        has_device_assertion = true;
+    }
+    std::string selected_runtime_directory = arguments.runtime_directory;
+    std::string selected_instance = arguments.instance;
+    wire::StatusSnapshot discovered_snapshot{};
+    bool has_discovered_snapshot = false;
+    if (arguments.product_cli && arguments.instance.empty()) {
+        ipc::posix::RuntimeRootCandidates roots{};
+        if (!arguments.runtime_directory.empty()) {
+            roots.count = 1U;
+            if (arguments.runtime_directory.size() >= roots.paths[0].size())
+                return Result<Px4TsRunResult>::failure(Error::INVALID_ARGUMENT);
+            std::memcpy(roots.paths[0].data(), arguments.runtime_directory.c_str(),
+                        arguments.runtime_directory.size() + 1U);
+        } else {
+            const auto candidates = client_runtime_roots();
+            if (!candidates) return Result<Px4TsRunResult>::failure(candidates.error());
+            roots = candidates.value();
+        }
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::milliseconds(2000);
+        std::size_t matches = 0U;
+        std::string matched_root;
+        std::string matched_instance;
+        const auto remaining = [&deadline]() noexcept -> std::uint32_t {
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= deadline) return 0U;
+            const auto value = std::chrono::duration_cast<std::chrono::milliseconds>(
+                deadline - now).count();
+            return static_cast<std::uint32_t>(value > 0 ? value : 1);
+        };
+        for (std::size_t root_index = 0U; root_index < roots.count; ++root_index) {
+            const std::string root(roots.paths[root_index].data());
+            const auto discovered = discover_runtime_instances(root.c_str(), access);
+            if (!discovered) return Result<Px4TsRunResult>::failure(discovered.error());
+            if (discovered.value().canonical_collision)
+                return Result<Px4TsRunResult>::failure(Error::NOT_FOUND);
+            for (std::size_t candidate = 0U; candidate < discovered.value().count; ++candidate) {
+                const std::uint32_t budget = remaining();
+                if (budget == 0U) return Result<Px4TsRunResult>::failure(Error::TIMEOUT);
+                const std::string candidate_instance(discovered.value().instances[candidate].data());
+                const EndpointConfig endpoint{root.c_str(), candidate_instance.c_str(),
+                                              kControlEndpointName, access};
+                auto probe = SocketStream::connect(endpoint, Timeout{budget});
+                if (!probe) {
+                    if (probe.error() == Error::NOT_FOUND) continue;
+                    return Result<Px4TsRunResult>::failure(probe.error());
+                }
+                SocketClientTransport probe_transport(probe.value());
+                const std::uint32_t fetch_budget = remaining();
+                if (fetch_budget == 0U) {
+                    probe.value().close();
+                    return Result<Px4TsRunResult>::failure(Error::TIMEOUT);
+                }
+                const auto snapshot = wire::fetch_status(probe_transport, Timeout{fetch_budget});
+                probe.value().close();
+                if (!snapshot)
+                    return Result<Px4TsRunResult>::failure(snapshot.error);
+                if (!equal_text(snapshot.snapshot.status.producer.product, "px4-userland") ||
+                    !snapshot.snapshot.status.context.instance.present ||
+                    !equal_text(snapshot.snapshot.status.context.instance.value,
+                                candidate_instance) ||
+                    !matches_product_identity(snapshot.snapshot.list, resolved_identity))
+                    continue;
+                ++matches;
+                if (matches == 1U) {
+                    matched_root = root;
+                    matched_instance = candidate_instance;
+                    discovered_snapshot = snapshot.snapshot;
+                }
+            }
+        }
+        if (matches != 1U) return Result<Px4TsRunResult>::failure(Error::NOT_FOUND);
+        selected_runtime_directory = matched_root;
+        selected_instance = matched_instance;
+        has_discovered_snapshot = true;
+    }
+    const char* runtime_directory = selected_runtime_directory.empty()
+                                        ? nullptr : selected_runtime_directory.c_str();
+    const char* instance = selected_instance.empty() ? arguments.device.c_str()
+                                                       : selected_instance.c_str();
+    const EndpointConfig control_endpoint{runtime_directory, instance,
+                                          kControlEndpointName, access};
+    const EndpointConfig stream_endpoint{runtime_directory, instance,
+                                         kStreamEndpointName, access};
+
+    auto control = SocketStream::connect(control_endpoint, Timeout{2000U});
+    if (!control) return Result<Px4TsRunResult>::failure(control.error());
+    SocketClientTransport control_transport(control.value());
+
+    wire::RecordingOptions options{};
+    options.receiver_id = arguments.receiver;
+    wire::System system{};
+    if (!wire_system(arguments.system, system)) {
+        control.value().close();
+        return Result<Px4TsRunResult>::failure(Error::INVALID_ARGUMENT);
+    }
+    options.tune.system = system;
+    options.tune.frequency_hz = arguments.frequency_hz != 0U
+                                    ? arguments.frequency_hz
+                                    : static_cast<std::uint64_t>(arguments.frequency_khz) * 1000U;
+    if (arguments.stream_id != 0xffffU) {
+        options.tune.selection = wire::Selection::tsid;
+        options.tune.selection_value = arguments.stream_id;
+    } else if (arguments.slot != 0xffffU) {
+        options.tune.selection = wire::Selection::slot;
+        options.tune.selection_value = arguments.slot;
+    } else {
+        options.tune.selection = wire::Selection::automatic;
+    }
+    if (arguments.lnb_voltage != 0U) {
+        options.tune.lnb_voltage.present = true;
+        options.tune.lnb_voltage.value = arguments.lnb_voltage;
+    }
+    options.tune.timeout_ms = arguments.tune_timeout_ms;
+
+    ProductStatusAssertion assertion{};
+    assertion.identity = has_device_assertion ? &resolved_identity : nullptr;
+    assertion.instance = selected_instance;
+    assertion.discovered = has_discovered_snapshot ? &discovered_snapshot : nullptr;
+    auto started = arguments.product_cli
+        ? wire::begin_recording(control_transport, options,
+                                Timeout{arguments.tune_timeout_ms + 6000U},
+                                validate_product_status, &assertion)
+        : wire::begin_recording(control_transport, options,
+                                Timeout{arguments.tune_timeout_ms + 6000U});
+    if (!started) {
+        control.value().close();
+        return Result<Px4TsRunResult>::failure(started.error);
+    }
+    wire::RecordingSession session = started.session;
+
+    auto data = SocketStream::connect(stream_endpoint, Timeout{2000U});
+    if (!data) {
+        (void)wire::stop_recording(control_transport, session, Timeout{4000U});
+        (void)wire::release_recording(control_transport, session, Timeout{4000U});
+        control.value().close();
+        return Result<Px4TsRunResult>::failure(data.error());
+    }
+
+    wire::AttachRequest attach{};
+    attach.epoch = session.epoch;
+    attach.lease_id = session.lease_id;
+    attach.stream_id = session.stream_id;
+    attach.attach_token = session.attach_token;
+    std::array<std::uint8_t, wire::kHeaderSize + 128U> attach_frame{};
+    const auto attach_size = encode_request(
+        wire::kOpcodeAttachStream, 1U, attach, &wire::encode_attach_request,
+        MutableByteView{attach_frame.data(), attach_frame.size()});
+    if (!attach_size) {
+        data.value().close();
+        (void)wire::stop_recording(control_transport, session, Timeout{4000U});
+        (void)wire::release_recording(control_transport, session, Timeout{4000U});
+        control.value().close();
+        return Result<Px4TsRunResult>::failure(attach_size.error());
+    }
+    const auto attach_written =
+        data.value().write_all(ByteView{attach_frame.data(), attach_size.value()},
+                               Timeout{2000U});
+    if (!attach_written) {
+        data.value().close();
+        (void)wire::stop_recording(control_transport, session, Timeout{4000U});
+        (void)wire::release_recording(control_transport, session, Timeout{4000U});
+        control.value().close();
+        return Result<Px4TsRunResult>::failure(attach_written.error());
+    }
+
+    std::unique_ptr<std::uint8_t[]> frame_storage(
+        new (std::nothrow) std::uint8_t[wire::kMaxFrameSize]);
+    std::array<std::uint8_t, 8192U> read_buffer{};
+    if (!frame_storage) {
+        data.value().close();
+        control.value().close();
+        return Result<Px4TsRunResult>::failure(Error::INTERNAL);
+    }
+    wire::FrameReceiver receiver(
+        MutableByteView{frame_storage.get(), wire::kMaxFrameSize});
+    bool stop_requested_by_client = false;
+    WireTsReceiver reader(output, arguments, clock, signal, session.stream_id,
+                          result_failure_kind);
+
+    Error primary = Error::OK;
+    std::uint64_t partial_frame_progress_ms = 0U;
+    bool partial_frame_pending = false;
+    const std::uint64_t first_ts_deadline = reader.last_progress_ms() == 0U
+                                                ? clock.monotonic_ms() + kTsProgressTimeoutMs
+                                                : reader.last_progress_ms() +
+                                                      kTsProgressTimeoutMs;
+    while (!reader.final_valid() && primary == Error::OK) {
+        const std::uint64_t now = clock.monotonic_ms();
+        if (signal.stop_requested()) {
+            stop_requested_by_client = true;
+            break;
+        }
+        if (reader.duration_started() && arguments.duration_set &&
+            now >= reader.duration_started_ms() &&
+            now - reader.duration_started_ms() >= arguments.duration_seconds * 1000U) {
+            stop_requested_by_client = true;
+            break;
+        }
+        if (reader.limit_reached()) {
+            stop_requested_by_client = true;
+            break;
+        }
+        if (!reader.attached() && now >= first_ts_deadline) {
+            primary = Error::TIMEOUT;
+            result_failure_kind = Px4TsFailureKind::ts_integrity;
+            break;
+        }
+        if (partial_frame_pending && now >= partial_frame_progress_ms &&
+            now - partial_frame_progress_ms >= kTsProgressTimeoutMs) {
+            primary = Error::TIMEOUT;
+            result_failure_kind = Px4TsFailureKind::ts_integrity;
+            break;
+        }
+        const auto read = data.value().read_some(
+            MutableByteView{read_buffer.data(), read_buffer.size()}, Timeout{50U});
+        if (!read) {
+            if (read.error() == Error::TIMEOUT) {
+                clock.sleep_ms(10U);
+                continue;
+            }
+            primary = read.error();
+            break;
+        }
+        const auto fed = receiver.feed(
+            ByteView{read_buffer.data(), read.value()}, reader);
+        if (!fed) {
+            primary = fed.error();
+            break;
+        }
+        partial_frame_pending = receiver.pending_size() != 0U;
+        if (partial_frame_pending) partial_frame_progress_ms = clock.monotonic_ms();
+    }
+
+    if (!reader.final_valid() && data.value().valid()) {
+        const auto stopped =
+            wire::stop_recording(control_transport, session, Timeout{4000U});
+        if (!stopped && stopped.error != Error::NOT_FOUND && primary == Error::OK) {
+            primary = stopped.error;
+        }
+        const std::uint64_t deadline = clock.monotonic_ms() + 4000U;
+        while (!reader.final_valid() && primary == Error::OK &&
+               clock.monotonic_ms() < deadline) {
+            const auto read = data.value().read_some(
+                MutableByteView{read_buffer.data(), read_buffer.size()}, Timeout{50U});
+            if (!read) {
+                if (read.error() == Error::TIMEOUT) {
+                    clock.sleep_ms(10U);
+                    continue;
+                }
+                primary = read.error();
+                break;
+            }
+            const auto fed = receiver.feed(
+                ByteView{read_buffer.data(), read.value()}, reader);
+            if (!fed) {
+                primary = fed.error();
+                break;
+            }
+        }
+        if (primary == Error::OK && !reader.final_valid()) primary = Error::TIMEOUT;
+    }
+    if (data.value().valid()) data.value().close();
+
+    const auto released =
+        wire::release_recording(control_transport, session, Timeout{4000U});
+    if (!released && primary == Error::OK) {
+        primary = released.error;
+    }
+    control.value().close();
+
+    if (diagnostics != nullptr) {
+        if (reader.final_valid() && reader.final().statistics.entries.count == 2U) {
+            diagnostics->stop_counters_valid = true;
+            diagnostics->stop_counters = wire_counters(reader.final().statistics);
+        }
+        diagnostics->stream_end_valid = reader.final_valid();
+        if (reader.final_valid()) {
+            diagnostics->stream_end.counters =
+                wire_counters(reader.final().statistics);
+            diagnostics->stream_end.error_code = wire_end_error(reader.final().reason);
+        }
+        diagnostics->packets_written = reader.packets_written();
+    }
+    if (reader.failure() != Error::OK) primary = reader.failure();
+    if (primary != Error::OK) return Result<Px4TsRunResult>::failure(primary);
+    if (!reader.final_valid())
+        return Result<Px4TsRunResult>::failure(Error::PROTOCOL_ERROR);
+    const CountersPayload final_counters =
+        wire_counters(reader.final().statistics);
+    const ErrorCode end_error = wire_end_error(reader.final().reason);
+    if (end_error != ErrorCode::OK) {
+        if (end_error == ErrorCode::PROTOCOL_ERROR)
+            result_failure_kind = Px4TsFailureKind::ts_integrity;
+        return Result<Px4TsRunResult>::failure(
+            end_error == ErrorCode::SLOW_CONSUMER ? Error::SLOW_CONSUMER :
+            end_error == ErrorCode::USB_IO ? Error::USB_IO :
+            end_error == ErrorCode::DISCONNECTED ? Error::DISCONNECTED :
+            end_error == ErrorCode::PROTOCOL_ERROR ? Error::PROTOCOL_ERROR
+                                                    : Error::INTERNAL);
+    }
+    if (final_counters.packets < reader.packets_written())
+        return Result<Px4TsRunResult>::failure(Error::PROTOCOL_ERROR);
+    if (arguments.packet_count_set &&
+        reader.packets_written() != arguments.packet_count)
+        return Result<Px4TsRunResult>::failure(Error::PROTOCOL_ERROR);
+    if (!stop_requested_by_client && !arguments.duration_set &&
+        !arguments.packet_count_set)
+        return Result<Px4TsRunResult>::failure(Error::DISCONNECTED);
+    return Result<Px4TsRunResult>::success(
+        Px4TsRunResult{final_counters, signal.stop_requested()});
+}
+
 Result<Px4TsRunResult> Px4TsRunner::run(
     const Px4TsArguments& arguments, Px4TsOutput& output, Px4TsClock& clock,
     const Px4TsSignal& signal, Px4TsFailureKind* failure_kind,
@@ -632,7 +1542,14 @@ Result<Px4TsRunResult> Px4TsRunner::run(
     Px4TsFailureKind local_failure_kind = Px4TsFailureKind::ipc;
     Px4TsFailureKind& result_failure_kind = failure_kind != nullptr ?
                                                  *failure_kind : local_failure_kind;
+    if (arguments.product_cli)
+        return Result<Px4TsRunResult>::failure(Error::INVALID_ARGUMENT);
     if (!arguments.valid || !valid_arguments(arguments)) {
+        return Result<Px4TsRunResult>::failure(Error::INVALID_ARGUMENT);
+    }
+    // The legacy internal-IPC runner has no exact-Hz entrance; the kHz field
+    // stays authoritative there.
+    if (arguments.frequency_hz != 0U) {
         return Result<Px4TsRunResult>::failure(Error::INVALID_ARGUMENT);
     }
     const char* runtime_directory = arguments.runtime_directory.empty() ?

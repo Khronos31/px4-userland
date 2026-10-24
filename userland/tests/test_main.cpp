@@ -1829,6 +1829,7 @@ bool test_lnb_15v_profile_capability_table()
 struct FakeDevice final {
     DeviceObservation observation;
     std::uint8_t serial_index = 1U;
+    int info_result = 0;
     int serial_result = 0;
 };
 
@@ -2021,6 +2022,7 @@ public:
             return LIBUSB_ERROR_INVALID_PARAM;
         }
         const auto* fake = static_cast<FakeDevice*>(device);
+        if (fake->info_result != 0) return fake->info_result;
         *observation = fake->observation;
         *serial_index = fake->serial_index;
         return 0;
@@ -3296,6 +3298,8 @@ bool test_runtime_native_collision_claims_only_selected_paths()
     auto selected = RuntimeTestAccess::open_native(
         std::move(selected_api), first.observation.serial, {"1-2"});
     CHECK(selected && selected.value()->model() == DeviceModel::px_m1ur);
+    CHECK(selected.value()->serial_unique_in_scan().has_value() &&
+          !*selected.value()->serial_unique_in_scan());
     CHECK(raw->claim_devices.size() == 1U && raw->claim_devices[0U] == &first);
     selected.value().reset();
 
@@ -3307,6 +3311,8 @@ bool test_runtime_native_collision_claims_only_selected_paths()
     auto mixed = RuntimeTestAccess::open_native(
         std::move(mixed_api), first.observation.serial, {"1:31"});
     CHECK(mixed && mixed.value()->model() == DeviceModel::px_s1ur);
+    CHECK(mixed.value()->serial_unique_in_scan().has_value() &&
+          !*mixed.value()->serial_unique_in_scan());
     CHECK(mixed_raw->claim_devices.size() == 1U &&
           mixed_raw->claim_devices[0U] == &other_model);
     mixed.value().reset();
@@ -3334,6 +3340,8 @@ bool test_runtime_native_collision_claims_only_selected_paths()
     auto paired = RuntimeTestAccess::open_native(
         std::move(paired_api), "00000000000011", {"1:23", "1-3"});
     CHECK(paired && paired_raw->claim_devices.size() == 2U);
+    CHECK(paired.value()->serial_unique_in_scan().has_value() &&
+          !*paired.value()->serial_unique_in_scan());
     CHECK(paired_raw->claim_devices[0U] == &q1b &&
           paired_raw->claim_devices[1U] == &q2b);
     paired.value().reset();
@@ -3352,6 +3360,8 @@ bool test_runtime_native_transaction_and_ownership()
     auto runtime = RuntimeTestAccess::open_native(std::move(api));
     CHECK(runtime);
     CHECK(runtime.value()->base_serial() == "00000000000070");
+    CHECK(runtime.value()->serial_unique_in_scan().has_value() &&
+          *runtime.value()->serial_unique_in_scan());
     CHECK(api_raw->claim_devices.size() == 2U);
     CHECK(api_raw->claim_devices[0U] == &first && api_raw->claim_devices[1U] == &second);
     runtime.value().reset();
@@ -3441,6 +3451,16 @@ bool test_runtime_native_transaction_and_ownership()
     // A single failed descriptor read leaves an incomplete group.  That
     // selection INVALID_ARGUMENT must not mask the candidate's USB_IO.
     CHECK(!serial_one_denied && serial_one_denied.error() == Error::USB_IO);
+
+    auto incomplete_scan_api = std::unique_ptr<FakeApi>(new FakeApi);
+    FakeDevice incomplete_first = fake_device("00000000000077", 1U);
+    FakeDevice incomplete_second = fake_device("00000000000077", 2U);
+    FakeDevice unreadable{};
+    unreadable.info_result = LIBUSB_ERROR_IO;
+    incomplete_scan_api->devices = {&incomplete_first, &incomplete_second, &unreadable};
+    const auto incomplete_scan = RuntimeTestAccess::open_native(
+        std::move(incomplete_scan_api), "00000000000077");
+    CHECK(incomplete_scan && !incomplete_scan.value()->serial_unique_in_scan().has_value());
     return true;
 }
 
@@ -3467,6 +3487,7 @@ bool test_runtime_fd_ownership_and_quarantine()
         std::move(api), std::move(syscalls), {first_pipe.fds[0], second_pipe.fds[0]});
     CHECK(runtime);
     CHECK(runtime.value()->base_serial() == "00000000000080");
+    CHECK(!runtime.value()->serial_unique_in_scan().has_value());
     CHECK(api_raw->get_device_list_calls == 0U);
     runtime.value().reset();
     CHECK(std::find(lifecycle.begin(), lifecycle.end(), "exit") != lifecycle.end());
@@ -3730,6 +3751,32 @@ int main(int argc, char** argv)
         std::printf("PASS fail_safe_abandonment\n");
         return 0;
     }
+    if (argc == 2 && std::strcmp(argv[1], "--runtime-native-serial-identity") == 0) {
+        if (!test_runtime_native_transaction_and_ownership()) {
+            std::fprintf(stderr, "FAIL runtime_native_serial_identity\n");
+            return 1;
+        }
+        std::printf("PASS runtime_native_serial_identity\n");
+        return 0;
+    }
+    if (argc == 2 && std::strcmp(argv[1], "--runtime-native-collision-claims") == 0) {
+        if (!test_runtime_native_collision_claims_only_selected_paths()) {
+            std::fprintf(stderr, "FAIL runtime_native_collision_claims_only_selected_paths\n");
+            return 1;
+        }
+        std::printf("PASS runtime_native_collision_claims_only_selected_paths\n");
+        return 0;
+    }
+#if defined(__linux__) || defined(__ANDROID__)
+    if (argc == 2 && std::strcmp(argv[1], "--runtime-fd-ownership-quarantine") == 0) {
+        if (!test_runtime_fd_ownership_and_quarantine()) {
+            std::fprintf(stderr, "FAIL runtime_fd_ownership_and_quarantine\n");
+            return 1;
+        }
+        std::printf("PASS runtime_fd_ownership_and_quarantine\n");
+        return 0;
+    }
+#endif
 #endif
     (void)argc;
     (void)argv;

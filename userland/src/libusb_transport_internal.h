@@ -169,6 +169,7 @@ public:
     DeviceDiscovery(const DeviceDiscovery&) = delete;
     DeviceDiscovery& operator=(const DeviceDiscovery&) = delete;
     const std::vector<DeviceCandidate>& candidates() const noexcept { return candidates_; }
+    bool scan_complete() const noexcept { return scan_complete_; }
 
 private:
     friend class NativeEnumerator;
@@ -176,6 +177,7 @@ private:
     LibusbApi* api_ = nullptr;
     void* list_ = nullptr;
     std::vector<DeviceCandidate> candidates_;
+    bool scan_complete_ = true;
 };
 
 // Serialize synchronous command transactions across the two Q3U4 bridges.
@@ -408,6 +410,10 @@ struct Q3U4Runtime::Impl final {
     std::array<std::unique_ptr<LibusbTransport>, 2U> transports_;
     std::string base_serial_;
     DeviceModel model_ = DeviceModel::px_q3u4;
+    // Selection-time observation of each claimed bridge.
+    std::array<DeviceObservation, 2U> observations_{};
+    std::array<bool, 2U> observed_{};
+    std::optional<bool> serial_unique_in_scan_;
 };
 
 class RuntimeTestAccess final {

@@ -3,5 +3,8 @@ IMPORTANT DEPENDENCY NOTICE
 px4-userland @VERSION@ dependency notice for @PLATFORM@
 
 Every binary archive (Linux, macOS, Android, and Windows) includes the exact libusb 1.0.30 license text at `libusb/COPYING`.
+Linux archives also include the musl 1.2.5 copyright and GNU GPLv3/GCC Runtime Library Exception texts under
+`toolchain/`. `evidence/toolchain-static.properties` and `evidence/toolchain-ifd.properties` record the compiler,
+target, libc, and runtime package versions used for the Linux executable and IFD builds.
 
 @DEPENDENCY_TEXT@

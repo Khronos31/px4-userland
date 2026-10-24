@@ -1,7 +1,22 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "mlt5pe_backend.h"
 
+#include "strict_frequency_profiles.h"
+
 namespace px4::userland {
+
+namespace {
+
+Result<TunerHzProgramming> mlt_programming(const Result<std::uint64_t>& tuned) noexcept
+{
+    if (!tuned) return Result<TunerHzProgramming>::failure(tuned.error());
+    TunerHzProgramming programming{};
+    programming.programmed_hz.present = true;
+    programming.programmed_hz.value = tuned.value();
+    return Result<TunerHzProgramming>::success(programming);
+}
+
+}  // namespace
 
 bool Mlt5PeTunerBackend::receiver_supports(std::uint8_t receiver,
                                            ipc::System system) const noexcept
@@ -31,6 +46,28 @@ Result<void> Mlt5PeTunerBackend::tune_satellite(std::uint8_t receiver,
 {
     (void)timeout_ms;
     return frontend_.tune(receiver, Cxd2856erSystem::isdb_s, frequency_khz);
+}
+
+Result<TunerHzProgramming> Mlt5PeTunerBackend::tune_terrestrial_hz(
+    std::uint8_t receiver, std::uint64_t frequency_hz, std::uint32_t timeout_ms) noexcept
+{
+    (void)timeout_ms;
+    return mlt_programming(frontend_.tune_hz(receiver, Cxd2856erSystem::isdb_t, frequency_hz));
+}
+
+Result<TunerHzProgramming> Mlt5PeTunerBackend::tune_satellite_hz(
+    std::uint8_t receiver, std::uint64_t frequency_hz, std::uint32_t timeout_ms) noexcept
+{
+    (void)timeout_ms;
+    return mlt_programming(frontend_.tune_hz(receiver, Cxd2856erSystem::isdb_s, frequency_hz));
+}
+
+TunerStrictProfile Mlt5PeTunerBackend::strict_profile(std::uint8_t receiver,
+                                                      ipc::System system) const noexcept
+{
+    if (!receiver_supports(receiver, system)) return TunerStrictProfile{};
+    return system == ipc::System::ISDB_T ? mlt_terrestrial_strict_profile()
+                                         : mlt_satellite_strict_profile();
 }
 
 Result<bool> Mlt5PeTunerBackend::is_locked(std::uint8_t receiver, ipc::System system) noexcept

@@ -102,11 +102,11 @@ bool test_mlt5pe_list_and_status()
         ipc::kMlt5PeReceiverCount};
     const std::string listed = tools::format_list(list);
     if (listed != "serial=000020263901491 ready=yes usb-present-mask=0x01\n"
-                  "receiver=0 device=1 local=0 system=ISDB-T/S\n"
-                  "receiver=1 device=1 local=1 system=ISDB-T/S\n"
-                  "receiver=2 device=1 local=2 system=ISDB-T/S\n"
-                  "receiver=3 device=1 local=3 system=ISDB-T/S\n"
-                  "receiver=4 device=1 local=4 system=ISDB-T/S\n") {
+                  "receiver=0 device=1 local=0 system=ISDB-T,ISDB-S\n"
+                  "receiver=1 device=1 local=1 system=ISDB-T,ISDB-S\n"
+                  "receiver=2 device=1 local=2 system=ISDB-T,ISDB-S\n"
+                  "receiver=3 device=1 local=3 system=ISDB-T,ISDB-S\n"
+                  "receiver=4 device=1 local=4 system=ISDB-T,ISDB-S\n") {
         std::fprintf(stderr, "px4ctl mlt5pe list mismatch:\n%s", listed.c_str());
         return false;
     }

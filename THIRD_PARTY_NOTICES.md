@@ -27,11 +27,14 @@ Primary license text: [libusb 1.0.30 `COPYING`](https://github.com/libusb/libusb
 
 ## dtv-userland-core foundation library (MIT)
 
-The portable Error/Result, logging, transport byte-view, and mock-transport foundation is provided by the
+The portable Error/Result, logging, transport byte-view, and mock-transport foundation and the internal receiver
+and card ownership engines behind `TunerService` and `CardService` are provided by the
 `dtv-userland-core` library under the MIT License. It is not vendored as working files in the repository source;
 CMake resolves it from the commit pinned in `cmake/dtv-userland-core.revision` (or from a bundled
-corresponding-source tree) and the product links the `dtv::core` target. The corresponding-source archive exports
+corresponding-source tree) and the product links the `dtv::core`, `dtv::receiver`, `dtv::card`, `dtv::control`, and `dtv::capture` targets. The corresponding-source archive exports
 that exact commit under `repository/third_party/dtv-userland-core`, including its `LICENSE` and `PROVENANCE.json`.
+The card engine uses opaque ATR snapshots and leaves the product's GPL `CardAtr`, native protocol session, and
+hardware implementation in this repository.
 Binary archives that statically link the foundation must carry the exact MIT license text for it. The product itself
 remains GPL-2.0-only; the MIT foundation is not a replacement for the product license.
 
@@ -104,6 +107,9 @@ bundle does not link libusb.
 The Linux and macOS static-libusb executables do not require host libusb or PC/SC client libraries. Linux IFD shared
 objects require only their matching libc because libstdc++ and libgcc are statically linked; macOS retains its host
 system `libc++` dependency.
+Linux archives contain the musl 1.2.5 copyright and GNU GPLv3/GCC Runtime Library Exception texts in `toolchain/`.
+The two `evidence/toolchain-*.properties` files record the compiler, target, libc, and runtime package versions for
+the executable and IFD builds; those recorded versions are tied to the actual build inputs, not inferred from another platform.
 The actual `NEEDED`/dynamic dependency lists are retained in `evidence/binary-audit.json`.
 
 Only `px4d` directly requires libusb. `px4-ts` and `px4ctl` are IPC clients and must not directly require libusb. The

@@ -8,6 +8,7 @@
 // validation-results.md 2026-10-09); physical tuner/card/LNB hardware behavior
 // remains unverified.
 #include "px4/posix_ipc.h"
+#include <dtv/userland/identity.h>
 
 #if defined(_WIN32)
 
@@ -55,6 +56,7 @@ constexpr std::size_t kMaxEndpointPathBytes = sizeof(SOCKADDR_UN{}.sun_path);
 struct Layout final {
     std::array<wchar_t, kStoredPathCapacity> runtime_directory{};
     std::array<wchar_t, kStoredPathCapacity> product_directory{};
+    std::array<wchar_t, kStoredPathCapacity> version_directory{};
     std::array<wchar_t, kStoredPathCapacity> instance_directory{};
     std::array<wchar_t, kStoredPathCapacity> endpoint_path{};
     bool group_access = false;
@@ -243,6 +245,7 @@ enum class SecurityPolicy : std::uint8_t {
     // Caller-owned runtime parent: current user must have write/delete, and no
     // untrusted SID may be able to write or replace entries in it.
     runtime_parent,
+    runtime_client_parent,
 };
 
 // Copies the current process user SID into caller storage and returns it.
@@ -382,7 +385,7 @@ bool acl_satisfies(const ACL* dacl, PSID current, SecurityPolicy policy) noexcep
     if (policy == SecurityPolicy::private_user) {
         return true;
     }
-    return current_user_can_write;
+    return policy == SecurityPolicy::runtime_parent ? current_user_can_write : true;
 }
 
 bool verify_security(const wchar_t* path, SecurityPolicy policy) noexcept
@@ -457,11 +460,15 @@ Result<Layout> make_layout(const EndpointConfig& config) noexcept
         // validation instead of silently inheriting broad access.
         return Result<Layout>::failure(Error::UNSUPPORTED);
     }
-    if (!valid_component(config.instance) ||
-        bounded_length(config.instance, 81U) > 80U ||
-        !valid_component(config.endpoint_name)) {
+    const auto canonical_instance = dtv::userland::identity::canonicalize_instance(
+        config.instance == nullptr ? std::string_view{} : std::string_view(config.instance));
+    if (!canonical_instance || !valid_component(config.endpoint_name)) {
         return Result<Layout>::failure(Error::INVALID_ARGUMENT);
     }
+    std::array<char, 65U> instance_utf8{};
+    std::memcpy(instance_utf8.data(), canonical_instance.value().bytes.data(),
+                canonical_instance.value().length);
+    instance_utf8[canonical_instance.value().length] = '\0';
 
     Layout layout{};
     if (config.runtime_directory == nullptr) {
@@ -491,13 +498,19 @@ Result<Layout> make_layout(const EndpointConfig& config) noexcept
         !append_component(layout.product_directory, used, L"px4-userland", true)) {
         return Result<Layout>::failure(Error::INVALID_ARGUMENT);
     }
-
     const std::size_t product_length = used;
-    std::wmemcpy(layout.instance_directory.data(), layout.product_directory.data(),
+    std::wmemcpy(layout.version_directory.data(), layout.product_directory.data(),
                  product_length + 1U);
-    used = product_length;
+    if (!append_component(layout.version_directory, used, L"v1", true)) {
+        return Result<Layout>::failure(Error::INVALID_ARGUMENT);
+    }
+
+    const std::size_t version_length = used;
+    std::wmemcpy(layout.instance_directory.data(), layout.version_directory.data(),
+                 version_length + 1U);
+    used = version_length;
     std::array<wchar_t, kStoredPathCapacity> instance_wide{};
-    if (!utf8_to_wide(config.instance, std::strlen(config.instance),
+    if (!utf8_to_wide(instance_utf8.data(), std::strlen(instance_utf8.data()),
                       instance_wide) ||
         !append_component(layout.instance_directory, used, instance_wide.data(),
                           true)) {
@@ -784,7 +797,12 @@ Result<void> remove_stale_endpoint(
     }
     SOCKADDR_UN address{};
     address.sun_family = AF_UNIX;
-    std::strncpy(address.sun_path, utf8.data(), sizeof(address.sun_path) - 1U);
+    if (static_cast<std::size_t>(converted) > sizeof(address.sun_path)) {
+        close_socket(static_cast<NativeHandle>(probe));
+        return Result<void>::failure(Error::INVALID_ARGUMENT);
+    }
+    std::memcpy(address.sun_path, utf8.data(),
+                static_cast<std::size_t>(converted));
     const int connected = ::connect(probe, reinterpret_cast<const sockaddr*>(&address),
                                     sizeof(address));
     const int connect_error = connected == 0 ? 0 : ::WSAGetLastError();
@@ -877,11 +895,126 @@ bool make_address(const std::array<wchar_t, kStoredPathCapacity>& path,
     }
     std::memset(&address, 0, sizeof(address));
     address.sun_family = AF_UNIX;
-    std::strncpy(address.sun_path, scratch.data(), sizeof(address.sun_path) - 1U);
+    if (static_cast<std::size_t>(converted) > sizeof(address.sun_path)) {
+        return false;
+    }
+    std::memcpy(address.sun_path, scratch.data(),
+                static_cast<std::size_t>(converted));
     return true;
 }
 
 }  // namespace
+
+Result<RuntimeRootCandidates> client_runtime_roots() noexcept
+{
+    const EndpointConfig endpoint{nullptr, "probe", kControlEndpointName,
+                                  EndpointAccess::private_user};
+    const auto layout = make_layout(endpoint);
+    if (!layout) return Result<RuntimeRootCandidates>::failure(layout.error());
+    const auto runtime = validate_directory(layout.value().runtime_directory, true,
+                                            SecurityPolicy::runtime_client_parent);
+    if (!runtime) return Result<RuntimeRootCandidates>::failure(runtime.error());
+    const int length = ::WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
+        layout.value().runtime_directory.data(), -1, nullptr, 0, nullptr, nullptr);
+    if (length <= 0 || static_cast<std::size_t>(length) >= kStoredPathCapacity)
+        return Result<RuntimeRootCandidates>::failure(Error::INVALID_ARGUMENT);
+    RuntimeRootCandidates roots{};
+    if (::WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
+            layout.value().runtime_directory.data(), -1, roots.paths[0].data(),
+            static_cast<int>(roots.paths[0].size()), nullptr, nullptr) != length)
+        return Result<RuntimeRootCandidates>::failure(Error::INTERNAL);
+    roots.count = 1U;
+    return Result<RuntimeRootCandidates>::success(std::move(roots));
+}
+
+Result<RuntimeInstanceDiscovery> discover_runtime_instances(
+    const char* runtime_directory, EndpointAccess access) noexcept
+{
+    if (access == EndpointAccess::shared_group)
+        return Result<RuntimeInstanceDiscovery>::failure(Error::UNSUPPORTED);
+    const EndpointConfig probe{runtime_directory, "probe", kControlEndpointName,
+                               EndpointAccess::private_user};
+    const auto layout = make_layout(probe);
+    if (!layout) return Result<RuntimeInstanceDiscovery>::failure(layout.error());
+    const auto runtime = validate_directory(layout.value().runtime_directory, true,
+                                            SecurityPolicy::runtime_client_parent);
+    if (!runtime) return Result<RuntimeInstanceDiscovery>::failure(runtime.error());
+    const auto product = validate_directory(layout.value().product_directory, true,
+                                             SecurityPolicy::private_user);
+    const auto version = validate_directory(layout.value().version_directory, true,
+                                             SecurityPolicy::private_user);
+    if (!product || !version)
+        return Result<RuntimeInstanceDiscovery>::failure(
+            !product ? product.error() : version.error());
+
+    std::array<wchar_t, kStoredPathCapacity> search_path =
+        layout.value().version_directory;
+    std::size_t search_length = std::wcslen(search_path.data());
+    if (!append_component(search_path, search_length, L"*", true))
+        return Result<RuntimeInstanceDiscovery>::failure(Error::INVALID_ARGUMENT);
+    WIN32_FIND_DATAW entry{};
+    const HANDLE search = ::FindFirstFileW(search_path.data(), &entry);
+    if (search == INVALID_HANDLE_VALUE)
+        return Result<RuntimeInstanceDiscovery>::success(RuntimeInstanceDiscovery{});
+
+    RuntimeInstanceDiscovery discovery{};
+    std::array<std::array<char, 65U>, 256U> seen{};
+    std::size_t seen_count = 0U;
+    do {
+        if ((entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0U ||
+            std::wcscmp(entry.cFileName, L".") == 0 ||
+            std::wcscmp(entry.cFileName, L"..") == 0)
+            continue;
+        std::array<char, 65U> name{};
+        if (::WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, entry.cFileName,
+                -1, name.data(), static_cast<int>(name.size()), nullptr, nullptr) <= 0)
+            continue;
+        const std::string_view name_view(name.data());
+        const auto canonical = dtv::userland::identity::canonicalize_instance(name_view);
+        if (!canonical) continue;
+        std::array<char, 65U> token{};
+        std::memcpy(token.data(), canonical.value().bytes.data(),
+                    canonical.value().length);
+        token[canonical.value().length] = '\0';
+        for (std::size_t index = 0U; index < seen_count; ++index) {
+            if (std::strcmp(seen[index].data(), token.data()) == 0) {
+                discovery.canonical_collision = true;
+                (void)::FindClose(search);
+                return Result<RuntimeInstanceDiscovery>::success(discovery);
+            }
+        }
+        if (seen_count >= seen.size()) {
+            (void)::FindClose(search);
+            return Result<RuntimeInstanceDiscovery>::failure(Error::RESOURCE_LIMIT);
+        }
+        seen[seen_count++] = token;
+        if (name_view.size() != canonical.value().length ||
+            std::memcmp(name_view.data(), token.data(), name_view.size()) != 0)
+            continue;
+
+        EndpointConfig endpoint{runtime_directory, token.data(), kControlEndpointName,
+                                EndpointAccess::private_user};
+        const auto candidate = make_layout(endpoint);
+        if (!candidate) continue;
+        const auto instance = validate_directory(candidate.value().instance_directory,
+                                                 true, SecurityPolicy::private_user);
+        if (!instance) continue;
+        const DWORD attributes = ::GetFileAttributesW(candidate.value().endpoint_path.data());
+        if (attributes == INVALID_FILE_ATTRIBUTES ||
+            (attributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0U ||
+            (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0U ||
+            !is_af_unix_reparse_path(candidate.value().endpoint_path.data()) ||
+            !verify_existing_security(candidate.value().endpoint_path.data()))
+            continue;
+        if (discovery.count >= discovery.instances.size()) {
+            (void)::FindClose(search);
+            return Result<RuntimeInstanceDiscovery>::failure(Error::RESOURCE_LIMIT);
+        }
+        discovery.instances[discovery.count++] = token;
+    } while (::FindNextFileW(search, &entry) != 0);
+    (void)::FindClose(search);
+    return Result<RuntimeInstanceDiscovery>::success(discovery);
+}
 
 SerialEndpointLease::~SerialEndpointLease() noexcept
 {
@@ -918,9 +1051,18 @@ Result<SerialEndpointLease> SerialEndpointLease::acquire(
     if (!ensure_winsock()) {
         return Result<SerialEndpointLease>::failure(Error::INTERNAL);
     }
-    if ((observed_serial.size() != 14U && observed_serial.size() != 15U) ||
-        !std::all_of(observed_serial.begin(), observed_serial.end(),
-                     [](char character) { return character >= '0' && character <= '9'; })) {
+    const bool serial_identity =
+        (observed_serial.size() == 14U || observed_serial.size() == 15U) &&
+        std::all_of(observed_serial.begin(), observed_serial.end(),
+                    [](char character) { return character >= '0' && character <= '9'; });
+    const bool topology_identity = observed_serial.size() == 37U &&
+        observed_serial.substr(0U, 5U) == "auto-" &&
+        std::all_of(observed_serial.begin() + 5, observed_serial.end(),
+                    [](char character) {
+                        return (character >= '0' && character <= '9') ||
+                               (character >= 'a' && character <= 'f');
+                    });
+    if (!serial_identity && !topology_identity) {
         return Result<SerialEndpointLease>::failure(Error::INVALID_ARGUMENT);
     }
     const auto layout_result = make_layout(endpoint);
@@ -1091,12 +1233,15 @@ Result<SocketStream> SocketStream::connect(const EndpointConfig& config,
     }
     const Layout& layout = layout_result.value();
     const auto runtime =
-        validate_directory(layout.runtime_directory, true, SecurityPolicy::runtime_parent);
+        validate_directory(layout.runtime_directory, true,
+                           SecurityPolicy::runtime_client_parent);
     const auto product = validate_directory(layout.product_directory, true, SecurityPolicy::private_user);
+    const auto version = validate_directory(layout.version_directory, true, SecurityPolicy::private_user);
     const auto instance = validate_directory(layout.instance_directory, true, SecurityPolicy::private_user);
-    if (!runtime || !product || !instance) {
+    if (!runtime || !product || !version || !instance) {
         const Error error = !runtime ? runtime.error() :
-                            (!product ? product.error() : instance.error());
+                            (!product ? product.error() :
+                             (!version ? version.error() : instance.error()));
         return Result<SocketStream>::failure(error);
     }
     const DWORD attributes = ::GetFileAttributesW(layout.endpoint_path.data());
@@ -1223,17 +1368,25 @@ Result<void> SocketStream::write_frame(ByteView frame, Timeout timeout) noexcept
     if (!decoded) {
         return Result<void>::failure(decoded.error());
     }
+    return write_all(frame, timeout);
+}
+
+Result<void> SocketStream::write_all(ByteView bytes, Timeout timeout) noexcept
+{
+    if (!valid() || (bytes.data == nullptr && bytes.size != 0U)) {
+        return Result<void>::failure(Error::INVALID_ARGUMENT);
+    }
     const Deadline deadline = deadline_after(timeout);
     std::size_t offset = 0U;
     const std::size_t maximum = static_cast<std::size_t>(INT_MAX);
-    while (offset < frame.size) {
-        const int amount = static_cast<int>(std::min(frame.size - offset, maximum));
+    while (offset < bytes.size) {
+        const int amount = static_cast<int>(std::min(bytes.size - offset, maximum));
         const int sent = ::send(static_cast<SOCKET>(fd_),
-                                reinterpret_cast<const char*>(frame.data + offset),
+                                reinterpret_cast<const char*>(bytes.data + offset),
                                 amount, 0);
         if (sent > 0) {
             offset += static_cast<std::size_t>(sent);
-            if (offset < frame.size && deadline_expired(deadline)) {
+            if (offset < bytes.size && deadline_expired(deadline)) {
                 return Result<void>::failure(Error::TIMEOUT);
             }
             continue;
@@ -1282,19 +1435,23 @@ void SocketListener::move_from(SocketListener& other) noexcept
 {
     fd_ = other.fd_;
     product_directory_ = other.product_directory_;
+    version_directory_ = other.version_directory_;
     instance_directory_ = other.instance_directory_;
     endpoint_path_ = other.endpoint_path_;
     product_identity_ = other.product_identity_;
+    version_identity_ = other.version_identity_;
     instance_identity_ = other.instance_identity_;
     endpoint_identity_ = other.endpoint_identity_;
     directory_mode_ = other.directory_mode_;
     socket_mode_ = other.socket_mode_;
     created_product_directory_ = other.created_product_directory_;
+    created_version_directory_ = other.created_version_directory_;
     created_instance_directory_ = other.created_instance_directory_;
     created_endpoint_ = other.created_endpoint_;
 
     other.fd_ = kInvalidHandle;
     other.created_product_directory_ = false;
+    other.created_version_directory_ = false;
     other.created_instance_directory_ = false;
     other.created_endpoint_ = false;
 }
@@ -1313,6 +1470,7 @@ Result<SocketListener> SocketListener::listen(const EndpointConfig& config,
 
     SocketListener listener;
     listener.product_directory_ = layout.product_directory;
+    listener.version_directory_ = layout.version_directory;
     listener.instance_directory_ = layout.instance_directory;
     listener.endpoint_path_ = layout.endpoint_path;
     listener.directory_mode_ = config.access == EndpointAccess::shared_group ?
@@ -1333,6 +1491,14 @@ Result<SocketListener> SocketListener::listen(const EndpointConfig& config,
     }
     listener.product_identity_ = FileIdentity{
         product.value().device, product.value().index, product.value().valid};
+
+    const auto version = ensure_directory(listener.version_directory_, created);
+    listener.created_version_directory_ = created;
+    if (!version) {
+        return Result<SocketListener>::failure(version.error());
+    }
+    listener.version_identity_ = FileIdentity{
+        version.value().device, version.value().index, version.value().valid};
 
     const auto instance = ensure_directory(listener.instance_directory_, created);
     listener.created_instance_directory_ = created;
@@ -1446,6 +1612,11 @@ void SocketListener::cleanup_paths() noexcept
                               FILE_FLAG_BACKUP_SEMANTICS)) {
         (void)::RemoveDirectoryW(instance_directory_.data());
     }
+    if (created_version_directory_ && version_identity_.valid &&
+        identity_matches_path(version_identity_.device, version_identity_.inode,
+                              version_directory_, FILE_FLAG_BACKUP_SEMANTICS)) {
+        (void)::RemoveDirectoryW(version_directory_.data());
+    }
     if (created_product_directory_ && product_identity_.valid &&
         identity_matches_path(product_identity_.device, product_identity_.inode,
                               product_directory_, FILE_FLAG_BACKUP_SEMANTICS)) {
@@ -1454,6 +1625,7 @@ void SocketListener::cleanup_paths() noexcept
     created_endpoint_ = false;
     created_instance_directory_ = false;
     created_product_directory_ = false;
+    created_version_directory_ = false;
 }
 
 void SocketListener::close() noexcept

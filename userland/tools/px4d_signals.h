@@ -24,6 +24,15 @@ void notify_cleanup_complete() noexcept;
 // True once notify_cleanup_complete() has been observed.
 bool cleanup_complete() noexcept;
 
+// Standalone policy for a whole-context cleanup that did not quiesce within
+// its budget: ends this process with status, without returning, flushing
+// stdio, running destructors/atexit handlers or writing diagnostics.  POSIX
+// uses std::_Exit; Windows terminates the current process.  Reaching it does
+// not mean the OS has reaped the process, its pending I/O or other holders of
+// the USB descriptors.  Only the standalone daemon calls it; an embedded
+// context never ends its host process.
+[[noreturn]] void exit_after_close_deadline(int status) noexcept;
+
 }  // namespace px4::userland::px4d
 
 #endif

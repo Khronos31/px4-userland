@@ -41,6 +41,7 @@ WINDOWS_WINSCARD_FUNCTIONS = _audit.WINDOWS_WINSCARD_FUNCTIONS
 WINDOWS_WINSCARD_PCI = _audit.WINDOWS_WINSCARD_PCI
 WINDOWS_TOOLCHAIN_LICENSE_SHA256 = _audit.WINDOWS_TOOLCHAIN_LICENSE_SHA256
 WINDOWS_TOOLCHAIN_LICENSE_NOTICE = _audit.WINDOWS_TOOLCHAIN_LICENSE_NOTICE
+LINUX_RUNTIME_LICENSE_SHA256 = _audit.LINUX_RUNTIME_LICENSE_SHA256
 synthetic_pe = _audit.synthetic_pe
 VERSION_RE = _audit.VERSION_RE
 audit_binaries = _audit.audit_binaries
@@ -235,6 +236,18 @@ def copy_windows_toolchain_licenses(repo_root: Path, stage: Path) -> None:
         destination.chmod(0o644)
 
 
+def copy_linux_runtime_licenses(repo_root: Path, stage: Path) -> None:
+    source_root = repo_root / "distribution" / "licenses"
+    for member, expected in LINUX_RUNTIME_LICENSE_SHA256.items():
+        name = member.removeprefix("toolchain/")
+        source = source_root / name
+        if source.is_symlink() or not source.is_file() or sha256(source) != expected:
+            fail(f"distribution/licenses is missing or differs from the verified runtime license: {name}")
+        destination = stage / member
+        copy_regular(source, destination)
+        destination.chmod(0o644)
+
+
 def render_dependency_notice(repo_root: Path, version: str, platform: str,
                              ndk_revision: str | None = None) -> str:
     template = repo_root / "packaging" / "DEPENDENCY-NOTICE.txt.in"
@@ -248,6 +261,8 @@ def render_dependency_notice(repo_root: Path, version: str, platform: str,
             "dependency.libusb.license=LGPL-2.1-or-later\n"
             f"dependency.libc={libc}\n"
             "dependency.executables=static-musl\n"
+            f"runtime-license-members={','.join(sorted(LINUX_RUNTIME_LICENSE_SHA256))}\n"
+            "runtime-build-metadata=evidence/toolchain-static.properties,evidence/toolchain-ifd.properties\n"
             f"corresponding-source-archive=px4-userland-{version}-source.tar.gz\n\n"
             "Linux production executables are fully static musl ELFs. The PC/SC IFD Handler is a separate "
             f"{libc} shared object loaded by the host pcscd. The libusb source and relink recipe are not in this "
@@ -823,6 +838,11 @@ def main() -> int:
             if not args.ifd_library:
                 fail("--ifd-library is required for Linux")
             copy_regular(args.ifd_library.resolve(), stage / "ifd" / "px4-userland-ifd.so")
+            copy_linux_runtime_licenses(args.repo_root.resolve(), stage)
+            copy_regular(binary_root / "evidence/toolchain-static.properties",
+                         stage / "evidence/toolchain-static.properties")
+            copy_regular(args.ifd_library.resolve().parent / "evidence/toolchain-ifd.properties",
+                         stage / "evidence/toolchain-ifd.properties")
         elif args.platform == "darwin-arm64":
             if not args.ifd_bundle:
                 fail("--ifd-bundle is required for macOS")
