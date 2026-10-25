@@ -26,69 +26,168 @@
 | ID | OS/ABIと必要なruntime/access境界を持つ実行環境シナリオの識別子 | candidate状態、過去実績 | `E` + 番号。4製品で共通するシナリオは同じID、別runtime/access scenarioは別ID |
 | OS / ABI | OS系統、CPU ABI、libcまたはOS runtime | host名、依存、実施状態 | `OS / CPU ABI / libc・runtime` の順。根拠文書にlibc記載がない場合は `未特定` |
 | 依存 / driver / permission | 実行時USB library、OS側USB access手段と権限条件 | firmware、CARD API、検証結果 | `libusb:`、`USB access:`、`FD handoff:` の属性名を使う |
-| firmware / input | 実行時に必要なfirmwareまたは製品入力と放送方式 | archiveへの同梱・埋込完了、candidate実績 | `firmware:` と `input:` を分け、該当しない属性は `なし` |
+| firmware / 補助data | 機器へ渡す実行時firmwareと、RF channelとは別の機種固有データ | RF試験channel、archiveへの同梱・埋込完了、candidate実績 | `firmware:` と `補助data:` を分け、ない属性は `なし` |
+| RF試験入力（system / channel） | 実際に受信させる放送systemと現地channel | firmware、機種data、candidate実績 | `system:` と `channel:`。対応波がない場合は `なし（理由）` |
 | 製品CLIからの内蔵CARD操作 | 製品固有CLI/APIの操作範囲 | PC/SC/WinSCard adapter、実機合否 | 操作名とmodel依存条件。機能なしは `なし` |
 | native PC/SC/WinSCard adapter | その行のOS標準APIへ接続する製品adapterの種類・配布形態 | 製品CLI CARD、adapter実機試験結果、他OSのadapter | OS/ABI行に該当する`Linux PC/SC:`、`macOS PC/SC:`、`Android:`または`Windows WinSCard:`だけを記載 |
-| 配布artifact / 手順 | 対象archive識別子とこの正本内の該当手順 | artifact hash、host、試験結果 | `artifact: <target>; procedure: §...` の順 |
+| 配布artifact / 手順 | 対象archive識別子とこの正本内の該当手順 | artifact hash、host、試験結果 | `artifact: <target>; procedure: §番号` の順 |
 
 共通IDは E02=Linux/x86_64/musl、E03=Linux/x86_64/glibc、E04=macOS/arm64、E05=Android/aarch64、E06=Android/armv7a、E07=Android/x86_64、E15-G=Linux/aarch64/glibc、E15-M=Linux/aarch64/musl、E17=Windows 11/x86_64を表す。IDはhost名や試験済み状態を表さない。
 
-| ID | OS / ABI | 依存 / driver / permission | firmware / input | 製品CLIからの内蔵CARD操作 | native PC/SC/WinSCard adapter | 配布artifact / 手順 |
-|---|---|---|---|---|---|---|
-| E03 | Linux / x86_64 / glibc | libusb: 静的1.0.30; USB access: native OSの許可済み経路 | firmware: model firmware image; input: 対応modelのISDB-T/ISDB-S channel | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Linux PC/SC: libc対応IFD | artifact: `linux-glibc-x86_64`; procedure: §6 |
-| E02 | Linux / x86_64 / musl | libusb: 静的1.0.30; USB access: HAOS Supervisorの許可済み経路 | firmware: model firmware image; input: 対応modelのISDB-T/ISDB-S channel | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Linux PC/SC: libc対応IFD | artifact: `linux-musl-x86_64`; procedure: §6 |
-| E15-G | Linux / aarch64 / glibc | libusb: 静的1.0.30; USB access: native OSの許可済み経路 | firmware: model firmware image; input: 対応modelのISDB-T/ISDB-S channel | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Linux PC/SC: libc対応IFD | artifact: `linux-glibc-aarch64`; procedure: §6 |
-| E15-M | Linux / aarch64 / musl | libusb: 静的1.0.30; USB access: native OSの許可済み経路 | firmware: model firmware image; input: 対応modelのISDB-T/ISDB-S channel | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Linux PC/SC: libc対応IFD | artifact: `linux-musl-aarch64`; procedure: §6 |
-| E04 | macOS / arm64 / Apple system runtime | libusb: 静的1.0.30; USB access: macOSの許可済み経路 | firmware: model firmware image; input: 対応modelのISDB-T/ISDB-S channel | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | macOS PC/SC: bundle | artifact: `darwin-arm64`; procedure: §6 |
-| E05 | Android (Termux) / aarch64 / Android NDK ABI | libusb: 静的1.0.30; USB access: Termux USB permission; FD handoff: daemonへ2 FD | firmware: model firmware image; input: 対応modelのISDB-T/ISDB-S channel | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Android: なし | artifact: `android-aarch64`; procedure: §6 |
-| E06 | Android (Termux) / armv7a / Android NDK ABI | libusb: 静的1.0.30; USB access: Termux USB permission; FD handoff: daemonへ2 FD | firmware: model firmware image; input: 対応modelのISDB-T/ISDB-S channel | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Android: なし | artifact: `android-armv7a`; procedure: §6 |
-| E07 | Android (Termux) / x86_64 / Android NDK ABI | libusb: 静的1.0.30; USB access: Termux USB permission; FD handoff: daemonへ2 FD | firmware: model firmware image; input: 対応modelのISDB-T/ISDB-S channel | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Android: なし | artifact: `android-x86_64`; procedure: §6 |
-| E17 | Windows 11 / x86_64 / Win32 | libusb: 静的1.0.30; USB access: 既存許可済みWinUSB driver | firmware: model firmware image; input: 対応modelのISDB-T/ISDB-S channel | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Windows WinSCard: application-local限定DLL | artifact: `windows-x86_64`; procedure: §6 |
+| ID | OS / ABI | 依存 / driver / permission | firmware / 補助data | RF試験入力（system / channel） | 製品CLIからの内蔵CARD操作 | native PC/SC/WinSCard adapter | 配布artifact / 手順 |
+|---|---|---|---|---|---|---|---|
+| E03 | Linux / x86_64 / glibc | libusb: 静的1.0.30; USB access: native OSの許可済み経路 | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Linux PC/SC: libc対応IFD | artifact: `linux-glibc-x86_64`; procedure: §6 |
+| E02 | Linux / x86_64 / musl | libusb: 静的1.0.30; USB access: HAOS Supervisorの許可済み経路 | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Linux PC/SC: libc対応IFD | artifact: `linux-musl-x86_64`; procedure: §6 |
+| E15-G | Linux / aarch64 / glibc | libusb: 静的1.0.30; USB access: native OSの許可済み経路 | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Linux PC/SC: libc対応IFD | artifact: `linux-glibc-aarch64`; procedure: §6 |
+| E15-M | Linux / aarch64 / musl | libusb: 静的1.0.30; USB access: native OSの許可済み経路 | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Linux PC/SC: libc対応IFD | artifact: `linux-musl-aarch64`; procedure: §6 |
+| E04 | macOS / arm64 / Apple system runtime | libusb: 静的1.0.30; USB access: macOSの許可済み経路 | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | macOS PC/SC: bundle | artifact: `darwin-arm64`; procedure: §6 |
+| E05 | Android (Termux) / aarch64 / Android NDK ABI | libusb: 静的1.0.30; USB access: Termux USB permission; FD handoff: daemonへ2 FD | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Android: なし | artifact: `android-aarch64`; procedure: §6 |
+| E06 | Android (Termux) / armv7a / Android NDK ABI | libusb: 静的1.0.30; USB access: Termux USB permission; FD handoff: daemonへ2 FD | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Android: なし | artifact: `android-armv7a`; procedure: §6 |
+| E07 | Android (Termux) / x86_64 / Android NDK ABI | libusb: 静的1.0.30; USB access: Termux USB permission; FD handoff: daemonへ2 FD | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Android: なし | artifact: `android-x86_64`; procedure: §6 |
+| E17 | Windows 11 / x86_64 / Win32 | libusb: 静的1.0.30; USB access: 既存許可済みWinUSB driver | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Windows WinSCard: application-local限定DLL | artifact: `windows-x86_64`; procedure: §6 |
 
 この表は現行配布targetとnative実行条件の対応である。実際のhost OS/ABI、USB access path、実施結果は各version文書へ記録する。production HAOS上で試験環境を変更する場合は別途承認済み手順に従う。
 
-## 共通試験シナリオ
+## 共通試験シナリオ T00–T14
 
-全製品で同一の列を使う。詳細なPX4 command blockは§0と§6にあり、ここでは各シナリオの実行順と期待/cleanupを固定する。
+各IDを同じ順序・同じ6項目で実施する。$RT/$LOG/$BUS-PORT/$CHANNEL_PLANはrunごとの実値に置換し、空のcandidate専用runtime/logを使う。物理操作を依頼する各回は既定通知を行い、最大5分で応答がなければ未完了として停止する。OS/API固有の長い操作は同じT-IDから後続recipeを参照する。
 
-### A. 列挙と最大同時受信
+### T00 候補/配布物固定
 
-| 適用頻度 / 対象能力 | 準備 / 起動 | 操作 / 利用者への依頼 | 期待値 | 停止 / cleanup | 記録 |
-|---|---|---|---|---|---|
-| 毎release。PX-Q3U4は公開8 receiver、他機種はREADMEの能力 | candidate native archive、firmware、現地USB位置、空のruntimeを用意し`px4d --list-json`で8 receiverを確認 | daemon起動後`px4ctl status/list`。公開receiverを最大同時数で`px4-ts`取得し、stream中status/APDU照会を反復 | 全client exit、各TS/parser、sync/TEI/continuity/drop/USB countersとreceiver statusを確認 | clientとdaemonを正常停止しprocess/FD/IPC残留なし | source/archive SHA、host/ABI、機種/USB、receiver/channel、各exit、TS/counters、cleanup |
+- **適用対象/頻度:** 毎releaseのcandidate作成時。
+- **準備:** source SHA、CI run/attempt、archive targetとhashを固定。POSIX git rev-parse HEAD/sha256sum、Windows Get-FileHashを保存。
+- **実操作/利用者への依頼:** px4d --list-jsonでartifact別実行対象を照合しsource/archive SHAを固定。
+- **期待値/終了値:** provenance/hash一致の候補だけ次へ進む。候補不在は未完了。
+- **停止/cleanup:** deviceを開かず、archive/logを保持。
+- **記録:** source SHA、CI run/attempt、artifact ID/target/hash、取得日時、未取得理由。
 
-### B. CARD抜去・再挿入
+### T01 環境/permission/input
 
-適用: CARD機能を持つ対象profile。daemon起動中、captureを止めた状態で実施する。各抜去/挿入の前に利用者へその物理操作を依頼し、依頼から最大5分待つ。未応答なら該当工程を未完了として停止する。
+- **適用対象/頻度:** 全native archive。初回は全modelごと。
+- **準備:** E-ID/OS/ABI、USB access、firmware/model data、channel planを環境表と照合。
+- **実操作/利用者への依頼:** Linux uname -a/uname -m/ldd --version、macOS sw_vers、Android getprop、Windows §6 E17 PowerShell preflight。
+- **期待値/終了値:** OS/ABIがarchiveに一致し、アクセス許可/入力が揃う。不一致はdevice操作前に止める。
+- **停止/cleanup:** 権限不足やdriver変更が必要なら操作せず未実施記録。
+- **記録:** E-ID/host/OS/ABI/model、USB topology/permission、firmware/data、channel plan。
 
-1. §0.1のX-CARD-HPコマンド群で挿入時の`card-status`/ATR/resetと通常APDUを10回確認する。
-2. 親がカード抜去を依頼する。完了後に`card-status`が`present=no`、`card-atr`/`card-apdu`が`NO_CARD`（exit 9）を確認する。
-3. 親が同じカードの再挿入を依頼する。完了後に`card-status` present、ATR/reset、通常APDU 10回の復帰を確認する。
-4. §0.1のX-STOP/X-RESIDに従いdaemonを正常停止し、process/FD/IPC残留がないことを確認する。
+### T02 列挙/selector/ready
 
-Linux/macOS PC/SC IFDおよびWindows WinSCardはnative stack上で別経路として同じ人間操作を行い、CLI CARD_*の結果で代用しない。記録はATR本文/card ID/APDU payloadを公開せず、status・response class・各exit・cleanupを含める。
+- **適用対象/頻度:** 毎release、対象model/device。
+- **準備:** 候補archiveのlist-json/models入口とdevice selectorを準備しdaemon専用runtimeを作る。
+- **実操作/利用者への依頼:** px4d --list-jsonを保存しUSB IDを選ぶ。px4d --device "$ID" --firmware "$FW" --runtime-dir "$RT"を起動し、px4ctl --device "$ID" --runtime-dir "$RT" statusとlistを実行する。Androidは§6の2-FD起動recipeを使う。
+- **期待値/終了値:** JSON/portが一意、status ready、receiver数が公開能力と一致。不正selectorは成功でない。
+- **停止/cleanup:** daemon通常停止しprocess/FD/IPC/socket残留を確認。
+- **記録:** JSON、selector、status/list、各exit、residual。
 
-### C. USB抜去・再接続
+### T03 最大同時受信
 
-| 適用頻度 / 対象能力 | 準備 / 起動 | 操作 / 利用者への依頼 | 期待値 | 停止 / cleanup | 記録 |
-|---|---|---|---|---|---|
-| 毎release。対応する各USB機種のidle時とstreaming時 | `px4d --list-json`でUSB位置を確定し、idle/activeを別runにする | 各runで親がUSB抜去を依頼し、最大5分待つ。再接続を依頼し、再列挙後に旧daemonを停止して新runtimeで起動する | streaming clientの切断表示/exit 7、client終了と残留なし。新daemonで再列挙・ready・短い再取得を確認し、旧daemon自動復帰を期待しない | §0.1 X-STOP/X-RESIDでclient/daemonを通常停止し、FD/socket/processを確認 | 操作時刻、USB path、client/daemon exit、再列挙/再取得、cleanup |
+- **適用対象/頻度:** 毎release、各modelの公開最大能力。
+- **準備:** 各公開receiver/deviceを一意に割り当て、各clientに別TS出力/ログを用意。
+- **実操作/利用者への依頼:** 各対象modelでpx4ctl --device "$ID" --runtime-dir "$RT" listを実行し、公開receiver数分のpx4-tsを別TS出力で同時起動して各PIDを個別waitする。Q3U4では§0.1 X-LOADの8 receiver（0/1/4/5=S、2/3/6/7=T）を使う。
+- **期待値/終了値:** 各clientの稼働時間が重なり、各exit 0とTS/counter合格。順次取得を同時試験の代用にしない。
+- **停止/cleanup:** 全client通常終了後daemon通常停止、残留なし。
+- **記録:** model/receiver/system/channel、各start/end/exit、TS/counter、cleanup。
 
-### D. teardown・結果
+### T04 不足波/全無料channel
 
-clientを正常終了しdaemonをTERM/SIGINTで通常停止する。終了値、process/FD/runtime endpointを確認する。実施済み/未実施/失敗/対象外はversion別結果へ記録する。
+- **適用対象/頻度:** 毎releaseは不足波。初回/majorは全機種の代表機で全無料channel各10秒。
+- **準備:** 現地channel planとmodel能力から対象system/channel一覧を作る。
+- **実操作/利用者への依頼:** px4-ts --device "$ID" --receiver <R> --system <SYSTEM> --freq <FREQ> [--slot <SLOT>] --runtime-dir "$RT" --time 10 --output <FILE>。
+- **期待値/終了値:** 各対象channelのTS/exit合格。未取得は未完了、非対応波だけ根拠付きN/A。
+- **停止/cleanup:** client wait/exit保存、daemon通常停止。
+- **記録:** model/system/channel/全channel list、TS解析/counter/exit、未取得理由。
 
-Stable releaseは次の順で進める。
+### T05 stream中monitor/control
 
-1. リリース候補のsource commitを固定し、そのcommitからCIでcandidate artifactを作る。
-2. candidate artifactを展開し、必要な全OS/architectureで実機試験と仕様変更の試験を完了する。
-3. 全必要試験と再現性確認の完了後、試験結果を文書へ記録してcommitする。
-4. ユーザーが明示的にノート作成を依頼した後、`release-notes/vX.Y.Z.md` と機械可読記録を確定し、工程3とは別の文書だけの後続commitにする。
-5. 別の「タグ＋リリース」依頼の後だけ、試験結果とノートの両commitを含むcommitにタグを付ける。tag buildと独立した公開workflowが照合・Draft・公開・公開後照合を行う（[`releasing.md`](releasing.md)）。追加のEnvironment手動承認は設けない。commit・push・mergeも各操作のユーザー依頼に従う。
+- **適用対象/頻度:** 毎release。CARD/controlは製品能力に従う。
+- **準備:** capture clientを起動し、別terminalでstatus/list/controlを行えるようにする。
+- **実操作/利用者への依頼:** 受信中に別terminalからpx4ctl --device "$ID" --runtime-dir "$RT" statusとlistを実行し、対応modelでは同CLIのcard-apdu 90:30:00:00:00を10回個別送信して各終了値を保存する。
+- **期待値/終了値:** 照会/control時刻がstreamと対応し各response/exitを保存。機能外操作はN/A。
+- **停止/cleanup:** client/daemonを通常停止し残留確認。
+- **記録:** 照会/control時刻、response class、各exit、streamとの重なり。
 
-工程2の全試験が完了するまではcandidate commitを固定して使う。工程2の完了後、工程3で試験結果を記録するcommitは次工程への移行であり、candidateの差し替えではない。工程3の結果commit後に工程2へ戻って実機試験を繰り返さない。candidateのsource、package、build inputを工程2の完了前に変更した場合は、その変更を含む新candidateをCIで作り、影響する試験を行う。
+### T06 CARD物理挿抜/復帰
 
-全配布archiveを各OS/ABIのnative環境で毎release短時間回帰し、Linux x86_64 glibc代表機では毎release2時間連続受信する。版別文書には実施結果・未達と追加試験だけを記録する。以下のartifact別操作手順を適用するとき、必須操作に総時間上限は設けない。物理抜差しをユーザーに依頼した時点から、その操作への応答を最大5分待つ。各依頼の直前にHAOS側でCodexは`beep`、Claude Codeは`vibe`を実行する。5分を超える連続負荷試験は短時間回帰に混ぜず、共通表の頻度・時間条件に沿うsoakへ分ける。検証状態の語彙は `継承` / `今回再検証` / `未認定` / `対象外` に統一する。
+- **適用対象/頻度:** CARD reader/status対応model。毎release。
+- **準備:** capture停止・daemon維持。初期CARD状態とreader有無を確認。
+- **実操作/利用者への依頼:** daemon維持/capture停止。§0.1 X-CARD-HPでinitial status/ATR/reset/APDU、抜去/再挿入を別依頼し各状態確認。
+- **期待値/終了値:** 抜去後statusはabsent、ATR/APDUはCARD_REMOVEDまたはNO_CARD (exit 9)。再挿入後status/ATR/reset/APDUが復帰し、各通常操作はexit 0。CARD readerを持つmodelに限り実施する。応答なしは未完了。raw ATR等は保存しない。
+- **停止/cleanup:** daemon通常停止、FD/IPC/runtimeを確認。
+- **記録:** 依頼時刻、状態/response/exit、復帰、cleanup。
+
+### T07 USB idle/stream切断と再取得
+
+- **適用対象/頻度:** 毎release。USB対応deviceのidle/streamを別run。
+- **準備:** USB pathをlist-jsonで固定。有限captureとそれより短い観測窓を準備。
+- **実操作/利用者への依頼:** px4d --list-jsonでpath固定、finite capture中に抜去依頼、再接続後新runtime/daemon/短TS。
+- **期待値/終了値:** 切断側のexit 7/診断、新daemon再取得exit 0。time満了exit 0は切断合格でない。
+- **停止/cleanup:** 旧client/daemon stop/wait後に再接続、新daemonも停止。Androidはpermission/FD再取得。
+- **記録:** idle/stream、観測/capture deadline、port/diagnostic/exit、再取得TS/counter。
+
+### T08 通常stop/cleanup
+
+- **適用対象/頻度:** 全test終了時。
+- **準備:** 各owned client/daemon PIDとruntimeを記録してから起動する。
+- **実操作/利用者への依頼:** §0.1 X-STOP/X-RESIDでclient wait、daemon EOF/SIGINT、owned PID cleanup。
+- **期待値/終了値:** 全owned process終了、TS close、FD/IPC/socket/runtime残留なし。timeoutはfail。
+- **停止/cleanup:** 無関係processへsignalしない。test専用runtimeだけ片付け失敗log保持。
+- **記録:** PID/role/exit、process/FD/IPC/socket/runtime、復旧状態。
+
+### T09 TS/counter/exit判定
+
+- **適用対象/頻度:** 全capture/soak。
+- **準備:** TS parser/SPEC条件とdaemon counterを確認できるようにする。
+- **実操作/利用者への依頼:** SPEC parser/sync/TEI/continuity/drop/USB countersを各receiver TSごと確認。
+- **期待値/終了値:** 全TSが製品SPEC基準を満たし通常取得exit 0。非空file/counter 0だけでpassにしない。
+- **停止/cleanup:** 元TS/hash/logを残してT08 cleanup。
+- **記録:** parser/version、TS hash、sync/TEI/continuity/drop/counter、exit。
+
+### T10 native PC/SC/WinSCard
+
+- **適用対象/頻度:** 対応OS/APIのみ。非対応製品は理由付きN/A。
+- **準備:** native OS adapter/consumerとcandidate IFD/DLL pathを用意。
+- **実操作/利用者への依頼:** Linux/macOS native IFDとWindows §6 E17/Windows WinSCard recipeでcandidate DLL、consumer、reader/card transactionを確認。
+- **期待値/終了値:** CLI CARD/CI smokeをnative transaction合格にしない。実consumer/adapter/path/exitが必要。
+- **停止/cleanup:** consumer/isolated pcscd通常停止。system PCSC serviceを変更しない。
+- **記録:** OS/ABI、module/DLL absolute path、consumer、reader/card、operation/exit。
+
+### T11 LNB/非対応拒否
+
+- **適用対象/頻度:** 必要時。給電対応profileだけ実測。
+- **準備:** 対応profile、meter、独立給電の状態を確認。
+- **実操作/利用者への依頼:** profile capability手順で非対応PX-M1URの--lnb-voltage 15拒否exit 3。対応機meter testは指定条件のみ。
+- **期待値/終了値:** 対応はmeter実測、非対応は拒否しGPIO/給電変化なし。
+- **停止/cleanup:** daemon停止、0Vと通常配線復帰。非対応機へ給電しない。
+- **記録:** model/profile、command/exit、meter値/条件、cleanupまたはN/A根拠。
+
+### T12 複数device/daemon/access
+
+- **適用対象/頻度:** 必要時、複数device/selector/access変更時。
+- **準備:** USB port/selectorとinstance/runtimeをdeviceごとに割り当てる。
+- **実操作/利用者への依頼:** px4d --list-jsonから複数pathを識別。曖昧selectorの既存拒否例はexit 2、claim前であることを確認。
+- **期待値/終了値:** device/selector対応一意。別deviceの結果を混同せず、要求時は各sideを独立判定。
+- **停止/cleanup:** 各client/daemon個別wait/stopしFD/IPC/socket確認。
+- **記録:** device/port/PID/runtime、各exit/継続/再取得/access/cleanup。
+
+### T13 soak/頻度
+
+- **適用対象/頻度:** 毎releaseおよび全model初回/major。
+- **準備:** 確定頻度表の対象archive/model/timeをmatrixへ展開する。
+- **実操作/利用者への依頼:** 毎release代表Linux x86_64 glibc 2h/全archive native short; 初回全model全無料channel 10s、macOS/Windows 30m、他ABI 10m。
+- **期待値/終了値:** 指定連続時間完了かつTS条件合格。追加soakは明示ユーザー決定分のみ。
+- **停止/cleanup:** T08通常stopと全resource cleanup。
+- **記録:** model/OS/ABI/archive、時間、TS/counter、FD/RSS、未実施理由。
+
+### T14 failure/release disposition
+
+- **適用対象/頻度:** 全candidate gate完了後。
+- **準備:** source/archive SHAと全T-IDの結果を版別記録へ用意。
+- **実操作/利用者への依頼:** version recordでT-ID/claim結果を分離。failure/未認定をpassにせず正式releaseは別依頼。
+- **期待値/終了値:** failure/unsupported/未実施/環境不能/candidate欠落をpassにしない。
+- **停止/cleanup:** candidateと失敗証拠を保持。tag/releaseは別依頼。
+- **記録:** T-ID、candidate/host/model、state、log、blocker、判定根拠。
+
+N/Aは製品機能上該当しない項目だけに使う。OS/ABI候補のunsupported、candidate欠落、未実施、失敗、環境不能は版別結果で未達とし、passに読み替えない。手順に記した期待値は実測結果ではない。
 
 ## 0. 配布artifact matrixと手順の共通部品
 
