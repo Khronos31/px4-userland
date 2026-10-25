@@ -30,21 +30,21 @@
 | RF試験入力（system / channel） | 実際に受信させる放送systemと現地channel | firmware、機種data、candidate実績 | `system:` と `channel:`。対応波がない場合は `なし（理由）` |
 | 製品CLIからの内蔵CARD操作 | 製品固有CLI/APIの操作範囲 | PC/SC/WinSCard adapter、実機合否 | 操作名とmodel依存条件。機能なしは `なし` |
 | native PC/SC/WinSCard adapter | その行のOS標準APIへ接続する製品adapterの種類・配布形態 | 製品CLI CARD、adapter実機試験結果、他OSのadapter | OS/ABI行に該当する`Linux PC/SC:`、`macOS PC/SC:`、`Android:`または`Windows WinSCard:`だけを記載 |
-| 配布artifact / 手順 | 対象archive識別子とこの正本内の該当手順 | artifact hash、host、試験結果 | `artifact: <target>; procedure: §番号` の順 |
+| 配布artifact / 手順 | 対象archive識別子とこの正本内の該当手順 | artifact hash、host、試験結果 | `artifact: <target>; procedure: [archive別手順](#3-release-archive-procedure)` の順 |
 
 共通IDは E02=Linux/x86_64/musl、E03=Linux/x86_64/glibc、E04=macOS/arm64、E05=Android/aarch64、E06=Android/armv7a、E07=Android/x86_64、E15-G=Linux/aarch64/glibc、E15-M=Linux/aarch64/musl、E17=Windows 11/x86_64を表す。IDはhost名や試験済み状態を表さない。
 
 | ID | OS / ABI | 依存 / driver / permission | firmware / 補助data | RF試験入力（system / channel） | 製品CLIからの内蔵CARD操作 | native PC/SC/WinSCard adapter | 配布artifact / 手順 |
 |---|---|---|---|---|---|---|---|
-| E03 | Linux / x86_64 / glibc | libusb: 静的1.0.30; USB access: native OSの許可済み経路 | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Linux PC/SC: libc対応IFD | artifact: `linux-glibc-x86_64`; procedure: §6 |
-| E02 | Linux / x86_64 / musl | libusb: 静的1.0.30; USB access: HAOS Supervisorの許可済み経路 | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Linux PC/SC: libc対応IFD | artifact: `linux-musl-x86_64`; procedure: §6 |
-| E15-G | Linux / aarch64 / glibc | libusb: 静的1.0.30; USB access: native OSの許可済み経路 | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Linux PC/SC: libc対応IFD | artifact: `linux-glibc-aarch64`; procedure: §6 |
-| E15-M | Linux / aarch64 / musl | libusb: 静的1.0.30; USB access: native OSの許可済み経路 | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Linux PC/SC: libc対応IFD | artifact: `linux-musl-aarch64`; procedure: §6 |
-| E04 | macOS / arm64 / Apple system runtime | libusb: 静的1.0.30; USB access: macOSの許可済み経路 | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | macOS PC/SC: bundle | artifact: `darwin-arm64`; procedure: §6 |
-| E05 | Android (Termux) / aarch64 / Android NDK ABI | libusb: 静的1.0.30; USB access: Termux USB permission; FD handoff: daemonへ2 FD | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Android: なし | artifact: `android-aarch64`; procedure: §6 |
-| E06 | Android (Termux) / armv7a / Android NDK ABI | libusb: 静的1.0.30; USB access: Termux USB permission; FD handoff: daemonへ2 FD | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Android: なし | artifact: `android-armv7a`; procedure: §6 |
-| E07 | Android (Termux) / x86_64 / Android NDK ABI | libusb: 静的1.0.30; USB access: Termux USB permission; FD handoff: daemonへ2 FD | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Android: なし | artifact: `android-x86_64`; procedure: §6 |
-| E17 | Windows 11 / x86_64 / Win32 | libusb: 静的1.0.30; USB access: 既存許可済みWinUSB driver | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Windows WinSCard: application-local限定DLL | artifact: `windows-x86_64`; procedure: §6 |
+| E03 | Linux / x86_64 / glibc | libusb: 静的1.0.30; USB access: native OSの許可済み経路 | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Linux PC/SC: libc対応IFD | artifact: `linux-glibc-x86_64`; procedure: [archive別手順](#3-release-archive-procedure) |
+| E02 | Linux / x86_64 / musl | libusb: 静的1.0.30; USB access: HAOS Supervisorの許可済み経路 | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Linux PC/SC: libc対応IFD | artifact: `linux-musl-x86_64`; procedure: [archive別手順](#3-release-archive-procedure) |
+| E15-G | Linux / aarch64 / glibc | libusb: 静的1.0.30; USB access: native OSの許可済み経路 | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Linux PC/SC: libc対応IFD | artifact: `linux-glibc-aarch64`; procedure: [archive別手順](#3-release-archive-procedure) |
+| E15-M | Linux / aarch64 / musl | libusb: 静的1.0.30; USB access: native OSの許可済み経路 | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Linux PC/SC: libc対応IFD | artifact: `linux-musl-aarch64`; procedure: [archive別手順](#3-release-archive-procedure) |
+| E04 | macOS / arm64 / Apple system runtime | libusb: 静的1.0.30; USB access: macOSの許可済み経路 | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | macOS PC/SC: bundle | artifact: `darwin-arm64`; procedure: [archive別手順](#3-release-archive-procedure) |
+| E05 | Android (Termux) / aarch64 / Android NDK ABI | libusb: 静的1.0.30; USB access: Termux USB permission; FD handoff: daemonへ2 FD | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Android: なし | artifact: `android-aarch64`; procedure: [archive別手順](#3-release-archive-procedure) |
+| E06 | Android (Termux) / armv7a / Android NDK ABI | libusb: 静的1.0.30; USB access: Termux USB permission; FD handoff: daemonへ2 FD | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Android: なし | artifact: `android-armv7a`; procedure: [archive別手順](#3-release-archive-procedure) |
+| E07 | Android (Termux) / x86_64 / Android NDK ABI | libusb: 静的1.0.30; USB access: Termux USB permission; FD handoff: daemonへ2 FD | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Android: なし | artifact: `android-x86_64`; procedure: [archive別手順](#3-release-archive-procedure) |
+| E17 | Windows 11 / x86_64 / Win32 | libusb: 静的1.0.30; USB access: 既存許可済みWinUSB driver | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Windows WinSCard: application-local限定DLL | artifact: `windows-x86_64`; procedure: [archive別手順](#3-release-archive-procedure) |
 
 この表は現行配布targetとnative実行条件の対応である。実際のhost OS/ABI、USB access path、実施結果は各version文書へ記録する。production HAOS上で試験環境を変更する場合は別途承認済み手順に従う。
 
@@ -189,32 +189,28 @@
 
 N/Aは製品機能上該当しない項目だけに使う。OS/ABI候補のunsupported、candidate欠落、未実施、失敗、環境不能は版別結果で未達とし、passに読み替えない。手順に記した期待値は実測結果ではない。
 
-## 0. 配布artifact matrixと手順の共通部品
+## 0. 共通artifact matrixと共通手順
 
-PX4/ASICEN共通の記録構造と空のmatrixは [`release-record.md`](release-record.md) に定める。各行へ候補SHA・CI run/attempt・artifact ID・archive hash、OS/architecture、実際のhost/access path、model/feature、状態・結果・証拠・soak判断を対応付ける。共通形式は以下のPX4固有の試験や機種別受入条件を変更しない。
+各冊の「共通実行環境表」は、Stable release gateで確認する正式配布artifactとnative/canonical runtimeの対応matrixである。環境IDはOS/ABIとUSB access boundaryを識別し、host名や試験状態を表さない。正式な対象archiveはREADME/SPECと各版のmatrixに従う。
 
-全配布artifactのnative短時間確認は以下の各archiveに実施する。代表機での2時間連続試験はLinux x86_64 glibcで行う。AppArmor、usbip、SELinux などの変化は独立した環境IDにせず、その環境のaccess pathとして記録する。各環境のproduct-specificな準備と物理操作は§6に示す。
+| 共通要素 | 役割 |
+|---|---|
+| 環境ID | OS/ABIとruntime/access条件の識別子。host名・実施状態は版別記録に残す。 |
+| 配布artifact matrix | 上の環境表で正式archiveと試験環境を対応付ける。追加の移植性確認環境はこのmatrixへ含めない。 |
+| T00–T14 | 共通の試験項目・操作・期待値・cleanup・記録項目を示す。 |
+| 共通コマンド | CLIやOS固有の実コマンドは製品ごとに異なる。各環境表の「配布artifact / 手順」リンク先と続くrecipeを使い、製品間で同じCLIを仮定しない。 |
+| 状態語彙 | 実施状態は下の共通語彙を版別記録で使う。試験結果の合否とは別に記録する。 |
 
-| ID | 環境 | px4 の位置づけ | 主 artifact / doc |
-|---|---|---|---|
-| E01 | HAOS x86_64 Debian/glibc SCS | canonical runtime（`linux-glibc-x86_64`、container root） | §6 / [validation-results.md](platforms/validation-results.md) |
-| E02 | HAOS x86_64 Alpine/musl add-on | canonical runtime（`linux-musl-x86_64`、Supervisor add-on） | §6 / validation-results.md |
-| E03 | AnduinOS x86_64 | canonical Linux x86_64 runtime | §6 / validation-results.md |
-| E04 | macOS arm64 | canonical runtime（`darwin-arm64`） | §6 / validation-results.md |
-| E05 | Android Termux aarch64 | canonical runtime（`android-aarch64`、2-FD） | §6 / validation-results.md |
-| E06 | Android Termux armv7a | canonical runtime（`android-armv7a`、2-FD） | §6 / validation-results.md |
-| E07 | Bliss OS x86_64 Termux | canonical runtime（`android-x86_64`、2-FD） | §6 / validation-results.md |
-| E08 | Fedora x86_64（SELinux） | historical-only / conditional（`packaging/fedora/**` 変更時） | §6 / [Fedora手順](../packaging/fedora/README.md) |
-| E09 | Gentoo x86_64 | historical-only / conditional | §6 / validation-results.md |
-| E10 | NixOS x86_64 | historical-only / conditional | §6 / [NixOS](platforms/nixos.md) |
-| E11 | Chimera Linux x86_64 | historical-only / conditional | §6 / [Chimera](platforms/chimera-linux.md) |
-| E12 | Alpine x86_64（mdev） | historical-only / conditional（`packaging/mdev/**` 変更時） | §6 / [mdev](platforms/alpine-mdev.md) |
-| E13 | OpenWrt x86_64 | historical-only / conditional | §6 / validation-results.md |
-| E14 | FreeBSD x86_64 | 対象外（SPEC §1・§2の対象外。記録は履歴のみ） | 対象外 |
-| E15-G | Fedora aarch64 | `linux-glibc-aarch64`のnative確認環境例。適用頻度は現行手順を参照 | §6 / validation-results.md |
-| E16 | Debian x86/i386 | source-build-only（i386配布artifactなし） | §6 / [Debian i386](platforms/debian-i686.md) |
-| E17 | Windows 11 x86_64 | `windows-x86_64`のnative確認環境例。PX-Q3U4は0.2.0 candidate `8c40d49`のE17実機matrix、PX-M1UR/PX-S1URは同candidateのWindows profile試験（same-lease retuneは未認定）で`tuner-hardware-verified`／`card-core-hardware-verified`（非ASCII endpoint pathのready行切断は既知の制限 [#52](https://github.com/Khronos31/px4-userland/issues/52)）。他profileは`未認定`（`hardware-unverified`）。0.2.1 candidate `4dbcf335…`のE17 matrixは2026-10-12再検証（下記） | §6 / validation-results.md |
-| — | Android ad-hoc APK | 対象外（dtv-android 所管。本リポジトリの gate に含めない） | 対象外 |
+### 検証状態の共通語彙
+
+| 状態 | 意味 |
+|---|---|
+| `継承` | 同一model・runtime/access path・featureで、artifact同一性または非影響の根拠がある既存証拠を適用する。 |
+| `今回再検証` | 今回のcandidateで対象を実行し、結果を記録する。 |
+| `未認定` | 対象の現行証拠がなく、合格を示せない。 |
+| `対象外` | 製品仕様の対象外に限る。未実施・環境不能・candidate欠落・失敗には使わない。 |
+
+## PX4固有の配布archive手順とコマンド
 
 ### 配布artifact別の短時間実機手順
 
@@ -236,13 +232,7 @@ PX4/ASICEN共通の記録構造と空のmatrixは [`release-record.md`](release-
 
 各artifactの実機確認は列挙、短い受信、カード状態確認、B-CAS抜去/再挿入、USB切断/再接続、復旧確認を順に実行する。これら一連の確認に総時間上限を設けない。5分の上限はユーザーへ物理操作を依頼してから操作が完了するまでの待機だけに適用する。候補archiveのchecksum・展開、APDU、RF/電源/firmware、host準備は検証開始前に済ませる。5分以内に物理操作が行われなければ、その操作を未完了として記録し、物理deviceを使う工程を中断する。5分を超える連続負荷試験は短時間確認に混ぜず、ユーザーが決定するsoakへ分ける。
 
-用語:
-
-- **canonical runtime**: その artifact の実機検証を代表する環境。同一 executable を共有する runtime（例: E01/E02/E03 の Linux x86_64）でも、access path が違えば証拠は自動継承しない。
-- **conditional**: その環境に固有の材料（配布設定、構成手順）を変更したときだけ実行する。
-- **source-build-only**: 配布 artifact を持たず、source archive の native build だけで記録する。
-- **historical-only**: 過去の記録だけがあり、current claim ではない。
-- **unverified**: build/CI は通るが実機 claim がない。
+canonical runtime は、そのartifactの実機確認を代表する環境を指す。同一executableを共有するruntimeでもaccess pathが異なれば、証拠は自動継承しない。
 
 ### 0.1 共通コマンド
 
@@ -459,7 +449,7 @@ done
 
 ### 0.3 receiver 7 参照比較（X-R7REF, 条件付き）
 
-receiver 7 で TEI/continuity burst が出て、SPEC 10.2.6a の比較条件（同一個体・antenna・power・firmware・frequency・duration・同等 capture）を満たす fresh 参照が必要な場合にだけ行う。kernel module を load できる環境（E03 が canonical、E08–E12、E16 も可）で `tsukumijima/px4_drv` を一時 load し、同じ条件で counter を取得した後 unload する。module の load/unload はユーザー確認のうえ実施する。比較条件を再現できない場合は判定保留とし、pass 扱いしない。
+receiver 7 で TEI/continuity burst が出て、SPEC 10.2.6a の比較条件（同一個体・antenna・power・firmware・frequency・duration・同等 capture）を満たす fresh 参照が必要な場合にだけ行う。追加の移植性確認環境でこの比較を行う場合の既存条件は[移植性確認手順](platforms/portability-checks.md)に記録する。kernel module の load/unload はrelease gateの要件に含めない。比較条件を再現できない場合は判定保留とし、pass 扱いしない。
 
 
 ## 1. 候補と前回証拠を固定する
@@ -469,7 +459,7 @@ receiver 7 で TEI/continuity burst が出て、SPEC 10.2.6a の比較条件（�
 3. 対象 claim ごとに `継承`、`今回再検証`、`未認定`、`対象外` のいずれかを記録し、根拠を書く。証拠の軸は SPEC 10.2.8 に従う。別 model、別 OS/runtime、別 access path、別 feature へ結果を外挿しない。同一 model・同一 runtime/access path・同一 feature の証拠は、対象 artifact の bytes が baseline と同一であるか、変更がその path へ影響しないと 10.5.1 の表で判定できる場合に継承できる。未知の影響は affected として扱い、`対象外` は SPEC の対象外または本手順 §0 の対象外に限る。
 4. 前回の適格なlong soakの日付やrelease数は事実情報として記録できるが、エージェントがsoak有無・時間・OSを決める規則として使わない。
 
-Termuxのarchitecture、Termux launcherのFD path、glibc/musl、native PC/SC adapterは別々のruntime/access pathとして扱う。Windows 11 x64（E17）のcandidate適用頻度は該当版のmatrixに従い、WindowsとWinSCardが対象に含まれる版ではnative libusb tuner、CARD_*、WinSCard、実機の物理回帰を以下の手順で行う。CIのbuild/offline test成功は`build-tested`のみを示し、実機matrixが未完了の間は当該行を`未認定`（`hardware-unverified`）として扱う。FreeBSDとAndroid ad-hoc APKは対象外である。変更も新規claimもないpathを毎回試験しない。
+Termuxのarchitecture、Termux launcherのFD path、glibc/musl、native PC/SC adapterは別々のruntime/access pathとして扱う。Windows 11 x64（E17）のcandidate適用頻度は該当版のmatrixに従い、WindowsとWinSCardが対象に含まれる版ではnative libusb tuner、CARD_*、WinSCard、実機の物理回帰を以下の手順で行う。CIのbuild/offline test成功は`build-tested`のみを示し、実機matrixが未完了の間は当該行を`未認定`（`hardware-unverified`）として扱う。追加移植性確認は[移植性確認手順](platforms/portability-checks.md)に分離し、Android ad-hoc APKはdtv-android所管である。変更も新規claimもないpathを毎回試験しない。
 
 影響分類が複数にまたがる、依存範囲が不明、または非影響を証明できない場合は `unknown/ambiguous` として、影響し得るpath集合をユーザーへの説明に含める。選択する短時間実機確認のarchiveは影響判定に関係なくcandidateそのものを使い、適用するarchive/OS頻度は該当版の `docs/release-validation/<version>.md` に従う。
 
@@ -521,7 +511,7 @@ gh run view <run-id> --job <job-id> --log > "$LOG/run-<run-id>-job-<job-id>.log"
 
 比較のために常設の二重build jobや新しい検証スクリプトを追加しない。workflowの再実行はreleaseあたり1回でよい。
 
-## 3. 配布artifactごとの実機短時間確認手順
+## 3. Release archive procedure
 
 適用対象archiveと頻度は該当版のmatrixに従い、選択されたarchiveは §0 の対応行と以下の操作を使ってnative環境で独立に実施する。Windows行はE17のWindows手順に従い、native Windows 11 x64で実施する。必須確認の一連の操作に総時間上限は設けない。B-CAS/USBの物理操作はユーザーが行い、各操作を依頼した時点から最大5分待つ。各物理操作を依頼する直前にHAOS/SCS側でCodexは`beep`、Claude Codeは`vibe`を実行する。各runの記録にはarchive名/SHA-256、source commit、環境ID/OS version/architecture、機種/USB path、実施時刻、コマンド、終了値、card status/generation/ATR/APDU応答、TS/counter、残留の有無を残す。
 
@@ -614,7 +604,7 @@ release限定dispositionを適用する。原試行と追加試験を別々に�
 
 リリースノートには利用者向け変更、短い検証結果、必要な既知制限だけを書く。試験matrix、内部証拠系譜、詳細log、hash一覧は掲載せず、本記録とREADMEへ分離する。
 
-## 6. 環境別手順（E01–E17）
+## 6. 正式artifactの環境別手順
 
 各項は §0.1 の共通部品と次の追加手順で構成する。物理操作（USB/card の抜差し、アンテナ、電源、kernel module blacklist変更）はユーザーが事前確認のうえ実施する。HAOS（E01/E02）は production host であり、Supervisor 状態変更は承認・退避・復元を伴う。サービスを再起動しない。
 
@@ -658,49 +648,12 @@ release限定dispositionを適用する。原試行と追加試験を別々に�
 - 手順: E05 と同じ。初回起動の `TIMEOUT` が起きた場合は初回起動の信頼性を未確定として記録し、合格値に埋めない。launcher に渡した device path を記録する。
 - 選定: `android-x86_64`を現行頻度matrixで選択した場合に使用。
 
-### E08 Fedora x86_64（SELinux, historical-only / conditional）
-
-- 前提: `packaging/fedora/**` または Fedora 構成手順を変更したときだけ実施する。record `29635988c5692eb9167dc082ef0b4c4e7dfb5e04` は履歴であり current claim ではない。
-- 手順: [Fedora 手順](../packaging/fedora/README.md) の手順、offline の `scripts/test-fedora.sh`、SELinux domain、一般ユーザー IPC、PC/SC、`ausearch -m AVC`。
-- 選定: 当該材料の変更時のみ。配布artifactのnative確認環境には含めない。
-
-### E09 Gentoo x86_64（historical-only / conditional）
-
-- 記録は未commit差分に基づくため再現可能な current claim ではない。Gentoo 手順を新設・変更した場合に §0.1 を native build と OpenRC/udev `usb` グループ構成で実施する。それ以外は履歴のみ。
-
-### E10 NixOS x86_64（historical-only / conditional）
-
-- 前提: [NixOS 構成例](platforms/nixos.md)。record `69ae0e056abb1f3a7291c41cb8836d2c4a2bde1e` は履歴。
-- 手順: §0.1 を native build で行い、宣言的 blacklist/udev を確認する。選定: 構成手順の変更時のみ。
-
-### E11 Chimera Linux x86_64（historical-only / conditional）
-
-- 前提: [Chimera 構成例](platforms/chimera-linux.md)。record `3e6e32a107566689a9b4bf223dca1e4e89f67cfa` は履歴。
-- 手順: §0.1 を Clang/musl native build で行い、8 receiver と direct APDU を確認する。選定: 構成手順の変更時のみ。
-
-### E12 Alpine x86_64 / mdev（historical-only / conditional）
-
-- 前提: [Alpine/mdev 構成例](platforms/alpine-mdev.md)。`packaging/mdev/**` は配布物に含まれるため、変更時はこの環境を実施する。offline の `scripts/test-mdev.sh` も使う。record `69ae0e056abb1f3a7291c41cb8836d2c4a2bde1e` は履歴。
-- 手順: `mdev -s`、非root 実行、8 receiver、direct APDU、cleanup。選定: `packaging/mdev/**` または構成手順の変更時のみ。
-
-### E13 OpenWrt x86_64（historical-only / conditional）
-
-- record は `29635988c5692eb9167dc082ef0b4c4e7dfb5e04` と同内容で、OpenWrt 向けソース修正はない。OpenWrt 手順を新設・変更した場合にだけ実施する。record なしのため current claim にしない。
-
-### E14 FreeBSD x86_64（対象外）
-
-SPEC §1 の対象環境（Linux、Android、macOS）に含まれないため 対象外。validation-results.md の FreeBSD record は履歴であり、release gate・canary・long soak に含めない。
-
 ### E15-G / E15-M Linux aarch64（glibc / musl native確認環境）
 
 - E15-G は `linux-glibc-aarch64` のnative確認環境、E15-M はnative Fedora host上のAlpine arm64/musl runtimeを表す。過去record `df6a1e634e5bec11961a1f0f15eedd1da22f7fee`はbaselineであり、candidateごとの短時間確認を代替しない。
 - 手順: 適用matrixに含む際はnative `linux-glibc-aarch64` candidateで列挙・受信・USB抜差し・再接続後の受信を行う。`uname -r`、`getenforce`を記録する。新たなhardware claimの認定はSPEC 10.3に従い別途行い、kernelを記録してclaimをそのkernelに限定する。
 - `linux-musl-aarch64`を現行頻度matrixで選択する場合は、同じnative Fedora aarch64 host上のAlpine arm64 Docker containerでcandidate artifactを実行する。CPU emulationを使わず、対象tunerの物理USB deviceをcontainerへ渡す。glibc確認とは別のrunとして記録する。
 - 選定: `linux-glibc-aarch64`を現行頻度matrixで選択した場合に使用。
-
-### E16 Debian x86/i386（source-build-only）
-
-- i386 配布 artifact は存在しない。source archive を native build し、CTest と Q3U4 の T/S 同時受信、内蔵 card APDU を確認する（[Debian i386](platforms/debian-i686.md)）。record は Stable `v0.1.3` source archive であり履歴。選定: 該当構成手順の変更時のみ。
 
 ### E17 Windows 11 x86_64（Windows archive native確認・Phase 1/2）
 
