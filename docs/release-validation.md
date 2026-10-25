@@ -118,11 +118,11 @@
 ### T07 USB idle/stream切断と再取得
 
 - **適用対象/頻度:** 毎release。USB対応deviceのidle/streamを別run。
-- **準備:** USB pathをlist-jsonで固定。有限captureとそれより短い観測窓を準備。
-- **実操作/利用者への依頼:** px4d --list-jsonでpath固定、finite capture中に抜去依頼、再接続後新runtime/daemon/短TS。
-- **期待値/終了値:** 切断側のexit 7/診断、新daemon再取得exit 0。time満了exit 0は切断合格でない。
-- **停止/cleanup:** 旧client/daemon stop/wait後に再接続、新daemonも停止。Androidはpermission/FD再取得。
-- **記録:** idle/stream、観測/capture deadline、port/diagnostic/exit、再取得TS/counter。
+- **準備:** `px4d --list-json`でUSB pathを特定し、streamなしのdaemonを起動してstatus/list、daemon PIDとUSB owner状態を記録する。有限capture時間を明示設定する。
+- **実操作/利用者への依頼:** daemon保持中のidleに利用者へ抜去を依頼し、応答後にstatus/list、daemon診断と実際の終了値を採取する。daemonを通常停止し、再接続を依頼して再列挙したpathで新runtime/daemonを起動し、status/listと短い`px4-ts` captureを実行する。別runではfinite capture中に抜去を依頼し、client/daemon診断と各実終了値を採取する。
+- **期待値/終了値:** idle時は保持中USBの切断がstatus/診断に現れ、process終了値は実値を記録する。stream時は切断診断とclient exit 7を確認する。time満了exit 0は切断合格でない。新daemonの短TSはexit 0とTS/counter合格。
+- **停止/cleanup:** idle/streamそれぞれでowned client/daemonを通常停止してwaitし、再接続後の新daemonも通常停止する。Androidはpermission/FD再取得。
+- **記録:** idle/stream、daemon USB owner状態、依頼/応答時刻、path、status/診断、各実終了値、再取得TS/counter、cleanup。
 
 ### T08 通常stop/cleanup
 
