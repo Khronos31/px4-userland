@@ -157,7 +157,7 @@ PX4の通常の無指定時検証機種はPX-Q3U4だが、機種初回の対象�
 
 - **適用対象/頻度:** 対応OS/APIのみ。非対応製品は理由付きN/A。
 - **準備:** native OS adapter/consumerとcandidate IFD/DLL pathを用意。
-- **実操作/利用者への依頼:** Linux native IFD、macOS E04「native PC/SC」およびWindows §6 E17/Windows WinSCard recipeでcandidate DLL/bundle、consumer、reader/card transactionを確認。
+- **実操作/利用者への依頼:** Linux native IFD、macOS E04 [native PC/SC](#e04-macos-native-pcsc)およびWindows §6 E17/Windows WinSCard recipeでcandidate DLL/bundle、consumer、reader/card transactionを確認。
 - **期待値/終了値:** CLI CARD/CI smokeをnative transaction合格にしない。実consumer/adapter/path/exitが必要。
 - **停止/cleanup:** consumer/isolated pcscd通常停止。system PCSC serviceを変更しない。
 - **記録:** OS/ABI、module/DLL absolute path、consumer、reader/card、operation/exit。
