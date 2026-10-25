@@ -144,13 +144,19 @@ wait "$R7"; echo "$?" > "$LOG/r7.rc"
 
 受信中の監視は別の端末で実行する。shell変数は端末間で引き継がれないため、起動端末に表示されたcandidate展開先 `$D`、device selector `$ID`、`$INSTANCE`、`$RT` と同じ実値をこの端末にも設定する。
 
+PX4の`card-apdu HEX`は単発送信である。反復確認は既存標準照会を通常コマンドで10回実行する。
+
 ```sh
 D=<candidate-directory>
 ID=usb:<BUS-PORT>
 INSTANCE=<instance-token>
 RT=<same-runtime-directory-as-startup-terminal>
+LOG=<same-private-log-directory>
 "$D/px4ctl" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" status
-"$D/px4ctl" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" card-apdu 90:30:00:00:00 --repeat 10
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  if "$D/px4ctl" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" card-apdu 90:30:00:00:00 > "$LOG/card-$i.apdu"; then rc=0; else rc=$?; fi
+  echo "$rc" > "$LOG/card-$i.rc"
+done
 ```
 
 FD/RSSも記録する。受信確認の実行時間は30秒で、全手順やartifact gateの所要時間を制限しない。
@@ -185,7 +191,10 @@ APDU=90:30:00:00:00
 "$CTL" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" card-status | tee "$LOG/card-before.txt"
 "$CTL" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" card-atr > "$LOG/card-before.atr"
 "$CTL" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" card-reset > "$LOG/card-before.reset"
-"$CTL" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" card-apdu "$APDU" --repeat 10 > "$LOG/card-before.apdu"
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  if "$CTL" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" card-apdu "$APDU" > "$LOG/card-before-$i.apdu"; then rc=0; else rc=$?; fi
+  echo "$rc" > "$LOG/card-before-$i.rc"
+done
 ```
 
 カード抜去を要求する前にHAOS/SCS側で通知する:
@@ -216,7 +225,10 @@ beep   # Codex。Claude Codeは vibe
 "$CTL" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" card-status | tee "$LOG/card-reinserted.txt"
 "$CTL" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" card-atr > "$LOG/card-reinserted.atr"
 "$CTL" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" card-reset > "$LOG/card-reinserted.reset"
-"$CTL" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" card-apdu "$APDU" --repeat 10 > "$LOG/card-reinserted.apdu"
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  if "$CTL" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" card-apdu "$APDU" > "$LOG/card-reinserted-$i.apdu"; then rc=0; else rc=$?; fi
+  echo "$rc" > "$LOG/card-reinserted-$i.rc"
+done
 ```
 
 判定: `card-status`の`present=no`とreader generationの変化、ATR/APDUの`NO_CARD`・exit 9を確認する。再挿入時は`present=yes`となりgenerationが再度変化し、ATR取得・reset・APDU 10回が成功することを確認する（過去の正常応答はSW `90 00`）。その後§0.1の8 receiverを30秒実行し、TS/counter条件はSPEC 10.2に従う。カード抜去・再挿入ができない場合、そのartifactの短時間gateは未完了。
@@ -270,8 +282,11 @@ wait "$P"
 旧daemonがすでに終了している場合は`pgrep -fl '[p]x4d'`で残留がないことを確認する。どちらの場合も旧daemonを再利用せず、X-STARTのコマンド群を同じcandidate artifact・device ID・instance・runtime dirで再実行し、`"$D/px4ctl" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" status`でreadyを確認する。その後§0.1の8 receiver 30秒確認と、次のAPDU確認を行う:
 
 ```sh
-"$D/px4ctl" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" card-apdu 90:30:00:00:00 --repeat 10 \
-  > "$LOG/card-after-usb-reconnect.apdu"
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  if "$D/px4ctl" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" card-apdu 90:30:00:00:00 \
+    > "$LOG/card-after-usb-reconnect-$i.apdu"; then rc=0; else rc=$?; fi
+  echo "$rc" > "$LOG/card-after-usb-reconnect-$i.rc"
+done
 ```
 
 終了後にX-STOP / X-RESIDでdaemon/client process、FD、IPC socket/control endpointの残留がないことを確認する。USB切断・再接続ができない場合、そのartifactの短時間gateは未完了。
@@ -753,8 +768,10 @@ SPEC §1 の対象環境（Linux、Android、macOS）に含まれないため �
       (& "$D\px4ctl.exe" --device $ID --runtime-dir $RT $op 2>> "$LOG\card.err") | Out-File "$LOG\$op.txt"
       "$LASTEXITCODE" | Out-File "$LOG\$op.rc"
     }
-    (& "$D\px4ctl.exe" --device $ID --runtime-dir $RT card-apdu 90:30:00:00:00 --repeat 10 2>> "$LOG\card.err") | Out-File "$LOG\card-apdu.txt"
-    "$LASTEXITCODE" | Out-File "$LOG\card-apdu.rc"
+    1..10 | ForEach-Object {
+      (& "$D\px4ctl.exe" --device $ID --runtime-dir $RT card-apdu 90:30:00:00:00 2>> "$LOG\card.err") | Out-File "$LOG\card-$_.apdu"
+      "$LASTEXITCODE" | Out-File "$LOG\card-$_.rc"
+    }
   } catch {
     $primary = $_
   } finally {
