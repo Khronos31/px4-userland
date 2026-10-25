@@ -157,7 +157,7 @@ PX4の通常の無指定時検証機種はPX-Q3U4だが、機種初回の対象�
 
 - **適用対象/頻度:** 対応OS/APIのみ。非対応製品は理由付きN/A。
 - **準備:** native OS adapter/consumerとcandidate IFD/DLL pathを用意。
-- **実操作/利用者への依頼:** Linux/macOS native IFDとWindows §6 E17/Windows WinSCard recipeでcandidate DLL、consumer、reader/card transactionを確認。
+- **実操作/利用者への依頼:** Linux native IFD、macOS E04「native PC/SC」およびWindows §6 E17/Windows WinSCard recipeでcandidate DLL/bundle、consumer、reader/card transactionを確認。
 - **期待値/終了値:** CLI CARD/CI smokeをnative transaction合格にしない。実consumer/adapter/path/exitが必要。
 - **停止/cleanup:** consumer/isolated pcscd通常停止。system PCSC serviceを変更しない。
 - **記録:** OS/ABI、module/DLL absolute path、consumer、reader/card、operation/exit。
@@ -657,9 +657,114 @@ release限定dispositionを適用する。原試行と追加試験を別々に�
 
 ### E04 macOS arm64（基準darwin環境）
 
-- 前提: `shasum -a 256 -c SHA256SUMS`。`otool -L` で libusb dylib と macOS system 以外の依存がないことを確認する。`sw_vers` を記録する。PC/SC は Homebrew `pcsc-lite` と `ifd/px4-userland-ifd.bundle` を使う。
+- 前提: T00でcandidate archiveのmanifestを`shasum -a 256 -c SHA256SUMS`で照合する。`otool -L` で libusb dylib と macOS system 以外の依存がないことを確認する。`sw_vers` を記録する。PC/SCは以下の隔離手順でHomebrew `pcsc-lite`とcandidateの`ifd/px4-userland-ifd.bundle`を使う。
 - 手順: §0.1（`stat -f %z`、`lsof -p`、`ps -o rss=` を用いる）。`darwin-arm64` を使う。
 - 選定: `darwin-arm64`を現行頻度matrixで選択した場合に使用。
+
+#### E04 macOS native PC/SC
+
+T10のnative consumerは以下を今回candidateごとに実施する。過去E04 recordは環境例であり、今回のcandidate合格に流用しない。T00で固定した`release-candidate` runから配布archiveとmanifestを取得する。
+
+```sh
+set -eu
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/px4-pcsc.XXXXXX"); chmod 700 "$WORK"
+RUN_ID='<candidate-release-run-id>'
+gh run download "$RUN_ID" --repo Khronos31/px4-userland --name release-candidate --dir "$WORK/download"
+cd "$WORK/download"; shasum -a 256 -c SHA256SUMS
+ARCHIVE='<darwin-arm64 archive filename from this candidate>'
+mkdir "$WORK/candidate"; tar -xzf "$ARCHIVE" -C "$WORK/candidate"; D="$WORK/candidate"
+brew list --versions pcsc-lite >/dev/null 2>&1 || brew install pcsc-lite
+brew list --versions pcsc-tools >/dev/null 2>&1 || brew install pcsc-tools
+brew list --versions pkgconf >/dev/null 2>&1 || brew install pkgconf
+BREW_PREFIX=$(brew --prefix); PCSC_PREFIX=$(brew --prefix pcsc-lite); PCSC_TOOLS_PREFIX=$(brew --prefix pcsc-tools); IPC_ROOT="$BREW_PREFIX/var/run"
+if [ -d "$IPC_ROOT" ] && find "$IPC_ROOT" -maxdepth 1 \( -type s -o -name 'pcscd.pid' \) -print | grep -q .; then
+  echo 'Homebrew PC/SC IPC is occupied; stop without touching that service.' >&2; exit 1
+fi
+if lsof -nU 2>/dev/null | grep -F "$IPC_ROOT/"; then
+  echo 'Homebrew PC/SC IPC has an owner; stop without service intervention.' >&2; exit 1
+fi
+export LIBPCSCLITE_DELEGATE="$PCSC_PREFIX/lib/libpcsclite_real.1.dylib"
+test -f "$LIBPCSCLITE_DELEGATE"
+export DYLD_LIBRARY_PATH="$PCSC_PREFIX/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+export PKG_CONFIG_PATH="$PCSC_PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+mkdir -m 700 "$WORK/runtime" "$WORK/reader.conf.d" "$WORK/log"
+RT="$WORK/runtime"; LOG="$WORK/log"; SERIAL='<14-digit-base-serial-from-px4d-list-json>'; FW='<verified firmware file path>'
+"$D/px4d" --list-json > "$LOG/discovery.json"
+"$D/px4d" --device "serial:$SERIAL" --instance pcsc --firmware "$FW" --runtime-dir "$RT" > "$LOG/px4d.log" 2>&1 & PX4D_PID=$!
+printf '%s\n' "$PX4D_PID" > "$LOG/px4d.pid"
+sed -e "s|@PX4_RUNTIME_DIR@|$RT|g" -e "s|@PX4_BASE_SERIAL@|$SERIAL|g" \
+  -e "s|@PX4_IFD_LIBRARY@|$D/ifd/px4-userland-ifd.bundle|g" -e 's|@PX4_ACCESS@|user|g' \
+  "$D/reader.conf.d/px4-userland.conf" > "$WORK/reader.conf.d/px4-userland.conf"
+"$PCSC_PREFIX/sbin/pcscd" --foreground --debug --config "$WORK/reader.conf.d" > "$LOG/pcscd.log" 2>&1 & PCSC_PID=$!
+printf '%s\n' "$PCSC_PID" > "$LOG/pcscd.pid"
+```
+
+Homebrew `pcsc-lite`の固定IPCが占有されている場合は既存process/socketに介入せず未実施で止める。Apple PCSC.framework / launchd serviceは停止・変更しない。Homebrew clientとdaemonを使い、別socket名の指定だけでdaemon IPCを隔離できるとは扱わない。
+
+以下のhere-docでreader指定可能なnative consumerを作成し、標準APIでreader列挙、接続、status、APDU送信を行う。raw ATR、card ID、APDU response本文は出力しない。
+
+```sh
+cat > "$WORK/pcsc-probe.cpp" <<'CPP'
+#include <PCSC/winscard.h>
+#include <cstring>
+#include <iostream>
+#include <string>
+int main(int argc, char **argv) {
+  SCARDCONTEXT c = 0; SCARDHANDLE h = 0; int result = 1;
+  if (argc != 2) return 64;
+  do {
+    if (SCardEstablishContext(SCARD_SCOPE_USER, nullptr, nullptr, &c) != SCARD_S_SUCCESS) break;
+    DWORD n = SCARD_AUTOALLOCATE; LPSTR names = nullptr;
+    if (SCardListReaders(c, nullptr, (LPSTR)&names, &n) != SCARD_S_SUCCESS) break;
+    std::string reader; int matches = 0;
+    for (char *p = names; *p; p += std::strlen(p) + 1) if (std::string(p).find(argv[1]) != std::string::npos) { reader = p; ++matches; }
+    SCardFreeMemory(c, names);
+    if (matches != 1) { result = 2; break; }
+    DWORD active = 0;
+    if (SCardConnect(c, reader.c_str(), SCARD_SHARE_SHARED, SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1, &h, &active) != SCARD_S_SUCCESS) { result = 3; break; }
+    DWORD state = 0, protocol = 0, rn = 256, an = 64; char r[256]; BYTE atr[64];
+    if (SCardStatus(h, r, &rn, &state, &protocol, atr, &an) != SCARD_S_SUCCESS || state != SCARD_STATE_PRESENT || an == 0) { result = 4; break; }
+    const BYTE cmd[] = {0x90,0x30,0x00,0x00,0x00}; BYTE response[258];
+    const SCARD_IO_REQUEST *pci = active == SCARD_PROTOCOL_T0 ? SCARD_PCI_T0 : SCARD_PCI_T1;
+    result = 0;
+    for (int i = 0; i < 10; ++i) { DWORD len = sizeof(response); if (SCardTransmit(h, pci, cmd, sizeof(cmd), nullptr, response, &len) != SCARD_S_SUCCESS) { result = 5; break; } if (len < 2 || response[len-2] != 0x90 || response[len-1] != 0x00) { result = 6; break; } }
+    if (result == 0) std::cout << "reader_match=1 card_present=1 apdu_sw9000=10\n";
+  } while (false);
+  if (h && SCardDisconnect(h, SCARD_LEAVE_CARD) != SCARD_S_SUCCESS && result == 0) result = 7;
+  if (c && SCardReleaseContext(c) != SCARD_S_SUCCESS && result == 0) result = 7;
+  std::cout << "probe_exit=" << result << "\n"; return result;
+}
+CPP
+```
+
+```sh
+c++ -std=c++17 $(pkg-config --cflags libpcsclite) "$WORK/pcsc-probe.cpp" $(pkg-config --libs libpcsclite) -o "$WORK/pcsc-probe"
+for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+  if "$PCSC_TOOLS_PREFIX/bin/pcsc_scan" -r > "$LOG/readers.txt" 2>&1 && grep -Fq "PX4 userland ($SERIAL)" "$LOG/readers.txt"; then break; fi
+  sleep 1
+done
+grep -F "PX4 userland ($SERIAL)" "$LOG/readers.txt"
+if "$WORK/pcsc-probe" "PX4 userland ($SERIAL)" > "$LOG/probe.txt" 2>&1; then PROBE_RC=0; else PROBE_RC=$?; fi
+printf '%s\n' "$PROBE_RC" > "$LOG/probe.rc"
+```
+
+合格は今回candidate bundleのpathがpcscd logにあり、readerが一意、probe exit 0、card present、APDU 10回全てSW `90 00`、出力`reader_match=1 card_present=1 apdu_sw9000=10`を満たすこと。exit 1=API/context、2=reader不一致、3=connect、4=status/card、5=transmit、6=SW不一致、7=release/disconnect、64=引数不正で、0以外は未達とする。reader名・終了値・成功件数のみ保存する。
+
+```sh
+date -u +%FT%TZ > "$LOG/pcscd.stop-requested-at"
+if kill -INT "$PCSC_PID" 2>/dev/null; then :; fi
+if wait "$PCSC_PID"; then PCSC_RC=0; else PCSC_RC=$?; fi
+printf '%s\n' "$PCSC_RC" > "$LOG/pcscd.rc"
+date -u +%FT%TZ > "$LOG/px4d.stop-requested-at"
+if kill -INT "$PX4D_PID" 2>/dev/null; then :; fi
+if wait "$PX4D_PID"; then PX4D_RC=0; else PX4D_RC=$?; fi
+printf '%s\n' "$PX4D_RC" > "$LOG/px4d.rc"
+if ps -p "$PCSC_PID,$PX4D_PID" -o pid=,stat=,command= > "$LOG/processes-after-stop.txt"; then PROCESS_RC=0; else PROCESS_RC=$?; fi
+printf '%s\n' "$PROCESS_RC" > "$LOG/processes-after-stop.rc"
+find "$WORK" \( -type s -o -type p \) -print > "$LOG/ipc-remnants.txt"
+```
+
+consumer終了後、記録済みの自分のPIDだけを停止し、各終了値を別記録する。process/socket/runtimeが残った場合は削除せずcleanup未達とする。正常cleanup確認後もcandidate、log、probe sourceは結果保存まで保持する。
 
 ### E05 Android Termux aarch64（基準android-aarch64、2-FD）
 
