@@ -19,17 +19,31 @@
 
 ## 共通実行環境表
 
+### 環境表データ辞書
+
+| 列 | 意味・含める属性 | 含めない属性 | 表記・許容値 |
+|---|---|---|---|
+| ID | OS/ABIと必要なruntime/access境界を持つ実行環境シナリオの識別子 | candidate状態、過去実績 | `E` + 番号。4製品で共通するシナリオは同じID、別runtime/access scenarioは別ID |
+| OS / ABI | OS系統、CPU ABI、libcまたはOS runtime | host名、依存、実施状態 | `OS / CPU ABI / libc・runtime` の順。根拠文書にlibc記載がない場合は `未特定` |
+| 依存 / driver / permission | 実行時USB library、OS側USB access手段と権限条件 | firmware、CARD API、検証結果 | `libusb:`、`USB access:`、`FD handoff:` の属性名を使う |
+| firmware / input | 実行時に必要なfirmwareまたは製品入力と放送方式 | archiveへの同梱・埋込完了、candidate実績 | `firmware:` と `input:` を分け、該当しない属性は `なし` |
+| 製品CLIからの内蔵CARD操作 | 製品固有CLI/APIの操作範囲 | PC/SC/WinSCard adapter、実機合否 | 操作名とmodel依存条件。機能なしは `なし` |
+| native PC/SC/WinSCard adapter | OS標準APIへ接続する製品adapterの種類・配布形態 | 製品CLI CARD、adapter実機試験結果 | `Linux PC/SC:`、`macOS PC/SC:`、`Android:`、`Windows WinSCard:` を列挙 |
+| 配布artifact / 手順 | 対象archive識別子とこの正本内の該当手順 | artifact hash、host、試験結果 | `artifact: <target>; procedure: §...` の順 |
+
+共通IDは E02=Linux/x86_64/musl、E03=Linux/x86_64/glibc、E04=macOS/arm64、E05=Android/aarch64、E06=Android/armv7a、E07=Android/x86_64、E15-G=Linux/aarch64/glibc、E15-M=Linux/aarch64/musl、E17=Windows 11/x86_64を表す。IDはhost名や試験済み状態を表さない。
+
 | ID | OS / ABI | 依存 / driver / permission | firmware / input | 製品CLIからの内蔵CARD操作 | native PC/SC/WinSCard adapter | 配布artifact / 手順 |
 |---|---|---|---|---|---|---|
-| E03 | AnduinOS Linux x86_64 / glibc | native host、USB access pathを記録 | firmware image、地上/衛星入力 | 製品CLI CARD APIを機種別に確認 | Linux PC/SC IFDを別途確認 | `linux-glibc-x86_64` / §6 |
-| E02 | HAOS Alpine Linux x86_64 / musl | native/static runtime、Supervisor USB access path | firmware image、地上/衛星入力 | 製品CLI CARD APIを機種別に確認 | musl PC/SC IFDを別途確認 | `linux-musl-x86_64` / §6 |
-| E15-G | Fedora Linux aarch64 / glibc | native aarch64、USB access path | firmware image、地上/衛星入力 | 製品CLI CARD APIを機種別に確認 | Linux PC/SC IFDを別途確認 | `linux-glibc-aarch64` / §6 |
-| E15-M | native Linux aarch64 / musl | native aarch64、Alpine runtime、emulationなし | firmware image、地上/衛星入力 | 製品CLI CARD APIを機種別に確認 | musl PC/SC IFDを別途確認 | `linux-musl-aarch64` / §6 |
-| E04 | macOS arm64 | libusb/USB permissionを記録 | firmware image、地上/衛星入力 | 製品CLI CARD APIを機種別に確認 | macOS PC/SC IFDを別途確認 | `darwin-arm64` / §6 |
-| E05 | Android Termux aarch64 | Termux USB permission、2-FD launcher | firmware image、地上/衛星入力 | CARD CLI/APIあり。candidateは機種/ABIごとに実機確認 | Android native adapter未提供 | `android-aarch64` / §6 |
-| E06 | Android Termux armv7a | Termux USB permission、2-FD launcher | firmware image、地上/衛星入力 | CARD CLI/APIあり。candidateは機種/ABIごとに実機確認 | Android native adapter未提供 | `android-armv7a` / §6 |
-| E07 | BlissOS Termux x86_64 | Termux USB permission、2-FD launcher | firmware image、地上/衛星入力 | CARD CLI/APIあり。candidateは機種/ABIごとに実機確認 | Android native adapter未提供 | `android-x86_64` / §6 |
-| E17 | Windows 11 x86_64 | 現在許可されたUSB driverを記録し変更しない | firmware image、地上/衛星入力 | 製品CLI CARD APIを機種別に確認 | native WinSCardを別途確認 | `windows-x86_64` / §6 |
+| E03 | Linux / x86_64 / glibc | libusb: 静的1.0.30; USB access: native OSの許可済み経路 | firmware: model firmware image; input: 対応modelのISDB-T/ISDB-S channel | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Linux PC/SC: libc対応IFD; macOS PC/SC: bundle; Android: なし; Windows WinSCard: application-local限定DLL | artifact: `linux-glibc-x86_64`; procedure: §6 |
+| E02 | Linux / x86_64 / musl | libusb: 静的1.0.30; USB access: HAOS Supervisorの許可済み経路 | firmware: model firmware image; input: 対応modelのISDB-T/ISDB-S channel | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Linux PC/SC: libc対応IFD; macOS PC/SC: bundle; Android: なし; Windows WinSCard: application-local限定DLL | artifact: `linux-musl-x86_64`; procedure: §6 |
+| E15-G | Linux / aarch64 / glibc | libusb: 静的1.0.30; USB access: native OSの許可済み経路 | firmware: model firmware image; input: 対応modelのISDB-T/ISDB-S channel | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Linux PC/SC: libc対応IFD; macOS PC/SC: bundle; Android: なし; Windows WinSCard: application-local限定DLL | artifact: `linux-glibc-aarch64`; procedure: §6 |
+| E15-M | Linux / aarch64 / musl | libusb: 静的1.0.30; USB access: native OSの許可済み経路 | firmware: model firmware image; input: 対応modelのISDB-T/ISDB-S channel | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Linux PC/SC: libc対応IFD; macOS PC/SC: bundle; Android: なし; Windows WinSCard: application-local限定DLL | artifact: `linux-musl-aarch64`; procedure: §6 |
+| E04 | macOS / arm64 / Apple system runtime | libusb: 静的1.0.30; USB access: macOSの許可済み経路 | firmware: model firmware image; input: 対応modelのISDB-T/ISDB-S channel | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Linux PC/SC: libc対応IFD; macOS PC/SC: bundle; Android: なし; Windows WinSCard: application-local限定DLL | artifact: `darwin-arm64`; procedure: §6 |
+| E05 | Android (Termux) / aarch64 / Android NDK ABI | libusb: 静的1.0.30; USB access: Termux USB permission; FD handoff: daemonへ2 FD | firmware: model firmware image; input: 対応modelのISDB-T/ISDB-S channel | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Linux PC/SC: libc対応IFD; macOS PC/SC: bundle; Android: なし; Windows WinSCard: application-local限定DLL | artifact: `android-aarch64`; procedure: §6 |
+| E06 | Android (Termux) / armv7a / Android NDK ABI | libusb: 静的1.0.30; USB access: Termux USB permission; FD handoff: daemonへ2 FD | firmware: model firmware image; input: 対応modelのISDB-T/ISDB-S channel | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Linux PC/SC: libc対応IFD; macOS PC/SC: bundle; Android: なし; Windows WinSCard: application-local限定DLL | artifact: `android-armv7a`; procedure: §6 |
+| E07 | Android (Termux) / x86_64 / Android NDK ABI | libusb: 静的1.0.30; USB access: Termux USB permission; FD handoff: daemonへ2 FD | firmware: model firmware image; input: 対応modelのISDB-T/ISDB-S channel | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Linux PC/SC: libc対応IFD; macOS PC/SC: bundle; Android: なし; Windows WinSCard: application-local限定DLL | artifact: `android-x86_64`; procedure: §6 |
+| E17 | Windows 11 / x86_64 / Win32 | libusb: 静的1.0.30; USB access: 既存許可済みWinUSB driver | firmware: model firmware image; input: 対応modelのISDB-T/ISDB-S channel | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Linux PC/SC: libc対応IFD; macOS PC/SC: bundle; Android: なし; Windows WinSCard: application-local限定DLL | artifact: `windows-x86_64`; procedure: §6 |
 
 この表は現行配布targetとnative実行条件の対応である。実際のhost OS/ABI、USB access path、実施結果は各version文書へ記録する。production HAOS上で試験環境を変更する場合は別途承認済み手順に従う。
 
@@ -98,7 +112,7 @@ PX4/ASICEN共通の記録構造と空のmatrixは [`release-record.md`](release-
 | E12 | Alpine x86_64（mdev） | historical-only / conditional（`packaging/mdev/**` 変更時） | §6 / [mdev](platforms/alpine-mdev.md) |
 | E13 | OpenWrt x86_64 | historical-only / conditional | §6 / validation-results.md |
 | E14 | FreeBSD x86_64 | 対象外（SPEC §1・§2の対象外。記録は履歴のみ） | 対象外 |
-| E15 | Fedora aarch64 | `linux-glibc-aarch64`のnative確認環境例。適用頻度は現行手順を参照 | §6 / validation-results.md |
+| E15-G | Fedora aarch64 | `linux-glibc-aarch64`のnative確認環境例。適用頻度は現行手順を参照 | §6 / validation-results.md |
 | E16 | Debian x86/i386 | source-build-only（i386配布artifactなし） | §6 / [Debian i386](platforms/debian-i686.md) |
 | E17 | Windows 11 x86_64 | `windows-x86_64`のnative確認環境例。PX-Q3U4は0.2.0 candidate `8c40d49`のE17実機matrix、PX-M1UR/PX-S1URは同candidateのWindows profile試験（same-lease retuneは未認定）で`tuner-hardware-verified`／`card-core-hardware-verified`（非ASCII endpoint pathのready行切断は既知の制限 [#52](https://github.com/Khronos31/px4-userland/issues/52)）。他profileは`未認定`（`hardware-unverified`）。0.2.1 candidate `4dbcf335…`のE17 matrixは2026-10-12再検証（下記） | §6 / validation-results.md |
 | — | Android ad-hoc APK | 対象外（dtv-android 所管。本リポジトリの gate に含めない） | 対象外 |
@@ -111,8 +125,8 @@ PX4/ASICEN共通の記録構造と空のmatrixは [`release-record.md`](release-
 |---|---|---|
 | `linux-glibc-x86_64` | E03 AnduinOS x86_64 | 列挙、B-CAS抜去・再挿入（不在検出、ATR/reset/APDU復帰）、8 receiverの短い受信、USB切断・再接続と復旧確認 |
 | `linux-musl-x86_64` | E02 HAOS Alpine/musl add-on | 同上。試験用add-onの起動停止とSupervisor設定復元を含む |
-| `linux-glibc-aarch64` | E15 Fedora aarch64 / L4T | 同上。native artifactを使う |
-| `linux-musl-aarch64` | E15 Fedora aarch64上のAlpine arm64 Docker container | 同上。native aarch64 host上で実行し、CPU emulationを使わない。物理USB deviceをcontainerへ渡す |
+| `linux-glibc-aarch64` | E15-G Fedora aarch64 / L4T | 同上。native artifactを使う |
+| `linux-musl-aarch64` | E15-M Fedora aarch64上のAlpine arm64 Docker container | 同上。native aarch64 host上で実行し、CPU emulationを使わない。物理USB deviceをcontainerへ渡す |
 | `darwin-arm64` | E04 macOS arm64 | 同上。native `darwin-arm64` artifactを使う |
 | `android-aarch64` | E05 Termux aarch64 | 同上。2-FD launcher経由で受信する |
 | `android-armv7a` | E06 Termux armv7a | E05と同じ手順、armv7a archive |
@@ -578,9 +592,9 @@ release限定dispositionを適用する。原試行と追加試験を別々に�
 
 SPEC §1 の対象環境（Linux、Android、macOS）に含まれないため 対象外。validation-results.md の FreeBSD record は履歴であり、release gate・canary・long soak に含めない。
 
-### E15 Fedora aarch64（linux-glibc-aarch64 native確認環境）
+### E15-G / E15-M Linux aarch64（glibc / musl native確認環境）
 
-- 現状: `linux-glibc-aarch64`配布artifactのnative確認環境例。過去record `df6a1e634e5bec11961a1f0f15eedd1da22f7fee`はbaselineであり、candidateごとの短時間確認を代替しない。
+- E15-G は `linux-glibc-aarch64` のnative確認環境、E15-M はnative Fedora host上のAlpine arm64/musl runtimeを表す。過去record `df6a1e634e5bec11961a1f0f15eedd1da22f7fee`はbaselineであり、candidateごとの短時間確認を代替しない。
 - 手順: 適用matrixに含む際はnative `linux-glibc-aarch64` candidateで列挙・受信・USB抜差し・再接続後の受信を行う。`uname -r`、`getenforce`を記録する。新たなhardware claimの認定はSPEC 10.3に従い別途行い、kernelを記録してclaimをそのkernelに限定する。
 - `linux-musl-aarch64`を現行頻度matrixで選択する場合は、同じnative Fedora aarch64 host上のAlpine arm64 Docker containerでcandidate artifactを実行する。CPU emulationを使わず、対象tunerの物理USB deviceをcontainerへ渡す。glibc確認とは別のrunとして記録する。
 - 選定: `linux-glibc-aarch64`を現行頻度matrixで選択した場合に使用。
