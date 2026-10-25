@@ -6,16 +6,27 @@
 
 ## 共通の検証項目と頻度
 
-用語は4製品で共通とする。代表機はLinux x86_64 glibc、機種はチューナー、製品はドライバ、ソークは一定時間以上の連続したTS取得を指す。時間条件は適用頻度と版別matrixに従う。PX4の通常の無指定時検証機種はPX-Q3U4だが、機種初回の対象を限定しない。PX4が対象とする全機種で初回手順を個別に実施し、結果は[`release-validation/initial-model-checks.md`](release-validation/initial-model-checks.md)へ機種別に、版ごとの実績は[`release-validation/1.0.0.md`](release-validation/1.0.0.md)へ記録する。
+用語は4製品で共通とする。代表機はLinux x86_64 glibc、機種はチューナー、製品はドライバ、ソークは一定時間以上の連続したTS取得を指す。時間条件は下の適用頻度と版別matrixに従う。製品・機種ごとの能力、対応機能、実コマンドは続く製品固有節と手順節に記し、版別記録にはcandidateごとの実施結果を記す。
 
-| 区分 | 適用頻度 | PX4での確認 |
+| 区分 | 適用頻度 | 共通の確認 |
 |---|---|---|
-| 機種初回 | PX4の各機種を個別に代表機で2時間連続受信し、その機種で毎releaseの回帰項目を代表機だけで実施する。必要時項目も通す。 | Q3U4では8 receiverの地上/衛星同時受信、CARD、USB、対応profileのLNB、WinSCard/PCSCを確認する。ほかの機種はその機種の能力・対応機能に応じて確認する。 |
-| 回帰（毎release） | 代表機2時間連続受信。全配布archiveの各OS/ABIで短時間実機回帰、`--list-json`、最大能力の同時受信とTS/counter/終了値を確認する。最大試験で3波が不足する場合は不足分の短時間TSを個別確認する。受信中status、反復APDU、正常停止とprocess/FD/IPC残留なし、CARD抜去/再挿入、USBケーブル抜去/再挿入を確認する。WinSCard/PCSCは該当OSで確認する。 | Q3U4の8 receiver配置、B-CAS removed/ATR/APDU復帰、切断exit/daemon cleanupを以下の確立済み手順で確認。 |
-| 必要に応じて | LNB実測と非対応機種での拒否、複数tunerの列挙/daemon並列、変更機能に応じた機種×OS/ABI追加確認。 | PX-M1UR/PX-S1URの非対応LNB拒否、同一serial曖昧指定、同一lease retuneや`--control`等の条件付き項目を該当変更時に行う。 |
-| 初回/major | 必要時項目を通し、代表機で全無料channelを各10秒TS取得。macOS/Windows各30分連続、残るOS/ABI各10分連続で取得する。全channel取得は代表機のみ。別途指示されたソークは別記する。 | 現地channel planの地上/無料衛星対象channelを使い、地域/TSID/slot実値を記録する。 |
+| 機種初回 | 各製品の全対象機種で、機種ごとに代表機の2時間連続受信と毎release項目を実施する。必要時項目も通し、結果は機種別に初回記録へ残す。 | 当該機種の公開能力・対応機能に沿って実行し、別機種の結果で代替しない。 |
+| 回帰（毎release） | 代表機で2時間連続受信する。全配布archiveをそれぞれ対応するnative OS/ABIで短時間実機回帰し、`--list-json`、機種の公開同時受信能力、TS/counter/終了値を確認する。最大同時受信で地上波・衛星の対象3波を確認できない場合は不足波を短時間取得する。受信中の状態と反復制御、正常停止、process/FD/IPC残留なし、対応機能のCARD挿抜、USB抜去/再挿入を確認する。native PC/SC/WinSCard経路がある製品・OSでは製品CLI経路と分けて確認する。 | 各archive/OS/ABIのrunと各機種の結果を分ける。未対応機能は理由付きでN/Aとし、未実施や失敗を合格に読み替えない。 |
+| 必要に応じて | 対応機能ではLNB出力電圧を実測し、非対応機種の拒否を確認する。複数チューナーの列挙/daemon並列と、変更機能に応じた機種×OS/ABIの追加確認も行う。 | 適用する機種・機能・OS/ABIと実測値を記録する。 |
+| 初回/major | 必要時項目を通し、代表機で全対象の無料channelを各10秒TS取得する。ソークはmacOS/Windows各30分、残るOS/ABI各10分とする。全channel取得は代表機だけで行い、別途指示されたソークは別に記録する。 | 30分/10分は各OS/ABIの個別時間であり、共通の一般定義である「一定時間以上の連続TS取得」を置き換えない。 |
 
-全配布archiveのnative短時間回帰と代表機だけの全channel10秒取得は別の確認である。以下の既存artifact別・receiver別・CARD/USB/LNB操作はそのまま保持し、現行CLIへ合わせて実行する。版別の実績と未達はversion文書に記録する。
+全配布archiveのnative短時間回帰と代表機だけの全channel取得は別の確認である。候補の操作・期待値・cleanupは各archiveの具体手順に従い、実施状態・結果・未達は版別記録に残す。
+
+## 製品固有の適用条件
+
+PX4の通常の無指定時検証機種はPX-Q3U4だが、機種初回の対象を限定しない。PX4が対象とする全機種で初回手順を個別に実施し、結果は[`release-validation/initial-model-checks.md`](release-validation/initial-model-checks.md)へ機種別に、版ごとの実績は[`release-validation/1.0.0.md`](release-validation/1.0.0.md)へ記録する。
+
+| 区分 | 製品固有の確認 |
+|---|---|
+| 機種初回 | Q3U4では8 receiverの地上/衛星同時受信、CARD、USB、対応profileのLNB、WinSCard/PCSCを確認する。ほかの機種はその機種の能力・対応機能に応じて確認する。 |
+| 回帰（毎release） | Q3U4の8 receiver配置、B-CAS removed/ATR/APDU復帰、切断exit/daemon cleanupを以下の確立済み手順で確認。 |
+| 必要に応じて | PX-M1UR/PX-S1URの非対応LNB拒否、同一serial曖昧指定、同一lease retuneや`--control`等の条件付き項目を該当変更時に行う。 |
+| 初回/major | 現地channel planの地上/無料衛星対象channelを使い、地域/TSID/slot実値を記録する。 |
 
 ## 共通実行環境表
 
