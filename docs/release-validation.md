@@ -1,4 +1,4 @@
-# Stable リリース前検証手順
+# 安定版リリース前検証手順
 
 この文書はPX4のStable releaseで再利用する準備・操作・判定・cleanupの正本です。版ごとの適用matrixと検証記録は [`release-validation/1.0.0.md`](release-validation/1.0.0.md) のように版別文書へ記録します。過去候補の実測値は今回候補の合格を意味しません。CLI引数は現行 [`README.md`](../README.md) に合わせます。
 
@@ -41,21 +41,21 @@ PX4の通常の無指定時検証機種はPX-Q3U4だが、機種初回の対象�
 | RF試験入力（system / channel） | 実際に受信させる放送systemと現地channel | firmware、機種data、candidate実績 | `system:` と `channel:`。対応波がない場合は `なし（理由）` |
 | 製品CLIからの内蔵CARD操作 | 製品固有CLI/APIの操作範囲 | PC/SC/WinSCard adapter、実機合否 | 操作名とmodel依存条件。機能なしは `なし` |
 | native PC/SC/WinSCard adapter | その行のOS標準APIへ接続する製品adapterの種類・配布形態 | 製品CLI CARD、adapter実機試験結果、他OSのadapter | OS/ABI行に該当する`Linux PC/SC:`、`macOS PC/SC:`、`Android:`または`Windows WinSCard:`だけを記載 |
-| 配布artifact / 手順 | 対象archive識別子とこの正本内の該当手順 | artifact hash、host、試験結果 | `artifact: <target>; procedure: [archive別手順](#3-release-archive-procedure)` の順 |
+| 配布artifact / 手順 | 対象archive識別子とこの正本内の該当手順 | artifact hash、host、試験結果 | `artifact: <target>; procedure: [archive別手順](#3-配布アーカイブ別手順)` の順 |
 
 共通IDは E02=Linux/x86_64/musl、E03=Linux/x86_64/glibc、E04=macOS/arm64、E05=Android/aarch64、E06=Android/armv7a、E07=Android/x86_64、E15-G=Linux/aarch64/glibc、E15-M=Linux/aarch64/musl、E17=Windows 11/x86_64を表す。IDはhost名や試験済み状態を表さない。
 
 | ID | OS / ABI | 依存 / driver / permission | firmware / 補助data | RF試験入力（system / channel） | 製品CLIからの内蔵CARD操作 | native PC/SC/WinSCard adapter | 配布artifact / 手順 |
 |---|---|---|---|---|---|---|---|
-| E03 | Linux / x86_64 / glibc | libusb: 静的1.0.30; USB access: native OSの許可済み経路 | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Linux PC/SC: libc対応IFD | artifact: `linux-glibc-x86_64`; procedure: [archive別手順](#3-release-archive-procedure) |
-| E02 | Linux / x86_64 / musl | libusb: 静的1.0.30; USB access: HAOS Supervisorの許可済み経路 | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Linux PC/SC: libc対応IFD | artifact: `linux-musl-x86_64`; procedure: [archive別手順](#3-release-archive-procedure) |
-| E15-G | Linux / aarch64 / glibc | libusb: 静的1.0.30; USB access: native OSの許可済み経路 | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Linux PC/SC: libc対応IFD | artifact: `linux-glibc-aarch64`; procedure: [archive別手順](#3-release-archive-procedure) |
-| E15-M | Linux / aarch64 / musl | libusb: 静的1.0.30; USB access: native OSの許可済み経路 | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Linux PC/SC: libc対応IFD | artifact: `linux-musl-aarch64`; procedure: [archive別手順](#3-release-archive-procedure) |
-| E04 | macOS / arm64 / Apple system runtime | libusb: 静的1.0.30; USB access: macOSの許可済み経路 | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | macOS PC/SC: bundle | artifact: `darwin-arm64`; procedure: [archive別手順](#3-release-archive-procedure) |
-| E05 | Android (Termux) / aarch64 / Android NDK ABI | libusb: 静的1.0.30; USB access: Termux USB permission; FD handoff: daemonへ2 FD | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Android: なし | artifact: `android-aarch64`; procedure: [archive別手順](#3-release-archive-procedure) |
-| E06 | Android (Termux) / armv7a / Android NDK ABI | libusb: 静的1.0.30; USB access: Termux USB permission; FD handoff: daemonへ2 FD | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Android: なし | artifact: `android-armv7a`; procedure: [archive別手順](#3-release-archive-procedure) |
-| E07 | Android (Termux) / x86_64 / Android NDK ABI | libusb: 静的1.0.30; USB access: Termux USB permission; FD handoff: daemonへ2 FD | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Android: なし | artifact: `android-x86_64`; procedure: [archive別手順](#3-release-archive-procedure) |
-| E17 | Windows 11 / x86_64 / Win32 | libusb: 静的1.0.30; USB access: 既存許可済みWinUSB driver | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Windows WinSCard: application-local限定DLL | artifact: `windows-x86_64`; procedure: [archive別手順](#3-release-archive-procedure) |
+| E03 | Linux / x86_64 / glibc | libusb: 静的1.0.30; USB access: native OSの許可済み経路 | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Linux PC/SC: libc対応IFD | artifact: `linux-glibc-x86_64`; procedure: [archive別手順](#3-配布アーカイブ別手順) |
+| E02 | Linux / x86_64 / musl | libusb: 静的1.0.30; USB access: HAOS Supervisorの許可済み経路 | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Linux PC/SC: libc対応IFD | artifact: `linux-musl-x86_64`; procedure: [archive別手順](#3-配布アーカイブ別手順) |
+| E15-G | Linux / aarch64 / glibc | libusb: 静的1.0.30; USB access: native OSの許可済み経路 | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Linux PC/SC: libc対応IFD | artifact: `linux-glibc-aarch64`; procedure: [archive別手順](#3-配布アーカイブ別手順) |
+| E15-M | Linux / aarch64 / musl | libusb: 静的1.0.30; USB access: native OSの許可済み経路 | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Linux PC/SC: libc対応IFD | artifact: `linux-musl-aarch64`; procedure: [archive別手順](#3-配布アーカイブ別手順) |
+| E04 | macOS / arm64 / Apple system runtime | libusb: 静的1.0.30; USB access: macOSの許可済み経路 | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | macOS PC/SC: bundle | artifact: `darwin-arm64`; procedure: [archive別手順](#3-配布アーカイブ別手順) |
+| E05 | Android (Termux) / aarch64 / Android NDK ABI | libusb: 静的1.0.30; USB access: Termux USB permission; FD handoff: daemonへ2 FD | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Android: なし | artifact: `android-aarch64`; procedure: [archive別手順](#3-配布アーカイブ別手順) |
+| E06 | Android (Termux) / armv7a / Android NDK ABI | libusb: 静的1.0.30; USB access: Termux USB permission; FD handoff: daemonへ2 FD | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Android: なし | artifact: `android-armv7a`; procedure: [archive別手順](#3-配布アーカイブ別手順) |
+| E07 | Android (Termux) / x86_64 / Android NDK ABI | libusb: 静的1.0.30; USB access: Termux USB permission; FD handoff: daemonへ2 FD | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Android: なし | artifact: `android-x86_64`; procedure: [archive別手順](#3-配布アーカイブ別手順) |
+| E17 | Windows 11 / x86_64 / Win32 | libusb: 静的1.0.30; USB access: 既存許可済みWinUSB driver | firmware: model firmware image; 補助data: なし | system: 対応modelのISDB-T/ISDB-S; channel: 現地channel planから対応channelを選択 | CARD status/ATR/reset/APDU CLI; 操作対応はprofile依存 | Windows WinSCard: application-local限定DLL | artifact: `windows-x86_64`; procedure: [archive別手順](#3-配布アーカイブ別手順) |
 
 この表は現行配布targetとnative実行条件の対応である。実際のhost OS/ABI、USB access path、実施結果は各version文書へ記録する。production HAOS上で試験環境を変更する場合は別途承認済み手順に従う。
 
@@ -72,7 +72,7 @@ PX4の通常の無指定時検証機種はPX-Q3U4だが、機種初回の対象�
 - **停止/cleanup:** deviceを開かず、archive/logを保持。
 - **記録:** source SHA、CI run/attempt、artifact ID/target/hash、取得日時、未取得理由。
 
-### T01 環境/permission/input
+### T01 実行環境・アクセス権・入力
 
 - **適用対象/頻度:** 全native archive。初回は全modelごと。
 - **準備:** E-ID/OS/ABI、USB access、firmware/model data、channel planを環境表と照合。
@@ -81,7 +81,7 @@ PX4の通常の無指定時検証機種はPX-Q3U4だが、機種初回の対象�
 - **停止/cleanup:** 権限不足やdriver変更が必要なら操作せず未実施記録。
 - **記録:** E-ID/host/OS/ABI/model、USB topology/permission、firmware/data、channel plan。
 
-### T02 列挙/selector/ready
+### T02 列挙・selector・ready確認
 
 - **適用対象/頻度:** 毎release、対象model/device。
 - **準備:** 候補archiveのlist-json/models入口とdevice selectorを準備しdaemon専用runtimeを作る。
@@ -99,7 +99,7 @@ PX4の通常の無指定時検証機種はPX-Q3U4だが、機種初回の対象�
 - **停止/cleanup:** 全client通常終了後daemon通常停止、残留なし。
 - **記録:** model/receiver/system/channel、各start/end/exit、TS/counter、cleanup。
 
-### T04 不足波/全無料channel
+### T04 不足波・全無料channel
 
 - **適用対象/頻度:** 毎releaseは不足波。初回/majorは全機種の代表機で全無料channel各10秒。
 - **準備:** 現地channel planとmodel能力から対象system/channel一覧を作る。
@@ -108,7 +108,7 @@ PX4の通常の無指定時検証機種はPX-Q3U4だが、機種初回の対象�
 - **停止/cleanup:** client wait/exit保存、daemon通常停止。
 - **記録:** model/system/channel/全channel list、TS解析/counter/exit、未取得理由。
 
-### T05 stream中monitor/control
+### T05 受信中の状態確認・制御
 
 - **適用対象/頻度:** 毎release。CARD/controlは製品能力に従う。
 - **準備:** capture clientを起動し、別terminalでstatus/list/controlを行えるようにする。
@@ -117,7 +117,7 @@ PX4の通常の無指定時検証機種はPX-Q3U4だが、機種初回の対象�
 - **停止/cleanup:** client/daemonを通常停止し残留確認。
 - **記録:** 照会/control時刻、response class、各exit、streamとの重なり。
 
-### T06 CARD物理挿抜/復帰
+### T06 CARD物理挿抜・復帰
 
 - **適用対象/頻度:** CARD reader/status対応model。毎release。
 - **準備:** capture停止・daemon維持。初期CARD状態とreader有無を確認。
@@ -126,7 +126,7 @@ PX4の通常の無指定時検証機種はPX-Q3U4だが、機種初回の対象�
 - **停止/cleanup:** daemon通常停止、FD/IPC/runtimeを確認。
 - **記録:** 依頼時刻、状態/response/exit、復帰、cleanup。
 
-### T07 USB idle/stream切断と再取得
+### T07 USB待機中・受信中の切断と再取得
 
 - **適用対象/頻度:** 毎release。USB対応deviceのidle/streamを別run。
 - **準備:** `px4d --list-json`でUSB pathを特定し、streamなしのdaemonを起動してstatus/list、daemon PIDとUSB owner状態を記録する。有限capture時間を明示設定する。
@@ -135,7 +135,7 @@ PX4の通常の無指定時検証機種はPX-Q3U4だが、機種初回の対象�
 - **停止/cleanup:** idle/streamそれぞれでowned client/daemonを通常停止してwaitし、再接続後の新daemonも通常停止する。Androidはpermission/FD再取得。
 - **記録:** idle/stream、daemon USB owner状態、依頼/応答時刻、path、status/診断、各実終了値、再取得TS/counter、cleanup。
 
-### T08 通常stop/cleanup
+### T08 通常停止・cleanup
 
 - **適用対象/頻度:** 全test終了時。
 - **準備:** 各owned client/daemon PIDとruntimeを記録してから起動する。
@@ -144,7 +144,7 @@ PX4の通常の無指定時検証機種はPX-Q3U4だが、機種初回の対象�
 - **停止/cleanup:** 無関係processへsignalしない。test専用runtimeだけ片付け失敗log保持。
 - **記録:** PID/role/exit、process/FD/IPC/socket/runtime、復旧状態。
 
-### T09 TS/counter/exit判定
+### T09 TS・counter・終了値判定
 
 - **適用対象/頻度:** 全capture/soak。
 - **準備:** TS parser/SPEC条件とdaemon counterを確認できるようにする。
@@ -153,7 +153,7 @@ PX4の通常の無指定時検証機種はPX-Q3U4だが、機種初回の対象�
 - **停止/cleanup:** 元TS/hash/logを残してT08 cleanup。
 - **記録:** parser/version、TS hash、sync/TEI/continuity/drop/counter、exit。
 
-### T10 native PC/SC/WinSCard
+### T10 native PC/SC・WinSCard
 
 - **適用対象/頻度:** 対応OS/APIのみ。非対応製品は理由付きN/A。
 - **準備:** native OS adapter/consumerとcandidate IFD/DLL pathを用意。
@@ -162,7 +162,7 @@ PX4の通常の無指定時検証機種はPX-Q3U4だが、機種初回の対象�
 - **停止/cleanup:** consumer/isolated pcscd通常停止。system PCSC serviceを変更しない。
 - **記録:** OS/ABI、module/DLL absolute path、consumer、reader/card、operation/exit。
 
-### T11 LNB/非対応拒否
+### T11 LNB・非対応要求の拒否
 
 - **適用対象/頻度:** 必要時。給電対応profileだけ実測。
 - **準備:** 対応profile、meter、独立給電の状態を確認。
@@ -171,7 +171,7 @@ PX4の通常の無指定時検証機種はPX-Q3U4だが、機種初回の対象�
 - **停止/cleanup:** daemon停止、0Vと通常配線復帰。非対応機へ給電しない。
 - **記録:** model/profile、command/exit、meter値/条件、cleanupまたはN/A根拠。
 
-### T12 複数device/daemon/access
+### T12 複数device・daemon・access
 
 - **適用対象/頻度:** 必要時、複数device/selector/access変更時。
 - **準備:** USB port/selectorとinstance/runtimeをdeviceごとに割り当てる。
@@ -180,7 +180,7 @@ PX4の通常の無指定時検証機種はPX-Q3U4だが、機種初回の対象�
 - **停止/cleanup:** 各client/daemon個別wait/stopしFD/IPC/socket確認。
 - **記録:** device/port/PID/runtime、各exit/継続/再取得/access/cleanup。
 
-### T13 soak/頻度
+### T13 連続受信・頻度
 
 - **適用対象/頻度:** 毎releaseおよび全model初回/major。
 - **準備:** 確定頻度表の対象archive/model/timeをmatrixへ展開する。
@@ -189,7 +189,7 @@ PX4の通常の無指定時検証機種はPX-Q3U4だが、機種初回の対象�
 - **停止/cleanup:** T08通常stopと全resource cleanup。
 - **記録:** model/OS/ABI/archive、時間、TS/counter、FD/RSS、未実施理由。
 
-### T14 failure/release disposition
+### T14 失敗・リリース判定
 
 - **適用対象/頻度:** 全candidate gate完了後。
 - **準備:** source/archive SHAと全T-IDの結果を版別記録へ用意。
@@ -200,7 +200,25 @@ PX4の通常の無指定時検証機種はPX-Q3U4だが、機種初回の対象�
 
 N/Aは製品機能上該当しない項目だけに使う。OS/ABI候補のunsupported、candidate欠落、未実施、失敗、環境不能は版別結果で未達とし、passに読み替えない。手順に記した期待値は実測結果ではない。
 
-## 0. 共通artifact matrixと共通手順
+## 対象アーカイブ・環境から全試験への対応
+
+選択したarchive/E-IDごとに、下表のT00–T14を同じrun記録へ実施する。各T見出しは準備・実操作・期待値/終了値・停止/cleanup・記録を含む手順本体であり、表は対象環境からその全項目へ直接辿る索引である。環境表に載る別OS/ABIの結果や過去runで代用しない。
+
+| archive / E-ID / 実行環境 | T00–T14の手順リンク |
+|---|---|
+| `linux-glibc-x86_64` / [E03](#e03-anduinos-x8664基準linux-x8664) / Linux x86_64/glibc | [T00](#t00-候補配布物固定) · [T01](#t01-実行環境アクセス権入力) · [T02](#t02-列挙selectorready確認) · [T03](#t03-最大同時受信) · [T04](#t04-不足波全無料channel) · [T05](#t05-受信中の状態確認制御) · [T06](#t06-card物理挿抜復帰) · [T07](#t07-usb待機中受信中の切断と再取得) · [T08](#t08-通常停止cleanup) · [T09](#t09-tscounter終了値判定) · [T10](#t10-native-pcscwinscard) · [T11](#t11-lnb非対応要求の拒否) · [T12](#t12-複数devicedaemonaccess) · [T13](#t13-連続受信頻度) · [T14](#t14-失敗リリース判定) |
+| `linux-musl-x86_64` / [E02](#e02-haos-x8664-alpinemusl-addon基準環境supervisor) / Linux x86_64/musl | [T00](#t00-候補配布物固定) · [T01](#t01-実行環境アクセス権入力) · [T02](#t02-列挙selectorready確認) · [T03](#t03-最大同時受信) · [T04](#t04-不足波全無料channel) · [T05](#t05-受信中の状態確認制御) · [T06](#t06-card物理挿抜復帰) · [T07](#t07-usb待機中受信中の切断と再取得) · [T08](#t08-通常停止cleanup) · [T09](#t09-tscounter終了値判定) · [T10](#t10-native-pcscwinscard) · [T11](#t11-lnb非対応要求の拒否) · [T12](#t12-複数devicedaemonaccess) · [T13](#t13-連続受信頻度) · [T14](#t14-失敗リリース判定) |
+| `linux-glibc-aarch64` / [E15-G](#e15g-e15m-linux-aarch64glibc-musl-native確認環境) / Linux aarch64/glibc | [T00](#t00-候補配布物固定) · [T01](#t01-実行環境アクセス権入力) · [T02](#t02-列挙selectorready確認) · [T03](#t03-最大同時受信) · [T04](#t04-不足波全無料channel) · [T05](#t05-受信中の状態確認制御) · [T06](#t06-card物理挿抜復帰) · [T07](#t07-usb待機中受信中の切断と再取得) · [T08](#t08-通常停止cleanup) · [T09](#t09-tscounter終了値判定) · [T10](#t10-native-pcscwinscard) · [T11](#t11-lnb非対応要求の拒否) · [T12](#t12-複数devicedaemonaccess) · [T13](#t13-連続受信頻度) · [T14](#t14-失敗リリース判定) |
+| `linux-musl-aarch64` / [E15-M](#3-配布アーカイブ別手順) / Linux aarch64/musl | [T00](#t00-候補配布物固定) · [T01](#t01-実行環境アクセス権入力) · [T02](#t02-列挙selectorready確認) · [T03](#t03-最大同時受信) · [T04](#t04-不足波全無料channel) · [T05](#t05-受信中の状態確認制御) · [T06](#t06-card物理挿抜復帰) · [T07](#t07-usb待機中受信中の切断と再取得) · [T08](#t08-通常停止cleanup) · [T09](#t09-tscounter終了値判定) · [T10](#t10-native-pcscwinscard) · [T11](#t11-lnb非対応要求の拒否) · [T12](#t12-複数devicedaemonaccess) · [T13](#t13-連続受信頻度) · [T14](#t14-失敗リリース判定) |
+| `darwin-arm64` / [E04](#e04-macos-arm64基準darwin環境) / macOS arm64 | [T00](#t00-候補配布物固定) · [T01](#t01-実行環境アクセス権入力) · [T02](#t02-列挙selectorready確認) · [T03](#t03-最大同時受信) · [T04](#t04-不足波全無料channel) · [T05](#t05-受信中の状態確認制御) · [T06](#t06-card物理挿抜復帰) · [T07](#t07-usb待機中受信中の切断と再取得) · [T08](#t08-通常停止cleanup) · [T09](#t09-tscounter終了値判定) · [T10](#t10-native-pcscwinscard) · [T11](#t11-lnb非対応要求の拒否) · [T12](#t12-複数devicedaemonaccess) · [T13](#t13-連続受信頻度) · [T14](#t14-失敗リリース判定) |
+| `android-aarch64` / [E05](#e05-android-termux-aarch64基準androidaarch642fd) / Android Termux/aarch64 | [T00](#t00-候補配布物固定) · [T01](#t01-実行環境アクセス権入力) · [T02](#t02-列挙selectorready確認) · [T03](#t03-最大同時受信) · [T04](#t04-不足波全無料channel) · [T05](#t05-受信中の状態確認制御) · [T06](#t06-card物理挿抜復帰) · [T07](#t07-usb待機中受信中の切断と再取得) · [T08](#t08-通常停止cleanup) · [T09](#t09-tscounter終了値判定) · [T10](#t10-native-pcscwinscard) · [T11](#t11-lnb非対応要求の拒否) · [T12](#t12-複数devicedaemonaccess) · [T13](#t13-連続受信頻度) · [T14](#t14-失敗リリース判定) |
+| `android-armv7a` / [E06](#e06-android-termux-armv7a基準androidarmv7a2fd) / Android Termux/armv7a | [T00](#t00-候補配布物固定) · [T01](#t01-実行環境アクセス権入力) · [T02](#t02-列挙selectorready確認) · [T03](#t03-最大同時受信) · [T04](#t04-不足波全無料channel) · [T05](#t05-受信中の状態確認制御) · [T06](#t06-card物理挿抜復帰) · [T07](#t07-usb待機中受信中の切断と再取得) · [T08](#t08-通常停止cleanup) · [T09](#t09-tscounter終了値判定) · [T10](#t10-native-pcscwinscard) · [T11](#t11-lnb非対応要求の拒否) · [T12](#t12-複数devicedaemonaccess) · [T13](#t13-連続受信頻度) · [T14](#t14-失敗リリース判定) |
+| `android-x86_64` / [E07](#e07-bliss-os-x8664-termux基準androidx86642fdnative確認環境例) / Android Termux/x86_64 | [T00](#t00-候補配布物固定) · [T01](#t01-実行環境アクセス権入力) · [T02](#t02-列挙selectorready確認) · [T03](#t03-最大同時受信) · [T04](#t04-不足波全無料channel) · [T05](#t05-受信中の状態確認制御) · [T06](#t06-card物理挿抜復帰) · [T07](#t07-usb待機中受信中の切断と再取得) · [T08](#t08-通常停止cleanup) · [T09](#t09-tscounter終了値判定) · [T10](#t10-native-pcscwinscard) · [T11](#t11-lnb非対応要求の拒否) · [T12](#t12-複数devicedaemonaccess) · [T13](#t13-連続受信頻度) · [T14](#t14-失敗リリース判定) |
+| `windows-x86_64` / [E17](#e17-windows-11-x8664windowsアーカイブのnative確認phase-12) / Windows 11 x86_64 | [T00](#t00-候補配布物固定) · [T01](#t01-実行環境アクセス権入力) · [T02](#t02-列挙selectorready確認) · [T03](#t03-最大同時受信) · [T04](#t04-不足波全無料channel) · [T05](#t05-受信中の状態確認制御) · [T06](#t06-card物理挿抜復帰) · [T07](#t07-usb待機中受信中の切断と再取得) · [T08](#t08-通常停止cleanup) · [T09](#t09-tscounter終了値判定) · [T10](#t10-native-pcscwinscard) · [T11](#t11-lnb非対応要求の拒否) · [T12](#t12-複数devicedaemonaccess) · [T13](#t13-連続受信頻度) · [T14](#t14-失敗リリース判定) |
+
+OS/ABI固有の起動方法は以下の環境recipeと§3のarchive手順を使う。試験の期待・cleanup・記録項目はリンク先T本文に従う。機能対象外だけを理由付きN/Aとし、候補未入手・unsupported・未実施・環境不足は未達で記録する。
+
+## 0. 共通配布アーカイブと共通手順
 
 各冊の「共通実行環境表」は、Stable release gateで確認する正式配布artifactとnative/canonical runtimeの対応matrixである。環境IDはOS/ABIとUSB access boundaryを識別し、host名や試験状態を表さない。正式な対象archiveはREADME/SPECと各版のmatrixに従う。
 
@@ -221,7 +239,7 @@ N/Aは製品機能上該当しない項目だけに使う。OS/ABI候補のunsup
 | `未認定` | 対象の現行証拠がなく、合格を示せない。 |
 | `対象外` | 製品仕様の対象外に限る。未実施・環境不能・candidate欠落・失敗には使わない。 |
 
-## PX4固有の配布archive手順とコマンド
+## PX4固有の配布アーカイブ手順とコマンド
 
 ### 配布artifact別の短時間実機手順
 
@@ -454,11 +472,11 @@ done
 
 この再起動ベースの復旧は[既存の実機記録](platforms/validation-results.md)に基づく。Q3U4のHAOSでのケーブル再接続後の再列挙（[記録](platforms/validation-results.md#L37)）、Alpine muslの物理切断後の手動復帰（[HAOS add-on](platforms/validation-results.md#L263)）、OpenWrtでの切断exit 7・残留なし・再接続後の復帰（[記録](platforms/validation-results.md#L270)）、PX-M1UR/PX-S1URでの旧daemon停止後の復旧（[M1UR](platforms/validation-results.md#L141)、[S1UR](platforms/validation-results.md#L142)）がある。
 
-### 0.2 same-lease retune（条件付き）
+### 0.2 同一lease再選局（条件付き）
 
 同一lease retuneは、IPC/lease/retune、frontend/tune、device identityの変更時に追加確認する。それ以外はCI offline試験の成功を記録する。hardwareで行う場合は、既存のout-of-repo `/config/.work/px4-m1ur-s1ur/retune-tool/retune_tool.cpp`を使ってよい。その場合はsourceとbinaryのSHA-256、およびbuild条件（compiler、flags、libusb）をrelease recordに記録する。新しいtoolをこのrepositoryへ追加しない。
 
-### 0.3 receiver 7 参照比較（X-R7REF, 条件付き）
+### 0.3 receiver 7 参照比較（X-R7REF、条件付き）
 
 receiver 7 で TEI/continuity burst が出て、SPEC 10.2.6a の比較条件（同一個体・antenna・power・firmware・frequency・duration・同等 capture）を満たす fresh 参照が必要な場合にだけ行う。追加の移植性確認環境でこの比較を行う場合の既存条件は[移植性確認手順](platforms/portability-checks.md)に記録する。kernel module の load/unload はrelease gateの要件に含めない。比較条件を再現できない場合は判定保留とし、pass 扱いしない。
 
@@ -474,7 +492,7 @@ Termuxのarchitecture、Termux launcherのFD path、glibc/musl、native PC/SC ad
 
 影響分類が複数にまたがる、依存範囲が不明、または非影響を証明できない場合は `unknown/ambiguous` として、影響し得るpath集合をユーザーへの説明に含める。選択する短時間実機確認のarchiveは影響判定に関係なくcandidateそのものを使い、適用するarchive/OS頻度は該当版の `docs/release-validation/<version>.md` に従う。
 
-## 2. source / CI / candidate artifact gate（毎回）
+## 2. source / CI / 候補アーカイブ判定（毎回）
 
 1. 候補 commit に対応する `portable userland foundation` workflow を確認する。path filter 等により自動実行されていなければ、GitHub Actions の `workflow_dispatch` でその候補 ref を指定して実行する。
 2. workflow 内の unit/offline test、各 target build、source/relink、`release-candidate` と、それに依存する4つの Ubuntu/Alpine × x86_64/aarch64 artifact smoke job、Windows cross-build/PE audit/packaging job、および同じWindows ZIPを実行するWindows native offline test job がすべて成功していることを確認する。失敗 job を無視して先へ進まない。`release-candidate` はWindows cross-buildとnative testの両方に依存し、native testが消費したものと同一のWindows ZIPを取り込む。test executable artifactは取り込まない。
@@ -522,7 +540,7 @@ gh run view <run-id> --job <job-id> --log > "$LOG/run-<run-id>-job-<job-id>.log"
 
 比較のために常設の二重build jobや新しい検証スクリプトを追加しない。workflowの再実行はreleaseあたり1回でよい。
 
-## 3. Release archive procedure
+## 3. 配布アーカイブ別手順
 
 適用対象archiveと頻度は該当版のmatrixに従い、選択されたarchiveは §0 の対応行と以下の操作を使ってnative環境で独立に実施する。Windows行はE17のWindows手順に従い、native Windows 11 x64で実施する。必須確認の一連の操作に総時間上限は設けない。B-CAS/USBの物理操作はユーザーが行い、各操作を依頼した時点から最大5分待つ。各物理操作を依頼する直前にHAOS/SCS側でCodexは`beep`、Claude Codeは`vibe`を実行する。各runの記録にはarchive名/SHA-256、source commit、環境ID/OS version/architecture、機種/USB path、実施時刻、コマンド、終了値、card status/generation/ATR/APDU応答、TS/counter、残留の有無を残す。
 
@@ -538,7 +556,7 @@ Linux musl aarch64はE15 Fedora aarch64上のAlpine arm64 Docker containerでcan
 
 同一lease retuneは§0.2に従い、該当するコード変更時の追加確認とする。receiver 7のTEI/continuity burstは自動合格にせず、SPEC 10.2.6aの比較条件に従う。
 
-## 4. 変更影響の追加確認と追加soak（ユーザー決定）
+## 4. 変更影響の追加確認と追加連続受信（ユーザー決定）
 
 毎releaseの代表機2時間と全archive短時間matrix、および初回/major追加条件は共通表に従う。それらとは別に追加試験が必要な場合、SPEC 10.5.1の分類、hunk/call path、platform guard、過去のvalidation record、candidateで観測したcounterを使い、影響し得るmodel/profile/runtime/access pathを整理する。この整理は追加soakの有無やtarget OSをエージェントが決める権限を与えない。
 
@@ -615,45 +633,45 @@ release限定dispositionを適用する。原試行と追加試験を別々に�
 
 リリースノートには利用者向け変更、短い検証結果、必要な既知制限だけを書く。試験matrix、内部証拠系譜、詳細log、hash一覧は掲載せず、本記録とREADMEへ分離する。
 
-## 6. 正式artifactの環境別手順
+## 6. 正式アーカイブの環境別手順
 
 各項は §0.1 の共通部品と次の追加手順で構成する。物理操作（USB/card の抜差し、アンテナ、電源、kernel module blacklist変更）はユーザーが事前確認のうえ実施する。HAOS（E01/E02）は production host であり、Supervisor 状態変更は承認・退避・復元を伴う。サービスを再起動しない。
 
-### E01 HAOS x86_64 Debian/glibc SCS（canonical, container root）
+### E01 HAOS x86_64 Debian/glibc SCS（基準環境、container root）
 
 - 前提: `ha core info` で HAOS version と kernel を記録する。container root 実行であることを記録し、非root claim に使わない。`lsusb -t` で kernel px4 driver が掴んでいないことを確認する。`linux-glibc-x86_64` と glibc IFD を使う。
 - 手順: §0.1 の X-PREP / X-START / X-LOAD / X-MON / X-STOP / X-RESID。Q3U4 は §0.1 の preflight を先に行う。PC/SC は container の `pcscd` を使い、終了後に元の状態へ戻す。
 - 選定: 影響artifactが `linux-glibc-x86_64` のとき、または HAOS container 層が変わったとき。
 
-### E02 HAOS x86_64 Alpine/musl add-on（canonical, Supervisor）
+### E02 HAOS x86_64 Alpine/musl add-on（基準環境、Supervisor）
 
 - 前提: Supervisor add-on の options を GET 相当の現行値で退避し、ユーザー承認のうえ試験用 options を適用して add-on を起動する。終了後に options を復元して add-on を停止する。`ha`/Supervisor の状態変更はこの範囲に限り、HA Core・mirakc を再起動しない。`linux-musl-x86_64` と musl IFD を使う。
 - 手順: E01 と同じ。Q3U4 は §0.1 の preflight を先に行う。物理ホットプラグを行う場合はユーザーが実施する。
 - 選定: `linux-musl-x86_64`を現行頻度matrixで選択した場合に使用。
 
-### E03 AnduinOS x86_64（canonical Linux x86_64）
+### E03 AnduinOS x86_64（基準Linux x86_64）
 
 - 前提: `smsusb`/`smsdvb`/`smsmdtv` を blacklist し、`lsusb -t` で未bindを確認する（siano側の kernel module を掴む場合）。px4 は kernel driver 不要だが、他製品の module 干渉がないことを確認する。udev rule と `video` グループを用意し、非root で実行する。
 - 手順: §0.1。Q3U4は§0.1のpreflightを先に行う。`linux-glibc-x86_64` native確認環境例。X-R7REFを行う場合は`tsukumijima/px4_drv`を一時loadし、同一個体・antenna・power・firmware・frequency・durationで取得後unloadする（module unloadもユーザー確認対象）。
 - 選定: `linux-glibc-x86_64`を現行頻度matrixで選択した場合に使用。
 
-### E04 macOS arm64（canonical darwin）
+### E04 macOS arm64（基準darwin環境）
 
 - 前提: `shasum -a 256 -c SHA256SUMS`。`otool -L` で libusb dylib と macOS system 以外の依存がないことを確認する。`sw_vers` を記録する。PC/SC は Homebrew `pcsc-lite` と `ifd/px4-userland-ifd.bundle` を使う。
 - 手順: §0.1（`stat -f %z`、`lsof -p`、`ps -o rss=` を用いる）。`darwin-arm64` を使う。
 - 選定: `darwin-arm64`を現行頻度matrixで選択した場合に使用。
 
-### E05 Android Termux aarch64（canonical android-aarch64, 2-FD）
+### E05 Android Termux aarch64（基準android-aarch64、2-FD）
 
 - 前提: Termux と Termux:API（`termux-usb`）、`util-linux`（`setsid`）を用意する。`android-aarch64` の `px4-termux` を使う。native PC/SC adapter は N/A（card は portable IPC 経由）。
 - 手順: §0.1 の Termux 2-FD。launcher の SIGINT/SIGTERM/SIGHUP と 40秒猶予、第2 open 失敗、終了後 process/FD/endpoint 残存なしを確認する。
 - 選定: `android-aarch64`を現行頻度matrixで選択した場合に使用。
 
-### E06 Android Termux armv7a（canonical android-armv7a, 2-FD）
+### E06 Android Termux armv7a（基準android-armv7a、2-FD）
 
 - 前提・手順・選定: E05 と同じ。`android-armv7a` を使う。APK は対象外であり、同 device の APK 試験は dtv-android 側で行う。
 
-### E07 Bliss OS x86_64 Termux（canonical android-x86_64, 2-FD；native確認環境例）
+### E07 Bliss OS x86_64 Termux（基準android-x86_64、2-FD、native確認環境例）
 
 - 前提: 給電中の画面常時点灯と Termux 前面表示を検証中だけ使い、`stay_on_while_plugged_in` を実行前の値へ戻す。`android-x86_64` を使う。
 - 手順: E05 と同じ。初回起動の `TIMEOUT` が起きた場合は初回起動の信頼性を未確定として記録し、合格値に埋めない。launcher に渡した device path を記録する。
@@ -666,7 +684,7 @@ release限定dispositionを適用する。原試行と追加試験を別々に�
 - `linux-musl-aarch64`を現行頻度matrixで選択する場合は、同じnative Fedora aarch64 host上のAlpine arm64 Docker containerでcandidate artifactを実行する。CPU emulationを使わず、対象tunerの物理USB deviceをcontainerへ渡す。glibc確認とは別のrunとして記録する。
 - 選定: `linux-glibc-aarch64`を現行頻度matrixで選択した場合に使用。
 
-### E17 Windows 11 x86_64（Windows archive native確認・Phase 1/2）
+### E17 Windows 11 x86_64（Windowsアーカイブのnative確認・Phase 1/2）
 
 - 位置づけ: `windows-x86_64`配布artifactをmatrixで選択した際のnative回帰試験環境。native libusbのtunerと
   CARD_*、実機の物理回帰を行う。CIのbuild/offline test成功は`build-tested`のみを示し、本節が完了する
