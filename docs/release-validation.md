@@ -1,5 +1,7 @@
 # Stable リリース前検証手順
 
+現行候補の規定手順は [`release-validation-current.md`](release-validation-current.md) です。この文書内の過去候補・環境行列・soak条件は履歴であり、現行候補の条件は新手順を優先します。
+
 この文書は Stable リリースごとの実行手順を定める。合否条件と認定条件の正本は [`SPEC.md`](../SPEC.md) 10章であり、両者に差があれば SPEC を優先し、手順書を更新する。
 
 Stable releaseは次の順で進める。
