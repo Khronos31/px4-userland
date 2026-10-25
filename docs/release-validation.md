@@ -1,6 +1,6 @@
 # Stable リリース前検証手順
 
-この文書はPX4の確立済みrelease検証操作・詳細コマンドを記録しています。手順は引き続き使用し、候補の合否・頻度・今回のmatrixは [`release-validation-current.md`](release-validation-current.md) の共通条件と版固有節に従います。過去候補の実測値は今回候補の合格を意味しません。CLI引数は現行 [`README.md`](../README.md) に合わせます。
+この文書はPX4のStable releaseで再利用する準備・操作・判定・cleanupの正本です。版ごとの適用matrixと検証記録は [`release-validation/1.0.0.md`](release-validation/1.0.0.md) のように版別文書へ記録します。過去候補の実測値は今回候補の合格を意味しません。CLI引数は現行 [`README.md`](../README.md) に合わせます。
 
 この文書は Stable リリースごとの実行手順を定める。合否条件と認定条件の正本は [`SPEC.md`](../SPEC.md) 10章であり、両者に差があれば SPEC を優先し、手順書を更新する。
 
@@ -14,7 +14,7 @@ Stable releaseは次の順で進める。
 
 工程2の全試験が完了するまではcandidate commitを固定して使う。工程2の完了後、工程3で試験結果を記録するcommitは次工程への移行であり、candidateの差し替えではない。工程3の結果commit後に工程2へ戻って実機試験を繰り返さない。candidateのsource、package、build inputを工程2の完了前に変更した場合は、その変更を含む新candidateをCIで作り、影響する試験を行う。
 
-検査対象に選んだ各配布artifactは候補そのものを使い、別archive/OSの結果で置き換えない。どのreleaseでどのartifactを選ぶか、soakの頻度・時間・OSは [`release-validation-current.md`](release-validation-current.md) に従う。以下のartifact別操作手順を適用するとき、必須操作に総時間上限は設けない。物理抜差しをユーザーに依頼した時点から、その操作への応答を最大5分待つ。各依頼の直前にHAOS側でCodexは`beep`、Claude Codeは`vibe`を実行する。5分を超える連続負荷試験は短時間回帰に混ぜず、同文書の頻度・時間条件に沿うsoakへ分ける。検証状態の語彙は `継承` / `今回再検証` / `未認定` / `対象外` に統一する。
+検査対象に選んだ各配布artifactは候補そのものを使い、別archive/OSの結果で置き換えない。どのreleaseでどのartifactを選ぶか、soakの頻度・時間・OSは該当版の `docs/release-validation/<version>.md` に従う。以下のartifact別操作手順を適用するとき、必須操作に総時間上限は設けない。物理抜差しをユーザーに依頼した時点から、その操作への応答を最大5分待つ。各依頼の直前にHAOS側でCodexは`beep`、Claude Codeは`vibe`を実行する。5分を超える連続負荷試験は短時間回帰に混ぜず、該当版の頻度・時間条件に沿うsoakへ分ける。検証状態の語彙は `継承` / `今回再検証` / `未認定` / `対象外` に統一する。
 
 ## 0. 配布artifact matrixと手順の共通部品
 
@@ -45,7 +45,7 @@ PX4/ASICEN共通の記録構造と空のmatrixは [`release-record.md`](release-
 
 ### 配布artifact別の短時間実機手順
 
-以下は確立済みのartifact別操作手順である。candidateに対する適用頻度と1.0.0 matrixは [`release-validation-current.md`](release-validation-current.md) に従う。実施対象となるarchiveは候補artifact自体をnative architectureで起動し、別archive/OSの結果で置き換えない。Linux musl aarch64はE15のnative Fedora aarch64上でAlpine arm64 Docker containerを使い、CPU emulationなしで実施する。
+以下は確立済みのartifact別操作手順である。candidateに対する適用頻度と版固有matrixは該当版の `docs/release-validation/<version>.md` に従う。実施対象となるarchiveは候補artifact自体をnative architectureで起動し、別archive/OSの結果で置き換えない。Linux musl aarch64はE15のnative Fedora aarch64上でAlpine arm64 Docker containerを使い、CPU emulationなしで実施する。
 
 | 配布binary archive | 環境例 | 選択されたcandidateで行う実機操作 |
 |---|---|---|
@@ -73,7 +73,7 @@ PX4/ASICEN共通の記録構造と空のmatrixは [`release-record.md`](release-
 
 ### 0.1 共通コマンド
 
-`<version>`、`<platform>`、`$ID`、`$FW`、`$RT`、`$LOG` は実値に置き換える。artifact は候補 commit の `release-candidate`（§2）だけを使い、手元 build や旧 archive で代用しない。
+`<version>`、`<platform>`、`$ID`、`$INSTANCE`、`$FW`、`$RT`、`$LOG` は実値に置き換える。artifact は候補 commit の `release-candidate`（§2）だけを使い、手元 build や旧 archive で代用しない。
 
 artifact 検証と展開（X-PREP）:
 
@@ -82,33 +82,42 @@ sha256sum -c SHA256SUMS                              # macOS: shasum -a 256 -c
 D=$(mktemp -d); tar -xzf px4-userland-<version>-<platform>.tar.gz -C "$D"
 sha256sum "$FW"                                      # 5213a5a38872661277a2cc1b2dfdfe88faf06f41205f460f3b51857f0568b484
 RT=$(mktemp -d "${TMPDIR:-/tmp}/px4-userland.XXXXXX"); LOG=<log dir>
+ID=usb:<BUS-PORT>
+INSTANCE=<instance-token>
 "$D/px4d" --list > "$LOG/list.txt"                   # model / usb / status=ready / receivers
 ```
 
 daemon 起動と準備完了確認（X-START）:
 
 ```sh
-"$D/px4d" --device "$ID" --firmware "$FW" --runtime-dir "$RT" 2> "$LOG/px4d.err" &
+"$D/px4d" --device "$ID" --instance "$INSTANCE" --firmware "$FW" --runtime-dir "$RT" 2> "$LOG/px4d.err" &
 P=$!
 # statusを再実行してreadyを確認する。group modeならpx4d/px4ctlの両方に --group を付ける。
-"$D/px4ctl" --device "$ID" --runtime-dir "$RT" status | tee "$LOG/status-start.txt"
-"$D/px4ctl" --device "$ID" --runtime-dir "$RT" list | tee "$LOG/ctl-list.txt"
+"$D/px4ctl" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" status | tee "$LOG/status-start.txt"
+"$D/px4ctl" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" list | tee "$LOG/ctl-list.txt"
 ```
 
 受信と監視（X-LOAD / X-MON）:
 
-次の8コマンドを同じ端末で個別に実行する。各receiverは30秒で終了する。これは受信確認であり、物理操作の応答を待つ間の負荷継続には使わない。
+USB selectorを指定するdaemonには`--instance`が必要である。clientにもdaemonと同じdevice selector、instance、runtime directoryを指定する。短い単一receiver確認には次の形を使い、`<SECONDS>`は該当版のmatrix値へ置き換える。
+
+```sh
+"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --receiver <ID> --channel T27 \
+  --runtime-dir "$RT" --output t27.ts --time <SECONDS>
+```
+
+Q3U4の8 receiver確認は次の8コマンドを同じ端末で個別に実行する。各receiverは30秒で終了する。これは受信確認であり、物理操作の応答を待つ間の負荷継続には使わない。
 
 ```sh
 # Q3U4 8 receiver（受信継続: 0/1/4/5=S、2/3/6/7=T）
-"$D/px4-ts" --device "$ID" --receiver 0 --system isdb-s --freq 1318000000 --slot 0 --runtime-dir "$RT" --output /dev/null --time 30 2> "$LOG/r0.err" & R0=$!
-"$D/px4-ts" --device "$ID" --receiver 1 --system isdb-s --freq 1318000000 --slot 0 --runtime-dir "$RT" --output /dev/null --time 30 2> "$LOG/r1.err" & R1=$!
-"$D/px4-ts" --device "$ID" --receiver 4 --system isdb-s --freq 1318000000 --slot 0 --runtime-dir "$RT" --output /dev/null --time 30 2> "$LOG/r4.err" & R4=$!
-"$D/px4-ts" --device "$ID" --receiver 5 --system isdb-s --freq 1318000000 --slot 0 --runtime-dir "$RT" --output /dev/null --time 30 2> "$LOG/r5.err" & R5=$!
-"$D/px4-ts" --device "$ID" --receiver 2 --system isdb-t --freq 527143000 --runtime-dir "$RT" --output /dev/null --time 30 2> "$LOG/r2.err" & R2=$!
-"$D/px4-ts" --device "$ID" --receiver 3 --system isdb-t --freq 527143000 --runtime-dir "$RT" --output /dev/null --time 30 2> "$LOG/r3.err" & R3=$!
-"$D/px4-ts" --device "$ID" --receiver 6 --system isdb-t --freq 527143000 --runtime-dir "$RT" --output /dev/null --time 30 2> "$LOG/r6.err" & R6=$!
-"$D/px4-ts" --device "$ID" --receiver 7 --system isdb-t --freq 527143000 --runtime-dir "$RT" --output /dev/null --time 30 2> "$LOG/r7.err" & R7=$!
+"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --receiver 0 --system isdb-s --freq 1318000000 --slot 0 --runtime-dir "$RT" --output /dev/null --time 30 2> "$LOG/r0.err" & R0=$!
+"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --receiver 1 --system isdb-s --freq 1318000000 --slot 0 --runtime-dir "$RT" --output /dev/null --time 30 2> "$LOG/r1.err" & R1=$!
+"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --receiver 4 --system isdb-s --freq 1318000000 --slot 0 --runtime-dir "$RT" --output /dev/null --time 30 2> "$LOG/r4.err" & R4=$!
+"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --receiver 5 --system isdb-s --freq 1318000000 --slot 0 --runtime-dir "$RT" --output /dev/null --time 30 2> "$LOG/r5.err" & R5=$!
+"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --receiver 2 --system isdb-t --freq 527143000 --runtime-dir "$RT" --output /dev/null --time 30 2> "$LOG/r2.err" & R2=$!
+"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --receiver 3 --system isdb-t --freq 527143000 --runtime-dir "$RT" --output /dev/null --time 30 2> "$LOG/r3.err" & R3=$!
+"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --receiver 6 --system isdb-t --freq 527143000 --runtime-dir "$RT" --output /dev/null --time 30 2> "$LOG/r6.err" & R6=$!
+"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --receiver 7 --system isdb-t --freq 527143000 --runtime-dir "$RT" --output /dev/null --time 30 2> "$LOG/r7.err" & R7=$!
 # 8個それぞれの終了値を記録する（各waitは個別に実行）。
 wait "$R0"; echo "$?" > "$LOG/r0.rc"
 wait "$R1"; echo "$?" > "$LOG/r1.rc"
@@ -120,7 +129,18 @@ wait "$R6"; echo "$?" > "$LOG/r6.rc"
 wait "$R7"; echo "$?" > "$LOG/r7.rc"
 ```
 
-受信中の監視は別の端末で実行する: `px4ctl status`、`px4ctl card-apdu 90:30:00:00:00 --repeat 10`、FD/RSSを記録する。受信確認の実行時間は30秒で、全手順やartifact gateの所要時間を制限しない。
+受信中の監視は別の端末で実行する。shell変数は端末間で引き継がれないため、起動端末に表示されたcandidate展開先 `$D`、device selector `$ID`、`$INSTANCE`、`$RT` と同じ実値をこの端末にも設定する。
+
+```sh
+D=<candidate-directory>
+ID=usb:<BUS-PORT>
+INSTANCE=<instance-token>
+RT=<same-runtime-directory-as-startup-terminal>
+"$D/px4ctl" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" status
+"$D/px4ctl" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" card-apdu 90:30:00:00:00 --repeat 10
+```
+
+FD/RSSも記録する。受信確認の実行時間は30秒で、全手順やartifact gateの所要時間を制限しない。
 
 Termux での起動（X-START-TERMUX）:
 
@@ -149,10 +169,10 @@ Q3U4 preflight: 両 USB device、15V adapter、両 RF lead を接続し、`px4d 
 ```sh
 CTL="$D/px4ctl"
 APDU=90:30:00:00:00
-"$CTL" --device "$ID" --runtime-dir "$RT" card-status | tee "$LOG/card-before.txt"
-"$CTL" --device "$ID" --runtime-dir "$RT" card-atr > "$LOG/card-before.atr"
-"$CTL" --device "$ID" --runtime-dir "$RT" card-reset > "$LOG/card-before.reset"
-"$CTL" --device "$ID" --runtime-dir "$RT" card-apdu "$APDU" --repeat 10 > "$LOG/card-before.apdu"
+"$CTL" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" card-status | tee "$LOG/card-before.txt"
+"$CTL" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" card-atr > "$LOG/card-before.atr"
+"$CTL" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" card-reset > "$LOG/card-before.reset"
+"$CTL" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" card-apdu "$APDU" --repeat 10 > "$LOG/card-before.apdu"
 ```
 
 カード抜去を要求する前にHAOS/SCS側で通知する:
@@ -164,10 +184,10 @@ beep   # Codex。Claude Codeは vibe
 ユーザーへB-CASカードを抜くよう依頼し、操作完了まで最大5分待つ。その後に不在検出コマンドを個別に実行する:
 
 ```sh
-"$CTL" --device "$ID" --runtime-dir "$RT" card-status | tee "$LOG/card-removed.txt"
-if "$CTL" --device "$ID" --runtime-dir "$RT" card-atr > "$LOG/card-removed.atr" 2> "$LOG/card-removed.err"; then rc=0; else rc=$?; fi
+"$CTL" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" card-status | tee "$LOG/card-removed.txt"
+if "$CTL" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" card-atr > "$LOG/card-removed.atr" 2> "$LOG/card-removed.err"; then rc=0; else rc=$?; fi
 echo "$rc" > "$LOG/card-removed.atr.rc"       # NO_CARD / exit 9 を期待
-if "$CTL" --device "$ID" --runtime-dir "$RT" card-apdu "$APDU" > "$LOG/card-removed.apdu" 2> "$LOG/card-removed-apdu.err"; then rc=0; else rc=$?; fi
+if "$CTL" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" card-apdu "$APDU" > "$LOG/card-removed.apdu" 2> "$LOG/card-removed-apdu.err"; then rc=0; else rc=$?; fi
 echo "$rc" > "$LOG/card-removed.apdu.rc"      # NO_CARD / exit 9 を期待
 ```
 
@@ -180,10 +200,10 @@ beep   # Codex。Claude Codeは vibe
 ユーザーへB-CASカードを戻すよう依頼し、操作完了まで最大5分待つ。その後に復帰コマンドを個別に実行する:
 
 ```sh
-"$CTL" --device "$ID" --runtime-dir "$RT" card-status | tee "$LOG/card-reinserted.txt"
-"$CTL" --device "$ID" --runtime-dir "$RT" card-atr > "$LOG/card-reinserted.atr"
-"$CTL" --device "$ID" --runtime-dir "$RT" card-reset > "$LOG/card-reinserted.reset"
-"$CTL" --device "$ID" --runtime-dir "$RT" card-apdu "$APDU" --repeat 10 > "$LOG/card-reinserted.apdu"
+"$CTL" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" card-status | tee "$LOG/card-reinserted.txt"
+"$CTL" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" card-atr > "$LOG/card-reinserted.atr"
+"$CTL" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" card-reset > "$LOG/card-reinserted.reset"
+"$CTL" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" card-apdu "$APDU" --repeat 10 > "$LOG/card-reinserted.apdu"
 ```
 
 判定: `card-status`の`present=no`とreader generationの変化、ATR/APDUの`NO_CARD`・exit 9を確認する。再挿入時は`present=yes`となりgenerationが再度変化し、ATR取得・reset・APDU 10回が成功することを確認する（過去の正常応答はSW `90 00`）。その後§0.1の8 receiverを30秒実行し、TS/counter条件はSPEC 10.2に従う。カード抜去・再挿入ができない場合、そのartifactの短時間gateは未完了。
@@ -195,7 +215,7 @@ beep   # Codex。Claude Codeは vibe
 USB切断を観測するclientを起動する:
 
 ```sh
-"$D/px4-ts" --device "$ID" --receiver 0 --system isdb-s --freq 1318000000 --slot 0 \
+"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --receiver 0 --system isdb-s --freq 1318000000 --slot 0 \
   --runtime-dir "$RT" --output /dev/null --time 300 2> "$LOG/usb-detach-client.err" &
 USB_CLIENT=$!
 ```
@@ -210,7 +230,7 @@ beep   # Codex。Claude Codeは vibe
 
 ```sh
 wait "$USB_CLIENT"; echo "$?" > "$LOG/usb-detach-client.rc"
-"$D/px4ctl" --device "$ID" --runtime-dir "$RT" status > "$LOG/usb-detach-status.txt" 2>&1
+"$D/px4ctl" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" status > "$LOG/usb-detach-status.txt" 2>&1
 ```
 
 切断したUSB接続を戻すようユーザーに依頼する直前に、HAOS/SCS側で再度通知する:
@@ -235,10 +255,10 @@ kill -TERM "$P"
 wait "$P"
 ```
 
-旧daemonがすでに終了している場合は`pgrep -fl '[p]x4d'`で残留がないことを確認する。どちらの場合も旧daemonを再利用せず、X-STARTのコマンド群を同じcandidate artifact・device ID・runtime dirで再実行し、`px4ctl status`でreadyを確認する。その後§0.1の8 receiver 30秒確認と、次のAPDU確認を行う:
+旧daemonがすでに終了している場合は`pgrep -fl '[p]x4d'`で残留がないことを確認する。どちらの場合も旧daemonを再利用せず、X-STARTのコマンド群を同じcandidate artifact・device ID・instance・runtime dirで再実行し、`"$D/px4ctl" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" status`でreadyを確認する。その後§0.1の8 receiver 30秒確認と、次のAPDU確認を行う:
 
 ```sh
-"$D/px4ctl" --device "$ID" --runtime-dir "$RT" card-apdu 90:30:00:00:00 --repeat 10 \
+"$D/px4ctl" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" card-apdu 90:30:00:00:00 --repeat 10 \
   > "$LOG/card-after-usb-reconnect.apdu"
 ```
 
@@ -262,9 +282,9 @@ receiver 7 で TEI/continuity burst が出て、SPEC 10.2.6a の比較条件（�
 3. 対象 claim ごとに `継承`、`今回再検証`、`未認定`、`対象外` のいずれかを記録し、根拠を書く。証拠の軸は SPEC 10.2.8 に従う。別 model、別 OS/runtime、別 access path、別 feature へ結果を外挿しない。同一 model・同一 runtime/access path・同一 feature の証拠は、対象 artifact の bytes が baseline と同一であるか、変更がその path へ影響しないと 10.5.1 の表で判定できる場合に継承できる。未知の影響は affected として扱い、`対象外` は SPEC の対象外または本手順 §0 の対象外に限る。
 4. 前回の適格なlong soakの日付やrelease数は事実情報として記録できるが、エージェントがsoak有無・時間・OSを決める規則として使わない。
 
-Termuxのarchitecture、Termux launcherのFD path、glibc/musl、native PC/SC adapterは別々のruntime/access pathとして扱う。Windows 11 x64（E17）のcandidate適用頻度は [`release-validation-current.md`](release-validation-current.md) に従い、選択されたartifactではnative libusb tunerとCARD_*、実機の物理回帰を以下の手順で行う。CIのbuild/offline test成功は`build-tested`のみを示し、実機matrixが未完了の間は当該行を`未認定`（`hardware-unverified`）として扱う。FreeBSDとAndroid ad-hoc APKは対象外である。変更も新規claimもないpathを毎回試験しない。
+Termuxのarchitecture、Termux launcherのFD path、glibc/musl、native PC/SC adapterは別々のruntime/access pathとして扱う。Windows 11 x64（E17）のcandidate適用頻度は該当版のmatrixに従い、WindowsとWinSCardが対象に含まれる版ではnative libusb tuner、CARD_*、WinSCard、実機の物理回帰を以下の手順で行う。CIのbuild/offline test成功は`build-tested`のみを示し、実機matrixが未完了の間は当該行を`未認定`（`hardware-unverified`）として扱う。FreeBSDとAndroid ad-hoc APKは対象外である。変更も新規claimもないpathを毎回試験しない。
 
-影響分類が複数にまたがる、依存範囲が不明、または非影響を証明できない場合は `unknown/ambiguous` として、影響し得るpath集合をユーザーへの説明に含める。選択する短時間実機確認のarchiveは影響判定に関係なくcandidateそのものを使い、適用するarchive/OS頻度は [`release-validation-current.md`](release-validation-current.md) に従う。
+影響分類が複数にまたがる、依存範囲が不明、または非影響を証明できない場合は `unknown/ambiguous` として、影響し得るpath集合をユーザーへの説明に含める。選択する短時間実機確認のarchiveは影響判定に関係なくcandidateそのものを使い、適用するarchive/OS頻度は該当版の `docs/release-validation/<version>.md` に従う。
 
 ## 2. source / CI / candidate artifact gate（毎回）
 
@@ -316,7 +336,7 @@ gh run view <run-id> --job <job-id> --log > "$LOG/run-<run-id>-job-<job-id>.log"
 
 ## 3. 配布artifactごとの実機短時間確認手順
 
-適用対象archiveと頻度は [`release-validation-current.md`](release-validation-current.md) に従い、選択されたarchiveは §0 の対応行と以下の操作を使ってnative環境で独立に実施する。Windows行はE17のWindows手順に従い、native Windows 11 x64で実施する。必須確認の一連の操作に総時間上限は設けない。B-CAS/USBの物理操作はユーザーが行い、各操作を依頼した時点から最大5分待つ。各物理操作を依頼する直前にHAOS/SCS側でCodexは`beep`、Claude Codeは`vibe`を実行する。各runの記録にはarchive名/SHA-256、source commit、環境ID/OS version/architecture、機種/USB path、実施時刻、コマンド、終了値、card status/generation/ATR/APDU応答、TS/counter、残留の有無を残す。
+適用対象archiveと頻度は該当版のmatrixに従い、選択されたarchiveは §0 の対応行と以下の操作を使ってnative環境で独立に実施する。Windows行はE17のWindows手順に従い、native Windows 11 x64で実施する。必須確認の一連の操作に総時間上限は設けない。B-CAS/USBの物理操作はユーザーが行い、各操作を依頼した時点から最大5分待つ。各物理操作を依頼する直前にHAOS/SCS側でCodexは`beep`、Claude Codeは`vibe`を実行する。各runの記録にはarchive名/SHA-256、source commit、環境ID/OS version/architecture、機種/USB path、実施時刻、コマンド、終了値、card status/generation/ATR/APDU応答、TS/counter、残留の有無を残す。
 
 1. 候補archiveのhash確認・展開、Q3U4のfirmware/RF/電源preflight、ログ先作成を済ませる。これらを含めて一連の確認に総時間上限は設けない。
 2. `px4d --list` と `--list-json` でQ3U4が8 receiver readyと列挙されることを確認し、JSON schema・boolean型・receiver capability値を照合する。M1UR/S1URのserial衝突やLNB非対応profile表示が変更対象なら、§0の該当する機種別追加確認も行う。
@@ -324,7 +344,7 @@ gh run view <run-id> --job <job-id> --log > "$LOG/run-<run-id>-job-<job-id>.log"
 4. 再挿入を依頼する直前に通知し、依頼後最大5分待つ。generation更新、ATR/reset/APDU 10回の復帰を確認する。
 5. X-USB-HPで1 receiver clientを起動してUSB切断を観測する。USB切断を依頼する直前に通知し、依頼後最大5分待つ。clientが有限時間で`DISCONNECTED` / exit 7となり、ハングやclient process残留がないことを確認する。
 6. USB再接続を依頼する直前に通知し、依頼後最大5分待つ。`--list` / `--list-json`で再列挙を確認した後、旧daemonを停止して終了を待ち、X-STARTの手順で同じcandidateからdaemonを起動し直す。古いdaemonの自動復帰を合格条件にしない。
-7. 再起動後に`px4ctl status`でreadyを確認し、8 receiverを30秒実行してTS条件をSPEC 10.2の適用項目で確認する。APDU 10回も再確認し、最後にdaemon/client、FD、IPC socket/control endpointの残留がないことを確認する。
+7. 再起動後に`"$D/px4ctl" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" status`でreadyを確認し、8 receiverを30秒実行してTS条件をSPEC 10.2の適用項目で確認する。APDU 10回も再確認し、最後にdaemon/client、FD、IPC socket/control endpointの残留がないことを確認する。
 
 Linux musl aarch64はE15 Fedora aarch64上のAlpine arm64 Docker containerでcandidate artifactを実行する。hostがaarch64であることを`uname -m`等で確認し、CPU emulationを使わず、物理USB deviceをcontainerへ渡す。このartifact行はglibc aarch64の結果で代用せず、独立して実施・記録する。native aarch64 hostまたはUSB passthroughが利用できず物理確認を完了できない場合はgate未完了とする。
 
@@ -348,7 +368,7 @@ candidateで選択された短時間matrixとは別に、SPEC 10.5.1の分類、
 - 2時間: 指定OSで、選択されたprofileに応じた負荷、反復status/APDU、retune/stop-reopen、FD数・RSSの経時傾向、cleanupを確認する。Q3U4では§0.1の8 receiver T/S混在を使う。
 - いずれもshell終了値だけで合否を決めない。TS/counterはSPECの受入条件を使う。FD/RSSは数値固定の合否閾値を設定せず、非安定な持続増加は`判定保留`として調査する。
 
-追加profile認定、single receiver認定、PX-M1UR/PX-S1UR同一serial確認、receiver 7比較の個別条件はSPEC 10.2.6a/10.2.7と各記録を参照する。これらの認定をreleaseごとの代表Linux x86_64 2時間、またはmajor versionごとの各OS/architecture短TSの代わりに使わない。1.0.0初回matrixへの適用は `release-validation-current.md` §7 に従う。
+追加profile認定、single receiver認定、PX-M1UR/PX-S1UR同一serial確認、receiver 7比較の個別条件はSPEC 10.2.6a/10.2.7と各記録を参照する。これらの認定をreleaseごとの代表Linux x86_64 2時間、またはmajor versionごとの各OS/architecture短TSの代わりに使わない。1.0.0初回matrixへの適用は [`release-validation/1.0.0.md`](release-validation/1.0.0.md) に従う。
 
 ### PX-M1UR / PX-S1UR の同一serial確認
 
@@ -363,7 +383,7 @@ v0.26 の識別変更が対象のとき、両機種を同時接続できる環�
 PX-M1URのISDB-SはLNB 0Vで受信できるが、15V要求は`--allow-lnb-power`の有無によらず`UNSUPPORTED`（exit 3）で拒否され、LNB用GPIOへ書き込まない。LNB/GPIO動作を変更したcandidateでは、PX-M1URだけを接続し、同じS受信要求をdaemonのopt-inなし・ありの両方で試す。daemon起動には毎回X-STARTのコマンド群を使い、なしのrunは通常のX-START、ありのrunは`--allow-lnb-power`を追加して起動し、各run後にdaemonを停止する。各daemon起動後に、次のコマンドを実行してexit 3を記録する:
 
 ```sh
-if "$D/px4-ts" --device "$ID" --receiver 0 --system isdb-s --freq 1318000000 --slot 0 \
+if "$D/px4-ts" --device "$ID" --instance "$INSTANCE" --receiver 0 --system isdb-s --freq 1318000000 --slot 0 \
   --runtime-dir "$RT" --lnb-voltage 15 --time 1 --output /dev/null \
   > "$LOG/lnb-15v-rejected.out" 2> "$LOG/lnb-15v-rejected.err"; then rc=0; else rc=$?; fi
 echo "$rc" > "$LOG/lnb-15v-rejected.rc"
@@ -397,7 +417,7 @@ release限定dispositionを適用する。原試行と追加試験を別々に�
 次をすべて満たすまでStable公開へ進まない。
 
 - Stable共通のCI、candidate artifact audit、source/license、checksum gateが成功。
-- final candidateについて、release-validation-current.mdで当該releaseに適用される短時間matrixが成功し、ユーザーがsoakを選んだ場合は指定時間・OSの試験が完了している。soakのFD数・RSSが最終観測まで安定化しない持続的な増加を示し、外部要因を特定できない場合は `判定保留` とし、公開しない。
+- final candidateについて、該当版の `docs/release-validation/<version>.md` で当該releaseに適用される短時間matrixが成功し、ユーザーがsoakを選んだ場合は指定時間・OSの試験が完了している。soakのFD数・RSSが最終観測まで安定化しない持続的な増加を示し、外部要因を特定できない場合は `判定保留` とし、公開しない。
 - READMEの各support claimが実証または適格なbaseline継承に対応し、未試験のmodel × runtime/access path × featureを認定表示していない。
 - crash、hang、use-after-free、stale lease、再接続不能、カード経路の重大な未解決issueがない。
 - 当該releaseで選択された短時間matrixに未完了の配布artifactがある場合はStable gate未完了とし、そのままsupport表示だけで完了扱いしない。
