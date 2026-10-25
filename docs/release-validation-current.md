@@ -9,9 +9,9 @@
 CI artifactを新規空ディレクトリへ展開し、archive内の `SHA256SUMS` を確認する。
 
 ```sh
-mkdir candidate && cd candidate
-tar -xf <candidate-artifact.tar.gz>
-sha256sum -c SHA256SUMS
+mkdir -p candidate
+gh run download <candidate-run-id> --name release-candidate --dir candidate
+(cd candidate && sha256sum -c SHA256SUMS)
 ```
 
 Windows ZIPはPowerShellの `Expand-Archive` と `Get-FileHash -Algorithm SHA256` で同様に照合する。全9 binaryとsourceの欠落、余分なファイル、license/provenance不一致は失敗として候補を止める。
@@ -24,7 +24,7 @@ Windows ZIPはPowerShellの `Expand-Archive` と `Get-FileHash -Algorithm SHA256
 
 ## 3. 環境と受信機確認
 
-各archiveはnative OS/architectureで展開して起動する。最低時間はLinux x86_64代表機2時間、macOS arm64 30分、Windows x86_64 30分、その他の全配布binary各10分。2時間は製品の各機種が一度以上、かつ各releaseの代表Linux x86_64機で実施する。releaseごとの全binaryはそれぞれの実機・代表/影響機種で短時間回帰する。major versionでは各OS/architectureの短時間TSも行う。条件を別archiveや別OSの結果で代用しない。
+各releaseのSoakでは代表Linux x86_64機で2時間連続受信する。対応機種ごとのqualificationでは各機種自体を一度以上2時間試験し、releaseごとに同じ機種を繰り返す条件ではない。major versionでは全OS/architectureごとにnative binaryで短時間TSを行う。時間・機種・OS/architectureの各判定は別々に記録し、他の条件の結果で代用しない。
 
 環境ごとに候補SHA/archive SHA、OS/arch、model/serial（公開記録では秘匿可）、USB selector、firmware、RF/antenna、電源、実行時刻、実コマンド、終了値、TS/counterを記録する。代表機は接続前に `px4d --list-json` でproducer inventoryを採り、実際に見えたmodel/device/receiverと選択値を対応付ける。USB位置は候補ごとの実値へ置き換える。
 
@@ -35,12 +35,12 @@ RT=$(mktemp -d "${TMPDIR:-/tmp}/px4-release.XXXXXX")
 px4d --device usb:<BUS-PORT> --firmware <FIRMWARE> --runtime-dir "$RT" & P=$!
 px4ctl --device usb:<BUS-PORT> --runtime-dir "$RT" status
 px4ctl --device usb:<BUS-PORT> --runtime-dir "$RT" list
-px4-ts --device usb:<BUS-PORT> --receiver <ID> --channel T27 --runtime-dir "$RT" --output t27.ts --time 10
+px4-ts --device usb:<BUS-PORT> --receiver <ID> --channel T27 --runtime-dir "$RT" --output t27.ts --time <SECONDS>
 ```
 
 `status` がready、`list` が対象receiverを示すことを確認する。T27を10秒受信した出力は非空の188-byte packet列で同期し、daemonのpacket/sync/TEI/continuity/queue/USB統計と終了値を記録する。TS品質はSPEC 10の条件で判定し、単なる非空出力を合格根拠にしない。異常ならTS・stderr・counterを保存し、再取得で失敗を上書きしない。
 
-地上波の実地域全チャンネルをそれぞれ10秒受信し、無料衛星の全対象チャンネルも各10秒受信する。チャンネル名・周波数・TSID・slotは現地の受信計画と機器のチューナー表から実値を列挙し、試験記録に固定する。CSを含む無料波のraw TSを除外しない。全8 receiverを公開仕様上有するQ3U4では各receiverを個別にも短時間取得し、SPEC記載のreceiver別条件を確認する。地上波/衛星を持たないprofileは対象外を明記する。
+各変更に対応するchannel/receiverの短時間受信を実施する。チャンネル名・周波数・TSID・slotは現地の受信計画と機器のチューナー表から実値を列挙し、試験記録に固定する。全8 receiverを公開仕様上有するQ3U4では変更に関係するreceiverを取得し、SPEC記載のreceiver別条件を確認する。地上波/衛星を持たないprofileは対象外を明記する。
 
 正常停止後に同じruntimeで再取得し、終了値0、daemonの正常cleanup、再取得成功を確認する。`px4ctl card-status`, `card-atr`, `card-reset`, `card-apdu 90:30:00:00:00 --repeat 10` をカード挿入時に実行する。B-CASを抜く前にcaptureを止め、ユーザーが抜去後にstatusが不在、ATR/APDUがNO_CARD/exit 9となることを確認し、再挿入後present、ATR/reset/APDU反復が成功することを確認する。生ATR/APDU・カード識別値は公開記録へ保存しない。Linux/macOSのPC/SC経路とWindows WinSCard経路を分けて確認し、カード再挿入後に新規captureも行う。
 
@@ -52,10 +52,16 @@ LNB試験は `--allow-lnb-power` を実装する対応profileでだけ行う。�
 
 ## 5. soak・片付け・リリース判定
 
-各時間を満たす連続受信では同じ条件でchannelを維持し、受信機全体の状態・TSカウンタ・process/FD/RSSを開始・定期・終了時に保存する。地域全chおよび無料衛星全対象の10秒試験はsoakとは別に行う。候補archive、時間、OS/arch、機種、channel、終端理由を記録する。時間未達・切断・TS不整合は失敗/未完として残す。
+Soakでは同じ条件でchannelを維持し、受信機全体の状態・TSカウンタ・process/FD/RSSを開始・定期・終了時に保存する。候補archive、時間、OS/arch、機種、channel、終端理由を記録する。時間未達・切断・TS不整合は失敗/未完として残す。
 
 daemon/clientを通常停止し、status、process残留、runtime socketの後始末を確認する。daemonが残る場合はログと状態を保存してから対象PIDだけを終了する。記録にはcandidate/ref/run/artifact/hash、実機環境、コマンド、人的操作、期待値と実測、全失敗、未試験/対象外、cleanup、判定を含める。全gate後にだけ結果文書をcommitし、source/build inputを変えていないことを確認する。この文書は検証手順でありtag/release実行の許可ではない。
 
 ## 6. 製品固有の適用範囲
 
-PX4の内蔵CARDとLNBは機種ごとに機能差がある。receiver ID、放送方式、LNB 15V対応、CARD reader数は [`README.md`](../README.md) と [`SPEC.md`](../SPEC.md) を参照し、存在しない機能の試験を要求しない。PIC/Emergency等の別ハード仕様を一般化せず、対象機種ごとに状態を `今回再検証` / `継承` / `未認定` / `対象外` と記す。既知Issueや過去候補の結果を今回candidateのpassへ読み替えない。
+PX4の内蔵CARDとLNBは機種ごとに機能差がある。receiver ID、放送方式、LNB 15V対応、CARD reader数は [`README.md`](../README.md) と [`SPEC.md`](../SPEC.md) を参照し、存在しない機能の試験を要求しない。機器固有の仕様を一般化せず、対象機種ごとに状態を `今回再検証` / `継承` / `未認定` / `対象外` と記す。既知Issueや過去候補の結果を今回candidateのpassへ読み替えない。
+
+## 7. 1.0.0 初回matrix（この版だけ）
+
+以下の初回版実機matrixの時間・対象は、後続releaseへ自動継承しない。1.0.0では代表Linux x86_64を2時間、macOS arm64とWindows x86_64を各30分、その他全配布binaryを各10分試験する。Linux x86_64代表機2時間と機種一度以上2時間という上の共通項目も満たす。各配布binaryはnative OS/architectureで短時間回帰し、全地上波channelおよび全無料衛星対象channelのraw TSをそれぞれ10秒ずつ取得する。無料CSも含める。
+
+各地域のchannel/TSID/slot実値は開始前に固定し、コマンドの `--time <SECONDS>` をこのmatrixでは `10` に置換する。major versionの各OS/architecture短TSはこのchannel全数回帰と別記する。1.0.0候補の全archive、時間、OS/arch、機種、channelごとの結果を保存する。
