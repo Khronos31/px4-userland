@@ -17,6 +17,53 @@
 
 全配布archiveのnative短時間回帰と代表機だけの全channel10秒取得は別の確認である。以下の既存artifact別・receiver別・CARD/USB/LNB操作はそのまま保持し、現行CLIへ合わせて実行する。版別の実績と未達はversion文書に記録する。
 
+## 共通実行環境表
+
+| ID | OS / ABI | 依存 / driver / permission | firmware / input | CARD backend | 配布artifact / 手順 |
+|---|---|---|---|---|---|
+| E03 | AnduinOS Linux x86_64 / glibc | native host、USB access pathを記録 | firmware image、地上/衛星入力 | Linux PC/SC IFDを別途確認 | `linux-glibc-x86_64` / §6 |
+| E02 | HAOS Alpine Linux x86_64 / musl | native/static runtime、Supervisor USB access path | firmware image、地上/衛星入力 | musl PC/SC IFDを別途確認 | `linux-musl-x86_64` / §6 |
+| E15-G | Fedora Linux aarch64 / glibc | native aarch64、USB access path | firmware image、地上/衛星入力 | Linux PC/SC IFDを別途確認 | `linux-glibc-aarch64` / §6 |
+| E15-M | native Linux aarch64 / musl | native aarch64、Alpine runtime、emulationなし | firmware image、地上/衛星入力 | musl PC/SC IFDを別途確認 | `linux-musl-aarch64` / §6 |
+| E04 | macOS arm64 | libusb/USB permissionを記録 | firmware image、地上/衛星入力 | macOS PC/SC IFDを別途確認 | `darwin-arm64` / §6 |
+| E05 | Android Termux aarch64 | Termux USB permission、2-FD launcher | firmware image、地上/衛星入力 | 非対応 | `android-aarch64` / §6 |
+| E06 | Android Termux armv7a | Termux USB permission、2-FD launcher | firmware image、地上/衛星入力 | 非対応 | `android-armv7a` / §6 |
+| E07 | BlissOS Termux x86_64 | Termux USB permission、2-FD launcher | firmware image、地上/衛星入力 | 非対応 | `android-x86_64` / §6 |
+| E17 | Windows 11 x86_64 | 現在許可されたUSB driverを記録し変更しない | firmware image、地上/衛星入力 | native WinSCardを別途確認 | `windows-x86_64` / §6 |
+
+この表は現行配布targetとnative実行条件の対応である。実際のhost OS/ABI、USB access path、実施結果は各version文書へ記録する。production HAOS上で試験環境を変更する場合は別途承認済み手順に従う。
+
+## 共通試験シナリオ
+
+全製品で同一の列を使う。詳細なPX4 command blockは§0と§6にあり、ここでは各シナリオの実行順と期待/cleanupを固定する。
+
+### A. 列挙と最大同時受信
+
+| 適用頻度 / 対象能力 | 準備 / 起動 | 操作 / 利用者への依頼 | 期待値 | 停止 / cleanup | 記録 |
+|---|---|---|---|---|---|
+| 毎release。PX-Q3U4は公開8 receiver、他機種はREADMEの能力 | candidate native archive、firmware、現地USB位置、空のruntimeを用意し`px4d --list-json`で8 receiverを確認 | daemon起動後`px4ctl status/list`。公開receiverを最大同時数で`px4-ts`取得し、stream中status/APDU照会を反復 | 全client exit、各TS/parser、sync/TEI/continuity/drop/USB countersとreceiver statusを確認 | clientとdaemonを正常停止しprocess/FD/IPC残留なし | source/archive SHA、host/ABI、機種/USB、receiver/channel、各exit、TS/counters、cleanup |
+
+### B. CARD抜去・再挿入
+
+適用: CARD機能を持つ対象profile。daemon起動中、captureを止めた状態で実施する。各抜去/挿入の前に利用者へその物理操作を依頼し、依頼から最大5分待つ。未応答なら該当工程を未完了として停止する。
+
+1. §0.1のX-CARD-HPコマンド群で挿入時の`card-status`/ATR/resetと通常APDUを10回確認する。
+2. 親がカード抜去を依頼する。完了後に`card-status`が`present=no`、`card-atr`/`card-apdu`が`NO_CARD`（exit 9）を確認する。
+3. 親が同じカードの再挿入を依頼する。完了後に`card-status` present、ATR/reset、通常APDU 10回の復帰を確認する。
+4. §0.1のX-STOP/X-RESIDに従いdaemonを正常停止し、process/FD/IPC残留がないことを確認する。
+
+Linux/macOS PC/SC IFDおよびWindows WinSCardはnative stack上で別経路として同じ人間操作を行い、CLI CARD_*の結果で代用しない。記録はATR本文/card ID/APDU payloadを公開せず、status・response class・各exit・cleanupを含める。
+
+### C. USB抜去・再接続
+
+| 適用頻度 / 対象能力 | 準備 / 起動 | 操作 / 利用者への依頼 | 期待値 | 停止 / cleanup | 記録 |
+|---|---|---|---|---|---|
+| 毎release。対応する各USB機種のidle時とstreaming時 | `px4d --list-json`でUSB位置を確定し、idle/activeを別runにする | 各runで親がUSB抜去を依頼し、最大5分待つ。再接続を依頼し、再列挙後に旧daemonを停止して新runtimeで起動する | streaming clientの切断表示/exit 7、client終了と残留なし。新daemonで再列挙・ready・短い再取得を確認し、旧daemon自動復帰を期待しない | §0.1 X-STOP/X-RESIDでclient/daemonを通常停止し、FD/socket/processを確認 | 操作時刻、USB path、client/daemon exit、再列挙/再取得、cleanup |
+
+### D. teardown・結果
+
+clientを正常終了しdaemonをTERM/SIGINTで通常停止する。終了値、process/FD/runtime endpointを確認する。実施済み/未実施/失敗/対象外はversion別結果へ記録する。
+
 Stable releaseは次の順で進める。
 
 1. リリース候補のsource commitを固定し、そのcommitからCIでcandidate artifactを作る。
