@@ -1,6 +1,6 @@
 # 現行 Stable 候補のリリース前回帰手順
 
-この文書は現行配布構成に対する候補ごとの手順です。過去候補の行列・soak時間・実測値は今回候補の合格を意味しません。公開契約は [`SPEC.md`](../SPEC.md)、CLIの引数は [`README.md`](../README.md) と各コマンドの `--help` が正です。既存の詳細な候補記録は [`release-validation.md`](release-validation.md) を参照してください。
+この文書は現行配布構成の合否・頻度・版ごとのmatrixを定めます。PX4で確立済みの具体的な受信・CARD・USB・LNB操作と詳細コマンドは [`release-validation.md`](release-validation.md) を引き続き使用します。過去候補の実測値は今回候補の合格を意味しません。公開契約は [`SPEC.md`](../SPEC.md)、CLIの引数は [`README.md`](../README.md) と各コマンドの `--help` が正です。
 
 ## 1. 候補と配布物
 
