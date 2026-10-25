@@ -61,6 +61,61 @@ PX4の通常の無指定時検証機種はPX-Q3U4だが、機種初回の対象�
 
 ## 共通試験シナリオ T00–T14
 
+### run別candidateの取得と作業directory
+
+候補のsource commit SHAはこの手順書のcommit SHAと同一である必要はない。GitHub CLIで対象repoの成功した`build_userland.yml` runを列挙し、版別記録のcandidate source SHAと一致するrunだけを選ぶ。runのattempt、head SHA、結論、artifact ID/name/expiryを記録し、未成功・期限切れ・source不一致は未達として停止する。手動dispatch、build、正式Release workflowはこの手順では実行しない。
+
+Linux/macOSでは候補確認hostにGitHub CLI、Python 3.11以上、`sha256sum`（macOSは`shasum`）、`tar`を用意し、Termuxでは`pkg install gh python coreutils tar`後に`gh auth status`を確認する。WindowsではGitHub CLIとPython 3.11以上を用意し、`gh auth status`と`py -3 --version`を確認する。未導入packageの追加は当該hostの管理者承認後にだけ行う。
+
+```sh
+set -eu
+gh run list --repo Khronos31/px4-userland --workflow build_userland.yml --limit 20
+RUN_ID='<successful-candidate-run-id>'; TARGET='<native-target>'
+RUN_JSON=$(gh run view "$RUN_ID" --repo Khronos31/px4-userland --json headSha,attempt,conclusion)
+SOURCE_SHA=$(printf '%s\n' "$RUN_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["headSha"])')
+printf '%s\n' "$RUN_JSON" | python3 -c 'import json,sys; r=json.load(sys.stdin); assert r["conclusion"] == "success" and r["headSha"] and r["attempt"] > 0'
+test -n "$SOURCE_SHA"
+gh api "repos/Khronos31/px4-userland/actions/runs/$RUN_ID/artifacts" --jq '.artifacts[] | [.id,.name,.expired] | @tsv'
+WORK=$(mktemp -d "${TMPDIR:-$HOME}/px4-run-${RUN_ID}.XXXXXX"); chmod 700 "$WORK"; mkdir -m 700 "$WORK/download"
+gh run download "$RUN_ID" --repo Khronos31/px4-userland --name release-candidate --dir "$WORK/download"
+cd "$WORK/download"; sha256sum -c SHA256SUMS || shasum -a 256 -c SHA256SUMS
+ARCHIVE="px4-userland-<version>-$TARGET.tar.gz"; mkdir "$WORK/candidate"
+tar -xzf "$WORK/download/$ARCHIVE" -C "$WORK/candidate"; D="$WORK/candidate"
+LOG="$WORK/log"; RT="$WORK/runtime"; mkdir -m 700 "$LOG" "$RT"; cd "$D"; export PATH="$D:$PATH"
+test -x "$D/px4d"; test -x "$D/px4-ts"; test -x "$D/px4ctl"
+python3 -c 'import json,sys; m=json.load(open("manifest.json")); assert m.get("source_ref")==sys.argv[1] and m.get("platform")==sys.argv[2]' "$SOURCE_SHA" "$TARGET"
+```
+
+Windowsで`windows-x86_64`を試験する場合は、同じ成功runにある`release-candidate` artifactのID/nameを記録して取得する。Windows ZIPは通常配布archiveの代替ではない。
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$RunId = '<successful-candidate-run-id>'; $Target = 'windows-x86_64'
+$Work = Join-Path $HOME "px4-run-$RunId"; $Download = Join-Path $Work 'download'; $D = Join-Path $Work 'candidate'
+if (Test-Path $Work) { throw "refusing to reuse $Work" }
+New-Item -ItemType Directory -Path $Download,$D,(Join-Path $Work 'log'),(Join-Path $Work 'runtime') | Out-Null
+gh run view $RunId --repo Khronos31/px4-userland --json headSha,attempt,conclusion
+gh api "repos/Khronos31/px4-userland/actions/runs/$RunId/artifacts" --jq '.artifacts[] | [.id,.name,.expired] | @tsv'
+gh run download $RunId --repo Khronos31/px4-userland --name release-candidate --dir $Download
+$ZIP = Get-ChildItem $Download -Filter '*-windows-x86_64.zip' | Select-Object -First 1
+if (-not $ZIP) { throw 'candidate ZIP missing' }
+$run = gh run view $RunId --repo Khronos31/px4-userland --json headSha,attempt,conclusion | ConvertFrom-Json
+if ($run.conclusion -ne 'success') { throw 'candidate run is not successful' }
+$CandidateSourceSha = $run.headSha
+$sum = Get-Content (Join-Path $Download 'SHA256SUMS') | Where-Object { $_ -match "  $([regex]::Escape($ZIP.Name))$" }
+if (-not $sum) { throw 'candidate ZIP checksum entry missing' }
+$expected = ($sum -split '\s+')[0]; $actual = (Get-FileHash -Algorithm SHA256 $ZIP.FullName).Hash.ToLowerInvariant()
+if ($actual -ne $expected) { throw 'candidate ZIP checksum mismatch' }
+Expand-Archive -LiteralPath $ZIP.FullName -DestinationPath $D
+$manifest = Get-Content (Join-Path $D 'manifest.json') -Raw | ConvertFrom-Json
+if ($manifest.source_ref -ne $CandidateSourceSha -or $manifest.platform -ne $Target) { throw 'candidate provenance/target mismatch' }
+$LOG = Join-Path $Work 'log'; $RT = Join-Path $Work 'runtime'; Set-Location $D
+```
+
+TermuxはOSの`/tmp`を使わず`$PREFIX/tmp`へrun directoryを作る。`termux-usb -l`の各pathを保存し、VID/PID/product nameが対象機器と一致したpathだけを`termux-usb -r <path>`で許可する。候補取得後は`$D`/`$LOG`/`$RT`をTermux内の書込可能な`$HOME`配下へ置く。非対象nodeへpermission requestしない。候補のmanifest/source SHAとarchive hashを確定するまでUSB操作へ進まない。
+
+E02/E03/E15-M等のOS権限不足はまず`id`, `stat`, `lsusb -t`（Termuxでは`termux-usb -l`）で読み取り記録し停止する。udev ruleやgroup変更が別途承認された場合は変更前の対象file/ACLを`$LOG`へ保存し、承認されたruleだけ適用する。試験後に保存値を復元して差分がないことを確認する。HAOS/Supervisor optionsは既存の承認・退避・復元手順が完了するまで変更しない。
+
 各IDを同じ順序・同じ6項目で実施する。$RT/$LOG/$BUS-PORT/$CHANNEL_PLANはrunごとの実値に置換し、空のcandidate専用runtime/logを使う。物理操作を依頼する各回は既定通知を行い、最大5分で応答がなければ未完了として停止する。OS/API固有の長い操作は同じT-IDから後続recipeを参照する。
 
 ### T00 候補/配布物固定
@@ -147,17 +202,27 @@ PX4の通常の無指定時検証機種はPX-Q3U4だが、機種初回の対象�
 ### T09 TS・counter・終了値判定
 
 - **適用対象/頻度:** 全capture/soak。
-- **準備:** TS parser/SPEC条件とdaemon counterを確認できるようにする。
-- **実操作/利用者への依頼:** SPEC parser/sync/TEI/continuity/drop/USB countersを各receiver TSごと確認。
+- **準備:** Python 3.11以上を`python3 --version`で確認し、手順書checkoutの[`ts-check.py`](release-validation/ts-check.py)を使う。候補ごとに新規作成した`$LOG`を使う。
+- **実操作/利用者への依頼:** POSIXでは各TSに`python3 <runbook-checkout>/docs/release-validation/ts-check.py "$LOG/<receiver>.ts" > "$LOG/<receiver>.ts-check.json"`を実行する。Windowsは同じhelperを`py -3 <runbook-checkout>\docs\release-validation\ts-check.py "$LOG\<receiver>.ts"`で実行し、標準出力を`$LOG`へ保存する。全capture/soakの各TSで実行し、候補daemonのdrop/USB counterも記録する。
 - **期待値/終了値:** 全TSが製品SPEC基準を満たし通常取得exit 0。非空file/counter 0だけでpassにしない。
 - **停止/cleanup:** 元TS/hash/logを残してT08 cleanup。
-- **記録:** parser/version、TS hash、sync/TEI/continuity/drop/counter、exit。
+- **記録:** `python3 --version`、helperのGit SHA、TS hash、helperのJSON/終了値、sync/TEI/continuity/drop/counter、client exit。
+
+Windowsで各TSを確認するcommand:
+
+```powershell
+$helper = '<runbook-checkout>\docs\release-validation\ts-check.py'; $ts = Join-Path $LOG '<receiver>.ts'
+$json = Join-Path $LOG '<receiver>.ts-check.json'; $err = Join-Path $LOG '<receiver>.ts-check.err'
+& py -3 $helper $ts 1> $json 2> $err; $parserRc = $LASTEXITCODE
+$parserRc | Set-Content (Join-Path $LOG '<receiver>.ts-check.rc')
+if ($parserRc -ne 0) { throw "TS parser failed: $parserRc" }
+```
 
 ### T10 native PC/SC・WinSCard
 
 - **適用対象/頻度:** 対応OS/APIのみ。非対応製品は理由付きN/A。
 - **準備:** native OS adapter/consumerとcandidate IFD/DLL pathを用意。
-- **実操作/利用者への依頼:** Linux native IFD、macOS E04 [native PC/SC](#e04-macos-native-pcsc)およびWindows §6 E17/Windows WinSCard recipeでcandidate DLL/bundle、consumer、reader/card transactionを確認。
+- **実操作/利用者への依頼:** Linux native IFDは「Linux native PC/SC（E02/E03/E15）」、macOS E04 [native PC/SC](#e04-macos-native-pcsc)、Windows §6 E17/Windows WinSCard recipeでcandidate DLL/bundle、consumer、reader/card transactionを確認。
 - **期待値/終了値:** CLI CARD/CI smokeをnative transaction合格にしない。実consumer/adapter/path/exitが必要。
 - **停止/cleanup:** consumer/isolated pcscd通常停止。system PCSC serviceを変更しない。
 - **記録:** OS/ABI、module/DLL absolute path、consumer、reader/card、operation/exit。
@@ -273,7 +338,7 @@ artifact 検証と展開（X-PREP）:
 sha256sum -c SHA256SUMS                              # macOS: shasum -a 256 -c
 D=$(mktemp -d); tar -xzf px4-userland-<version>-<platform>.tar.gz -C "$D"
 sha256sum "$FW"                                      # 5213a5a38872661277a2cc1b2dfdfe88faf06f41205f460f3b51857f0568b484
-RT=$(mktemp -d "${TMPDIR:-/tmp}/px4-userland.XXXXXX"); LOG=<log dir>
+RT=$(mktemp -d "${TMPDIR:-$HOME}/px4-userland-<run-id>.XXXXXX"); LOG=$(mktemp -d "${TMPDIR:-$HOME}/px4-logs-<run-id>.XXXXXX"); chmod 700 "$RT" "$LOG"
 ID=usb:<BUS-PORT>
 INSTANCE=<instance-token>
 "$D/px4d" --list-json > "$LOG/discovery.json"         # USB discovery JSON; inspect enclosures[].devices[] and receivers[]
@@ -655,6 +720,77 @@ release限定dispositionを適用する。原試行と追加試験を別々に�
 - 手順: §0.1。Q3U4は§0.1のpreflightを先に行う。`linux-glibc-x86_64` native確認環境例。X-R7REFを行う場合は`tsukumijima/px4_drv`を一時loadし、同一個体・antenna・power・firmware・frequency・durationで取得後unloadする（module unloadもユーザー確認対象）。
 - 選定: `linux-glibc-x86_64`を現行頻度matrixで選択した場合に使用。
 
+#### Linux native PC/SC（E02/E03/E15）
+
+T10は候補のLinux IFD `.so`、隔離pcsc-lite daemon、標準PC/SC consumerを使う。glibc/muslごとに同じ手順をそのnative runtime上で行う。PCSC daemon/clientの既存global serviceへ接続しない。compiler、make/ninja、curl、Python venv/pip、pkg-configが無い場合は管理者承認後に準備するか、native API gateを未実施として止め、system daemonで代用しない。
+
+```sh
+set -eu
+WORK=$(mktemp -d "${TMPDIR:-$HOME}/px4-linux-pcsc-<run-id>.XXXXXX"); chmod 700 "$WORK"
+RUN_ID='<candidate-run-id>'; SERIAL='<14-digit-base-serial-from-px4d-list-json>'; FW='<verified-firmware-file>'
+IPC="$WORK/ipc"; PREFIX="$WORK/prefix"; CONF="$WORK/reader.conf.d"; LOG="$WORK/log"; RT="$WORK/runtime"
+mkdir -m 700 "$IPC" "$PREFIX" "$CONF" "$LOG" "$RT" "$WORK/drivers"
+curl -fL https://deb.debian.org/debian/pool/main/p/pcsc-lite/pcsc-lite_2.3.3.orig.tar.xz -o "$WORK/pcsc-lite_2.3.3.orig.tar.xz"
+printf '%s  %s\n' cdff7d7153a0b37aa74e26dfec89ec7dc5c5286aa21b91b903e38739d227e8e7 "$WORK/pcsc-lite_2.3.3.orig.tar.xz" | sha256sum -c -
+tar -xJf "$WORK/pcsc-lite_2.3.3.orig.tar.xz" -C "$WORK"
+python3 -m venv "$WORK/venv"; "$WORK/venv/bin/pip" install --disable-pip-version-check meson==1.7.0
+MESON="$WORK/venv/bin/meson"
+"$MESON" setup "$WORK/pcsc-build" "$WORK/pcsc-lite-2.3.3" --prefix "$PREFIX" -Dusb=false -Dlibusb=false -Dlibudev=false -Dserial=true -Dipcdir="$IPC" -Dserialconfdir="$CONF" -Dusbdropdir="$WORK/drivers" -Dpolkit=false -Dlibsystemd=false
+"$MESON" compile -C "$WORK/pcsc-build"; "$MESON" install -C "$WORK/pcsc-build"
+export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" LD_LIBRARY_PATH="$PREFIX/lib"
+test -r "$D/ifd/px4-userland-ifd.so"; test -r "$D/reader.conf.d/px4-userland.conf"
+sed -e "s|@PX4_RUNTIME_DIR@|$RT|g" -e "s|@PX4_BASE_SERIAL@|$SERIAL|g" -e "s|@PX4_IFD_LIBRARY@|$D/ifd/px4-userland-ifd.so|g" -e 's|@PX4_ACCESS@|user|g' "$D/reader.conf.d/px4-userland.conf" > "$CONF/px4-userland.conf"
+"$D/px4d" --device "serial:$SERIAL" --instance pcsc --firmware "$FW" --runtime-dir "$RT" > "$LOG/px4d.log" 2>&1 & PX4D_PID=$!
+"$PREFIX/sbin/pcscd" --foreground --debug --config "$CONF" > "$LOG/pcscd.log" 2>&1 & PCSC_PID=$!
+printf '%s\n' "$PX4D_PID" > "$LOG/px4d.pid"; printf '%s\n' "$PCSC_PID" > "$LOG/pcscd.pid"
+```
+
+native consumerには、同梱`px4-userland-ifd.so`をcandidate runbookと同じ`PKG_CONFIG_PATH`/`LD_LIBRARY_PATH`で使う。次の小probeは完全一致readerを一つだけ選択し、card presentとAPDU 10回のSW `9000`だけを記録する（ATR/card ID/response bytesは出力しない）。
+
+```sh
+cat > "$WORK/pcsc-probe.c" <<'C'
+#include <PCSC/winscard.h>
+#include <stdio.h>
+#include <string.h>
+int main(int argc, char **argv) {
+  SCARDCONTEXT c=0; SCARDHANDLE h=0; LONG rc; char readers[4096]; DWORD n=sizeof(readers), state=0, protocol=0, atrn=64; BYTE atr[64]; int found=0, ok=0;
+  if(argc!=2) return 64;
+  rc=SCardEstablishContext(SCARD_SCOPE_USER,NULL,NULL,&c); if(rc!=SCARD_S_SUCCESS) return 1;
+  rc=SCardListReaders(c,NULL,readers,&n); if(rc!=SCARD_S_SUCCESS) { SCardReleaseContext(c); return 2; }
+  for(char *p=readers; *p; p+=strlen(p)+1) if(strcmp(p,argv[1])==0) ++found;
+  if(found!=1) { SCardReleaseContext(c); return 3; }
+  rc=SCardConnect(c,argv[1],SCARD_SHARE_SHARED,SCARD_PROTOCOL_T0|SCARD_PROTOCOL_T1,&h,&protocol);
+  if(rc!=SCARD_S_SUCCESS) { SCardReleaseContext(c); return 4; }
+  if(SCardStatus(h,NULL,NULL,&state,&protocol,atr,&atrn)!=SCARD_S_SUCCESS || !(state&SCARD_STATE_PRESENT)) ok=5;
+  for(int i=0; !ok && i<10; ++i) { const BYTE apdu[]={0x90,0x30,0,0,0}; BYTE response[258]; DWORD length=sizeof(response); const SCARD_IO_REQUEST *pci=protocol==SCARD_PROTOCOL_T0?SCARD_PCI_T0:SCARD_PCI_T1; if(SCardTransmit(h,pci,apdu,sizeof(apdu),NULL,response,&length)!=SCARD_S_SUCCESS || length<2 || response[length-2]!=0x90 || response[length-1]!=0x00) ok=6; }
+  if(SCardDisconnect(h,SCARD_LEAVE_CARD)!=SCARD_S_SUCCESS && !ok) ok=7;
+  if(SCardReleaseContext(c)!=SCARD_S_SUCCESS && !ok) ok=7;
+  if(!ok) puts("reader_match=1 card_present=1 apdu_sw9000=10");
+  return ok;
+}
+C
+cc $(pkg-config --cflags libpcsclite) "$WORK/pcsc-probe.c" $(pkg-config --libs libpcsclite) -o "$WORK/pcsc-probe"
+ldd "$WORK/pcsc-probe" | grep -F "$PREFIX/lib/libpcsclite.so"
+if PCSCLITE_CSOCK_NAME="$IPC/pcscd.comm" LD_LIBRARY_PATH="$PREFIX/lib" "$WORK/pcsc-probe" 'PLEX PX-Q3U4 Internal Card Reader' > "$LOG/probe.txt" 2>&1; then PROBE_RC=0; else PROBE_RC=$?; fi
+printf '%s\n' "$PROBE_RC" > "$LOG/probe.rc"
+```
+
+期待値はprobe exit 0、上記success label、candidate IFD pathを含むpcscd logである。probe実行後、owned PIDだけを次で通常停止し、各終了値・process/socket残留を記録する。
+
+```sh
+kill -INT "$PCSC_PID"
+if wait "$PCSC_PID"; then PCSC_RC=0; else PCSC_RC=$?; fi
+printf '%s\n' "$PCSC_RC" > "$LOG/pcscd.rc"
+kill -INT "$PX4D_PID"
+if wait "$PX4D_PID"; then PX4D_RC=0; else PX4D_RC=$?; fi
+printf '%s\n' "$PX4D_RC" > "$LOG/px4d.rc"
+ps -p "$PCSC_PID,$PX4D_PID" -o pid=,ppid=,stat=,command= > "$LOG/processes-after-stop.txt" || :
+find "$IPC" \( -type s -o -type p \) -print > "$LOG/ipc-remnants.txt"
+test ! -s "$LOG/processes-after-stop.txt"; test ! -s "$LOG/ipc-remnants.txt"
+```
+
+test後にtemporary `WORK`を削除するのは全証拠を別の保管先へ移し、owned process/socketが消えたことを確認した後だけとする。native consumer/daemon起動、pcsc-lite build、USB/card操作はこの文書修正では実施していない。
+
 ### E04 macOS arm64（基準darwin環境）
 
 - 前提: T00でcandidate archiveのmanifestを`shasum -a 256 -c SHA256SUMS`で照合する。`otool -L` で libusb dylib と macOS system 以外の依存がないことを確認する。`sw_vers` を記録する。PC/SCは以下の隔離手順でHomebrew `pcsc-lite`とcandidateの`ifd/px4-userland-ifd.bundle`を使う。
@@ -725,6 +861,7 @@ stop_owned() {
   printf '%s\n' "$term_rc" > "$LOG/$stop_role.sigterm.rc"
   printf '%s\n' "$kill_rc" > "$LOG/$stop_role.sigkill.rc"
   printf '%s\n' "$wait_rc" > "$LOG/$stop_role.wait.rc"
+  if [ "$wait_rc" -ne 0 ]; then CLEANUP_RC=1; fi
 }
 cleanup_owned() {
   cleanup_input_rc=$1; cleanup_input_step=$2
@@ -884,6 +1021,46 @@ consumer終了後、記録済みの自分のPIDだけを停止し、各終了値
 - E15-G は `linux-glibc-aarch64` のnative確認環境、E15-M はnative Fedora host上のAlpine arm64/musl runtimeを表す。過去record `df6a1e634e5bec11961a1f0f15eedd1da22f7fee`はbaselineであり、candidateごとの短時間確認を代替しない。
 - 手順: 適用matrixに含む際はnative `linux-glibc-aarch64` candidateで列挙・受信・USB抜差し・再接続後の受信を行う。`uname -r`、`getenforce`を記録する。新たなhardware claimの認定はSPEC 10.3に従い別途行い、kernelを記録してclaimをそのkernelに限定する。
 - `linux-musl-aarch64`を現行頻度matrixで選択する場合は、同じnative Fedora aarch64 host上のAlpine arm64 Docker containerでcandidate artifactを実行する。CPU emulationを使わず、対象tunerの物理USB deviceをcontainerへ渡す。glibc確認とは別のrunとして記録する。
+- E15-M実行recipe: Fedora hostでread-only列挙から対象USB nodeを特定し、Alpine imageをpullした時に返るdigestを記録して、そのdigestを使う。候補/ログ/runtimeを専用workdirへbindし、対象device一つだけを渡す。rootful Podmanや`--privileged`を使わず、permission/cgroup errorは未達として停止する。
+
+```sh
+WORK='<new-private-e15m-run-dir>'; D='<extracted-linux-musl-aarch64-candidate-dir>'
+LOG="$WORK/log"; RT="$WORK/runtime"; FW='<verified-firmware-file>'; mkdir -m 700 -p "$LOG" "$RT"
+test -d "$D"; test -r "$FW"; test ! -e "$LOG/discovery.json"
+podman pull docker.io/library/alpine:3.22 2>&1 | tee "$LOG/alpine-pull.txt"
+IMAGE_DIGEST=$(podman image inspect --format '{{.Digest}}' docker.io/library/alpine:3.22)
+test -n "$IMAGE_DIGEST"; ALPINE_IMAGE="docker.io/library/alpine@$IMAGE_DIGEST"
+printf '%s\n' "$ALPINE_IMAGE" > "$LOG/alpine-image.txt"
+lsusb > "$LOG/usb-before.txt"
+USB_NODE='<verified-target-node-such-as-/dev/bus/usb/001/025>'
+test -c "$USB_NODE"; stat "$USB_NODE" > "$LOG/usb-node.txt"
+ID='usb:<verified-bus-port>'; INSTANCE='e15m'; RECEIVER='<receiver-id>'; CHANNEL='<matrix-channel>'; CAPTURE_SECONDS='<matrix-duration>'
+case "$CAPTURE_SECONDS" in ''|*[!0-9]*) exit 2;; esac; test "$CAPTURE_SECONDS" -gt 0
+export ID INSTANCE RECEIVER CHANNEL CAPTURE_SECONDS
+if podman run --rm --name "px4-e15m-<run-id>" --network=none \
+  --env ID --env INSTANCE --env RECEIVER --env CHANNEL --env CAPTURE_SECONDS \
+  --device "$USB_NODE:$USB_NODE:rw" \
+  --mount "type=bind,src=$D,dst=/candidate,ro=true" \
+  --mount "type=bind,src=$FW,dst=/input/firmware.bin,ro=true" \
+  --mount "type=bind,src=$WORK,dst=/runwork,rw=true" \
+  --workdir /candidate "$ALPINE_IMAGE" sh -ec '
+    uname -m; test -e /lib/ld-musl-aarch64.so.1
+    test -x /candidate/px4d; test -x /candidate/px4-ts; test -x /candidate/px4ctl
+    mkdir -m 700 /runwork/container-log /runwork/container-runtime
+    /candidate/px4d --list-json > /runwork/container-log/discovery.json
+    test -n "$ID"; test -n "$INSTANCE"; test -n "$RECEIVER"; test -n "$CHANNEL"; test -n "$CAPTURE_SECONDS"
+    /candidate/px4d --device "$ID" --instance "$INSTANCE" --firmware /input/firmware.bin --runtime-dir /runwork/container-runtime > /runwork/container-log/px4d.log 2>&1 & P=$!
+    on_exit() { rc=$?; kill -INT "$P" 2>/dev/null || :; if wait "$P"; then daemon_rc=0; else daemon_rc=$?; fi; printf "%s\\n" "$daemon_rc" > /runwork/container-log/px4d.rc; exit "$rc"; }
+    trap on_exit EXIT
+    sleep 2
+    /candidate/px4ctl --device "$ID" --instance "$INSTANCE" --runtime-dir /runwork/container-runtime status > /runwork/container-log/status.json
+    /candidate/px4-ts --device "$ID" --instance "$INSTANCE" --receiver "$RECEIVER" --channel "$CHANNEL" --runtime-dir /runwork/container-runtime --time "$CAPTURE_SECONDS" --output /runwork/container-log/capture.ts > /runwork/container-log/client.out 2> /runwork/container-log/client.err
+  '; then CONTAINER_RC=0; else CONTAINER_RC=$?; fi
+printf '%s\n' "$CONTAINER_RC" > "$LOG/container.rc"
+podman ps -a --filter name="px4-e15m-<run-id>" --format '{{.ID}} {{.Status}}' > "$LOG/container-after.txt"
+```
+
+container内のdiscovery JSON、status、TS、daemon/client exit、外側のhost/device identityを保存する。device node、USB port、receiver、channel、durationは実機・該当版matrixの値に置換し、`ID`/`INSTANCE`/`RECEIVER`/`CHANNEL`/`CAPTURE_SECONDS`をPodman実行前にexportする。別node・複数deviceを渡さない。Podman/image pull不能、対象node permission拒否、候補firmware未提供は未達として止め、glibc結果で代替しない。
 - 選定: `linux-glibc-aarch64`を現行頻度matrixで選択した場合に使用。
 
 ### E17 Windows 11 x86_64（Windowsアーカイブのnative確認・Phase 1/2）
@@ -1034,11 +1211,31 @@ consumer終了後、記録済みの自分のPIDだけを停止し、各終了値
     "$($owned.Process.ExitCode)" | Out-File (Join-Path $LOG "$name.rc")
     return $owned.Process.ExitCode
   }
-  function Start-Ts([int]$receiver, [string]$system, [long]$frequency, [string]$slot) {
+  function Start-Ts([int]$receiver, [string]$system, [long]$frequency, [string]$slot, [int]$seconds = 30, [string]$output = 'NUL') {
     $a = @('--device', $ID, '--receiver', "$receiver", '--system', $system, '--freq', "$frequency")
     if ($slot) { $a += @('--slot', $slot) }
-    $a += @('--runtime-dir', $RT, '--output', 'NUL', '--time', '30')
+    $a += @('--runtime-dir', $RT, '--output', $output, '--time', "$seconds")
     return Start-OwnedProcess (Join-Path $D 'px4-ts.exe') $a $false
+  }
+  function Wait-PhysicalAction([string]$message) {
+    if ([Console]::IsInputRedirected) { throw 'Physical-action confirmation requires an interactive console.' }
+    Write-Host "$message Enterキーで完了を記録 (最大300秒): " -NoNewline
+    $deadline = [DateTime]::UtcNow.AddSeconds(300)
+    while ([DateTime]::UtcNow -lt $deadline) {
+      if ([Console]::KeyAvailable) {
+        $key = [Console]::ReadKey($true)
+        if ($key.Key -eq [ConsoleKey]::Enter) { Write-Host; return }
+      }
+      Start-Sleep -Milliseconds 250
+    }
+    throw 'Physical action was not confirmed within 300 seconds; record the gate as incomplete.'
+  }
+  function Invoke-Card([string]$operation, [string[]]$arguments = @(), [string]$label = $operation) {
+    $output = (& (Join-Path $D 'px4ctl.exe') --device $ID --runtime-dir $RT $operation @arguments 2>> "$LOG\card.err") | Out-String
+    $rc = $LASTEXITCODE
+    $output | Out-File (Join-Path $LOG "$label.txt")
+    "$rc" | Out-File (Join-Path $LOG "$label.rc")
+    return $rc
   }
   function Wait-Captures($captures) {
     $timeout = @()
@@ -1088,8 +1285,21 @@ consumer終了後、記録済みの自分のPIDだけを停止し、各終了値
     }
     if (-not $ready) { throw 'px4d did not reach ready=yes within the bounded poll' }
 
-    # 独立したx64 Windows PowerShell 5.1子processでWinSCard smoke。child sourceはPhase 2欄のコードを事前保存する。
+    # Phase 2のsource fenceをwinscard-smoke.ps1へ保存してから独立childを起動する。
     $probePath = Join-Path $LOG 'winscard-smoke.ps1'
+    $runbookPath = '<runbook-checkout>\docs\release-validation.md'
+    $lines = Get-Content -LiteralPath $runbookPath
+    $phaseLine = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -match 'Phase 2実機への引継ぎ') { $phaseLine = $i; break } }
+    if ($phaseLine -lt 0) { throw 'Phase 2 script section not found in runbook.' }
+    $fenceStart = -1
+    for ($i = $phaseLine; $i -lt $lines.Count; $i++) { if ($lines[$i] -match '^\s*~~~powershell\s*$') { $fenceStart = $i; break } }
+    if ($fenceStart -lt 0) { throw 'WinSCard script fence not found.' }
+    $fenceEnd = -1
+    for ($i = $fenceStart + 1; $i -lt $lines.Count; $i++) { if ($lines[$i] -match '^\s*~~~\s*$') { $fenceEnd = $i; break } }
+    if ($fenceEnd -lt 0) { throw 'WinSCard script fence is incomplete.' }
+    $scriptLines = $lines[($fenceStart + 1)..($fenceEnd - 1)] | ForEach-Object { $_ -replace '^    ', '' }
+    Set-Content -LiteralPath $probePath -Value $scriptLines -Encoding UTF8
     if (-not (Test-Path -LiteralPath $probePath -PathType Leaf)) { throw "missing WinSCard smoke script: $probePath" }
     $probe = Start-OwnedProcess $childPowerShell @(
       '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $probePath,
@@ -1107,14 +1317,53 @@ consumer終了後、記録済みの自分のPIDだけを停止し、各終了値
     Wait-Captures $captures
     (& "$D\px4ctl.exe" --device $ID --runtime-dir $RT status 2>> "$LOG\px4ctl.err") | Out-File "$LOG\status-after.txt"
 
-    # CARD（daemon停止前）。抜去/再挿入の物理操作を挟み、各出力とexit値を保存する。
-    foreach ($op in 'card-status','card-atr','card-reset') {
-      (& "$D\px4ctl.exe" --device $ID --runtime-dir $RT $op 2>> "$LOG\card.err") | Out-File "$LOG\$op.txt"
-      "$LASTEXITCODE" | Out-File "$LOG\$op.rc"
-    }
+    # T07 idle USB detach, stream detach, and new-daemon recovery are separate stages.
+    (& "$D\px4ctl.exe" --device $ID --runtime-dir $RT status 2>> "$LOG\usb-idle-status-before.err") | Out-File "$LOG\usb-idle-status-before.txt"
+    Wait-PhysicalAction '待機中のtuner USBを抜いてください。'
+    (& "$D\px4ctl.exe" --device $ID --runtime-dir $RT status 2>> "$LOG\usb-idle-status-after.err") | Out-File "$LOG\usb-idle-status-after.txt"
+    "$LASTEXITCODE" | Out-File "$LOG\usb-idle-status-after.rc"
+    $idleDaemonState = 'running'; if ($owned.Process.HasExited) { $idleDaemonState = "exited=$($owned.Process.ExitCode)" }
+    $idleDaemonState | Out-File "$LOG\usb-idle-daemon-state.txt"
+    Stop-OwnedProcess $owned 35000 'px4d-idle' | Out-Null
+    Wait-PhysicalAction 'tuner USBを再接続してください。'
+    (& "$D\px4d.exe" --list-json 2> "$LOG\usb-discovery-reconnected.err") | Out-File "$LOG\usb-discovery-reconnected.json"
+    $owned = Start-OwnedProcess (Join-Path $D 'px4d.exe') @('--device', $ID, '--firmware', $FW, '--runtime-dir', $RT, '--exit-on-stdin-eof') $true
+    $ready = $false
+    for ($i = 0; $i -lt 30; $i++) { $status = (& "$D\px4ctl.exe" --device $ID --runtime-dir $RT status 2>> "$LOG\usb-ready.err") | Out-String; if ($LASTEXITCODE -eq 0 -and $status -match 'ready=yes') { $ready = $true; break }; Start-Sleep -Seconds 1 }
+    if (-not $ready) { throw 'px4d did not recover after idle USB reconnect.' }
+    $cutClient = Start-Ts 0 'isdb-s' 1318000000 '0' 300 (Join-Path $LOG 'usb-stream-cut.ts')
+    Wait-PhysicalAction '有限受信中にtuner USBを抜いてください。'
+    if (-not $cutClient.Process.WaitForExit(300000)) { "$($cutClient.Process.Id)" | Out-File (Join-Path $LOG 'usb-stream-cut.timeout.txt'); throw 'USB cut client exceeded the bounded observation period.' }
+    $cutClient.Process.Refresh(); "$($cutClient.Process.ExitCode)" | Out-File (Join-Path $LOG 'usb-stream-cut.rc')
+    $cutClient.StdoutTask.Wait(5000) | Out-Null; $cutClient.StdoutTask.Result | Out-File (Join-Path $LOG 'usb-stream-cut.out')
+    $cutClient.StderrTask.Wait(5000) | Out-Null; $cutClient.StderrTask.Result | Out-File (Join-Path $LOG 'usb-stream-cut.err')
+    if ($cutClient.Process.ExitCode -ne 7) { throw "USB cut requires client exit 7, got $($cutClient.Process.ExitCode)." }
+    Stop-OwnedProcess $owned 35000 'px4d-stream-cut' | Out-Null
+    Wait-PhysicalAction 'tuner USBを再接続してください。'
+    (& "$D\px4d.exe" --list-json 2> "$LOG\usb-discovery-after-stream.err") | Out-File "$LOG\usb-discovery-after-stream.json"
+    $owned = Start-OwnedProcess (Join-Path $D 'px4d.exe') @('--device', $ID, '--firmware', $FW, '--runtime-dir', $RT, '--exit-on-stdin-eof') $true
+    $ready = $false
+    for ($i = 0; $i -lt 30; $i++) { $status = (& "$D\px4ctl.exe" --device $ID --runtime-dir $RT status 2>> "$LOG\usb-final-ready.err") | Out-String; if ($LASTEXITCODE -eq 0 -and $status -match 'ready=yes') { $ready = $true; break }; Start-Sleep -Seconds 1 }
+    if (-not $ready) { throw 'px4d did not recover after streaming USB reconnect.' }
+    $recoveryClient = Start-Ts 0 'isdb-s' 1318000000 '0' 30 (Join-Path $LOG 'usb-recovery.ts')
+    Wait-Captures @($recoveryClient)
+
+    # CARD（daemon停止前）。抜去/再挿入を別段階にし各response/exitを保存する。
+    Invoke-Card 'card-status' @() 'card-before-status' | Out-Null
+    Invoke-Card 'card-atr' @() 'card-before-atr' | Out-Null
+    Invoke-Card 'card-reset' @() 'card-before-reset' | Out-Null
+    1..10 | ForEach-Object { Invoke-Card 'card-apdu' @('90:30:00:00:00') "card-before-apdu-$($_)" | Out-Null }
+    Wait-PhysicalAction '同じCARDを物理的に抜いてください。'
+    Invoke-Card 'card-status' @() 'card-removed-status' | Out-Null
+    $atrRc = Invoke-Card 'card-atr' @() 'card-removed-atr'; $apduRc = Invoke-Card 'card-apdu' @('90:30:00:00:00') 'card-removed-apdu'
+    if ($atrRc -ne 9 -or $apduRc -ne 9) { throw 'Removed CARD must produce NO_CARD / exit 9 for ATR and APDU.' }
+    Wait-PhysicalAction '同じCARDを再挿入してください。'
+    Invoke-Card 'card-status' @() 'card-reinserted-status' | Out-Null
+    $atrRc = Invoke-Card 'card-atr' @() 'card-reinserted-atr'; $resetRc = Invoke-Card 'card-reset' @() 'card-reinserted-reset'
+    if ($atrRc -ne 0 -or $resetRc -ne 0) { throw 'Reinserted CARD must restore ATR and reset.' }
     1..10 | ForEach-Object {
-      (& "$D\px4ctl.exe" --device $ID --runtime-dir $RT card-apdu 90:30:00:00:00 2>> "$LOG\card.err") | Out-File "$LOG\card-$_.apdu"
-      "$LASTEXITCODE" | Out-File "$LOG\card-$_.rc"
+      $rc = Invoke-Card 'card-apdu' @('90:30:00:00:00') "card-reinserted-apdu-$($_)"
+      if ($rc -ne 0) { throw "Reinserted CARD APDU $_ failed with exit $rc." }
     }
   } catch {
     $primary = $_
