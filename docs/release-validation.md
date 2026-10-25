@@ -19,17 +19,17 @@
 
 ## 共通実行環境表
 
-| ID | OS / ABI | 依存 / driver / permission | firmware / input | CARD backend | 配布artifact / 手順 |
-|---|---|---|---|---|---|
-| E03 | AnduinOS Linux x86_64 / glibc | native host、USB access pathを記録 | firmware image、地上/衛星入力 | Linux PC/SC IFDを別途確認 | `linux-glibc-x86_64` / §6 |
-| E02 | HAOS Alpine Linux x86_64 / musl | native/static runtime、Supervisor USB access path | firmware image、地上/衛星入力 | musl PC/SC IFDを別途確認 | `linux-musl-x86_64` / §6 |
-| E15-G | Fedora Linux aarch64 / glibc | native aarch64、USB access path | firmware image、地上/衛星入力 | Linux PC/SC IFDを別途確認 | `linux-glibc-aarch64` / §6 |
-| E15-M | native Linux aarch64 / musl | native aarch64、Alpine runtime、emulationなし | firmware image、地上/衛星入力 | musl PC/SC IFDを別途確認 | `linux-musl-aarch64` / §6 |
-| E04 | macOS arm64 | libusb/USB permissionを記録 | firmware image、地上/衛星入力 | macOS PC/SC IFDを別途確認 | `darwin-arm64` / §6 |
-| E05 | Android Termux aarch64 | Termux USB permission、2-FD launcher | firmware image、地上/衛星入力 | 非対応 | `android-aarch64` / §6 |
-| E06 | Android Termux armv7a | Termux USB permission、2-FD launcher | firmware image、地上/衛星入力 | 非対応 | `android-armv7a` / §6 |
-| E07 | BlissOS Termux x86_64 | Termux USB permission、2-FD launcher | firmware image、地上/衛星入力 | 非対応 | `android-x86_64` / §6 |
-| E17 | Windows 11 x86_64 | 現在許可されたUSB driverを記録し変更しない | firmware image、地上/衛星入力 | native WinSCardを別途確認 | `windows-x86_64` / §6 |
+| ID | OS / ABI | 依存 / driver / permission | firmware / input | 製品CLIからの内蔵CARD操作 | native PC/SC/WinSCard adapter | 配布artifact / 手順 |
+|---|---|---|---|---|---|---|
+| E03 | AnduinOS Linux x86_64 / glibc | native host、USB access pathを記録 | firmware image、地上/衛星入力 | 製品CLI CARD APIを機種別に確認 | Linux PC/SC IFDを別途確認 | `linux-glibc-x86_64` / §6 |
+| E02 | HAOS Alpine Linux x86_64 / musl | native/static runtime、Supervisor USB access path | firmware image、地上/衛星入力 | 製品CLI CARD APIを機種別に確認 | musl PC/SC IFDを別途確認 | `linux-musl-x86_64` / §6 |
+| E15-G | Fedora Linux aarch64 / glibc | native aarch64、USB access path | firmware image、地上/衛星入力 | 製品CLI CARD APIを機種別に確認 | Linux PC/SC IFDを別途確認 | `linux-glibc-aarch64` / §6 |
+| E15-M | native Linux aarch64 / musl | native aarch64、Alpine runtime、emulationなし | firmware image、地上/衛星入力 | 製品CLI CARD APIを機種別に確認 | musl PC/SC IFDを別途確認 | `linux-musl-aarch64` / §6 |
+| E04 | macOS arm64 | libusb/USB permissionを記録 | firmware image、地上/衛星入力 | 製品CLI CARD APIを機種別に確認 | macOS PC/SC IFDを別途確認 | `darwin-arm64` / §6 |
+| E05 | Android Termux aarch64 | Termux USB permission、2-FD launcher | firmware image、地上/衛星入力 | CARD CLI/APIあり。candidateは機種/ABIごとに実機確認 | Android native adapter未提供 | `android-aarch64` / §6 |
+| E06 | Android Termux armv7a | Termux USB permission、2-FD launcher | firmware image、地上/衛星入力 | CARD CLI/APIあり。candidateは機種/ABIごとに実機確認 | Android native adapter未提供 | `android-armv7a` / §6 |
+| E07 | BlissOS Termux x86_64 | Termux USB permission、2-FD launcher | firmware image、地上/衛星入力 | CARD CLI/APIあり。candidateは機種/ABIごとに実機確認 | Android native adapter未提供 | `android-x86_64` / §6 |
+| E17 | Windows 11 x86_64 | 現在許可されたUSB driverを記録し変更しない | firmware image、地上/衛星入力 | 製品CLI CARD APIを機種別に確認 | native WinSCardを別途確認 | `windows-x86_64` / §6 |
 
 この表は現行配布targetとnative実行条件の対応である。実際のhost OS/ABI、USB access path、実施結果は各version文書へ記録する。production HAOS上で試験環境を変更する場合は別途承認済み手順に従う。
 
