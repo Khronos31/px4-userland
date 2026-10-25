@@ -123,14 +123,14 @@ Q3U4の8 receiver確認は次の8コマンドを同じ端末で個別に実行�
 
 ```sh
 # Q3U4 8 receiver（受信継続: 0/1/4/5=S、2/3/6/7=T）
-"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --receiver 0 --system isdb-s --freq 1318000000 --slot 0 --runtime-dir "$RT" --output /dev/null --time 30 2> "$LOG/r0.err" & R0=$!
-"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --receiver 1 --system isdb-s --freq 1318000000 --slot 0 --runtime-dir "$RT" --output /dev/null --time 30 2> "$LOG/r1.err" & R1=$!
-"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --receiver 4 --system isdb-s --freq 1318000000 --slot 0 --runtime-dir "$RT" --output /dev/null --time 30 2> "$LOG/r4.err" & R4=$!
-"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --receiver 5 --system isdb-s --freq 1318000000 --slot 0 --runtime-dir "$RT" --output /dev/null --time 30 2> "$LOG/r5.err" & R5=$!
-"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --receiver 2 --system isdb-t --freq 527143000 --runtime-dir "$RT" --output /dev/null --time 30 2> "$LOG/r2.err" & R2=$!
-"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --receiver 3 --system isdb-t --freq 527143000 --runtime-dir "$RT" --output /dev/null --time 30 2> "$LOG/r3.err" & R3=$!
-"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --receiver 6 --system isdb-t --freq 527143000 --runtime-dir "$RT" --output /dev/null --time 30 2> "$LOG/r6.err" & R6=$!
-"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --receiver 7 --system isdb-t --freq 527143000 --runtime-dir "$RT" --output /dev/null --time 30 2> "$LOG/r7.err" & R7=$!
+"$D/px4-ts" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 0 --channel BS15_0 --lnb-voltage 0 --time 30 --output "$LOG/r0.ts" 2> "$LOG/r0.err" & R0=$!
+"$D/px4-ts" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 1 --channel BS15_0 --lnb-voltage 0 --time 30 --output "$LOG/r1.ts" 2> "$LOG/r1.err" & R1=$!
+"$D/px4-ts" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 4 --channel BS15_0 --lnb-voltage 0 --time 30 --output "$LOG/r4.ts" 2> "$LOG/r4.err" & R4=$!
+"$D/px4-ts" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 5 --channel BS15_0 --lnb-voltage 0 --time 30 --output "$LOG/r5.ts" 2> "$LOG/r5.err" & R5=$!
+"$D/px4-ts" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 2 --channel T27 --time 30 --output "$LOG/r2.ts" 2> "$LOG/r2.err" & R2=$!
+"$D/px4-ts" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 3 --channel T27 --time 30 --output "$LOG/r3.ts" 2> "$LOG/r3.err" & R3=$!
+"$D/px4-ts" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 6 --channel T27 --time 30 --output "$LOG/r6.ts" 2> "$LOG/r6.err" & R6=$!
+"$D/px4-ts" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 7 --channel T27 --time 30 --output "$LOG/r7.ts" 2> "$LOG/r7.err" & R7=$!
 # 8個それぞれの終了値を記録する（各waitは個別に実行）。
 wait "$R0"; echo "$?" > "$LOG/r0.rc"
 wait "$R1"; echo "$?" > "$LOG/r1.rc"
