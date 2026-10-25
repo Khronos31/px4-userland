@@ -4,6 +4,19 @@
 
 この文書は Stable リリースごとの実行手順を定める。合否条件と認定条件の正本は [`SPEC.md`](../SPEC.md) 10章であり、両者に差があれば SPEC を優先し、手順書を更新する。
 
+## 共通の検証項目と頻度
+
+用語は4製品で共通とする。代表機はLinux x86_64 glibc、機種はチューナー、製品はドライバ、ソークは30分以上の連続TS取得を指す。PX4の標準機種はPX-Q3U4。初回結果は[`release-validation/initial-model-checks.md`](release-validation/initial-model-checks.md)、版ごとの実績は[`release-validation/1.0.0.md`](release-validation/1.0.0.md)へ記録する。
+
+| 区分 | 適用頻度 | PX4での確認 |
+|---|---|---|
+| 機種初回 | PX-Q3U4を代表機で2時間連続受信し、毎releaseの回帰項目を代表機だけで実施する。必要時項目も通す。 | 8 receiverの地上/衛星同時受信、CARD、USB、対応profileのLNB、WinSCard/PCSCを確認。 |
+| 回帰（毎release） | 代表機2時間連続受信。全配布archiveの各OS/ABIで短時間実機回帰、`--list-json`、最大能力の同時受信とTS/counter/終了値を確認する。最大試験で3波が不足する場合は不足分の短時間TSを個別確認する。受信中status、反復APDU、正常停止とprocess/FD/IPC残留なし、CARD抜去/再挿入、USBケーブル抜去/再挿入を確認する。WinSCard/PCSCは該当OSで確認する。 | Q3U4の8 receiver配置、B-CAS removed/ATR/APDU復帰、切断exit/daemon cleanupを以下の確立済み手順で確認。 |
+| 必要に応じて | LNB実測と非対応機種での拒否、複数tunerの列挙/daemon並列、変更機能に応じた機種×OS/ABI追加確認。 | PX-M1UR/PX-S1URの非対応LNB拒否、同一serial曖昧指定、同一lease retuneや`--control`等の条件付き項目を該当変更時に行う。 |
+| 初回/major | 必要時項目を通し、代表機で全無料channelを各10秒TS取得。macOS/Windows各30分連続、残るOS/ABI各10分連続で取得する。全channel取得は代表機のみ。別途指示されたソークは別記する。 | 現地channel planの地上/無料衛星対象channelを使い、地域/TSID/slot実値を記録する。 |
+
+全配布archiveのnative短時間回帰と代表機だけの全channel10秒取得は別の確認である。以下の既存artifact別・receiver別・CARD/USB/LNB操作はそのまま保持し、現行CLIへ合わせて実行する。版別の実績と未達はversion文書に記録する。
+
 Stable releaseは次の順で進める。
 
 1. リリース候補のsource commitを固定し、そのcommitからCIでcandidate artifactを作る。
@@ -14,13 +27,13 @@ Stable releaseは次の順で進める。
 
 工程2の全試験が完了するまではcandidate commitを固定して使う。工程2の完了後、工程3で試験結果を記録するcommitは次工程への移行であり、candidateの差し替えではない。工程3の結果commit後に工程2へ戻って実機試験を繰り返さない。candidateのsource、package、build inputを工程2の完了前に変更した場合は、その変更を含む新candidateをCIで作り、影響する試験を行う。
 
-検査対象に選んだ各配布artifactは候補そのものを使い、別archive/OSの結果で置き換えない。どのreleaseでどのartifactを選ぶか、soakの頻度・時間・OSは該当版の `docs/release-validation/<version>.md` に従う。以下のartifact別操作手順を適用するとき、必須操作に総時間上限は設けない。物理抜差しをユーザーに依頼した時点から、その操作への応答を最大5分待つ。各依頼の直前にHAOS側でCodexは`beep`、Claude Codeは`vibe`を実行する。5分を超える連続負荷試験は短時間回帰に混ぜず、該当版の頻度・時間条件に沿うsoakへ分ける。検証状態の語彙は `継承` / `今回再検証` / `未認定` / `対象外` に統一する。
+全配布archiveを各OS/ABIのnative環境で毎release短時間回帰し、Linux x86_64 glibc代表機では毎release2時間連続受信する。版別文書には実施結果・未達と追加試験だけを記録する。以下のartifact別操作手順を適用するとき、必須操作に総時間上限は設けない。物理抜差しをユーザーに依頼した時点から、その操作への応答を最大5分待つ。各依頼の直前にHAOS側でCodexは`beep`、Claude Codeは`vibe`を実行する。5分を超える連続負荷試験は短時間回帰に混ぜず、共通表の頻度・時間条件に沿うsoakへ分ける。検証状態の語彙は `継承` / `今回再検証` / `未認定` / `対象外` に統一する。
 
 ## 0. 配布artifact matrixと手順の共通部品
 
 PX4/ASICEN共通の記録構造と空のmatrixは [`release-record.md`](release-record.md) に定める。各行へ候補SHA・CI run/attempt・artifact ID・archive hash、OS/architecture、実際のhost/access path、model/feature、状態・結果・証拠・soak判断を対応付ける。共通形式は以下のPX4固有の試験や機種別受入条件を変更しない。
 
-短時間確認は以下のartifactごとに実施する。soak対象OSはユーザーが決める。AppArmor、usbip、SELinux などの変化は独立した環境IDにせず、その環境のaccess pathとして記録する。各環境のproduct-specificな準備と物理操作は§6に示す。
+全配布artifactのnative短時間確認は以下の各archiveに実施する。代表機での2時間連続試験はLinux x86_64 glibcで行う。AppArmor、usbip、SELinux などの変化は独立した環境IDにせず、その環境のaccess pathとして記録する。各環境のproduct-specificな準備と物理操作は§6に示す。
 
 | ID | 環境 | px4 の位置づけ | 主 artifact / doc |
 |---|---|---|---|
@@ -84,7 +97,7 @@ sha256sum "$FW"                                      # 5213a5a38872661277a2cc1b2
 RT=$(mktemp -d "${TMPDIR:-/tmp}/px4-userland.XXXXXX"); LOG=<log dir>
 ID=usb:<BUS-PORT>
 INSTANCE=<instance-token>
-"$D/px4d" --list > "$LOG/list.txt"                   # model / usb / status=ready / receivers
+"$D/px4d" --list-json > "$LOG/discovery.json"         # USB discovery JSON; inspect enclosures[].devices[] and receivers[]
 ```
 
 daemon 起動と準備完了確認（X-START）:
@@ -158,7 +171,7 @@ kill -TERM $P; wait $P           # 0 を期待
 pgrep -fl '[p]x4d'; rmdir "$RT"   # 残存 process / endpoint なし
 ```
 
-Q3U4 preflight: 両 USB device、15V adapter、両 RF lead を接続し、`px4d --list` が `status=ready receivers=8` を返すことを確認してから開始する。
+Q3U4 preflight: 両 USB device、15V adapter、両 RF lead を接続し、`px4d --list-json`の`enclosures[].devices[]`に両USB deviceと合計8 receiverが列挙されることを確認する。daemon起動後は`px4ctl status`のreadyと`px4ctl list`の8 receiverを確認してから開始する。
 
 選択された短時間確認におけるカード物理抜去・再挿入（X-CARD-HP）:
 
@@ -242,11 +255,10 @@ beep   # Codex。Claude Codeは vibe
 ユーザーへUSB接続を戻すよう依頼し、操作完了まで最大5分待つ。再列挙・復旧コマンドを個別に実行する:
 
 ```sh
-"$D/px4d" --list | tee "$LOG/list-reconnected.txt"
-"$D/px4d" --list-json > "$LOG/list-reconnected.json"
+"$D/px4d" --list-json > "$LOG/discovery-reconnected.json"
 ```
 
-切断側clientが有限時間内に`DISCONNECTED` / exit 7で終了し、ハングやclient process残留がないことを確認する。過去の実機確認では切断後も旧daemonが生存し、USBを戻して再列挙されても自動復帰しなかった。再接続後の`--list` / `--list-json`で対象device（Q3U4は2つの内部USB device）が再列挙されたことを記録するが、これはdaemon復旧の合格とはしない。
+切断側clientが有限時間内に`DISCONNECTED` / exit 7で終了し、ハングやclient process残留がないことを確認する。過去の実機確認では切断後も旧daemonが生存し、USBを戻して再列挙されても自動復帰しなかった。`px4d --list-json`で対象device（Q3U4は2つの内部USB device）が再列挙されたことを記録するが、これはdaemon復旧の合格とはしない。daemon再起動後は`px4ctl status`でready、`px4ctl list`でreceiverを確認する。
 
 旧daemonが生存している場合は、同じ候補のdaemonを停止して終了を待つ:
 
@@ -339,30 +351,30 @@ gh run view <run-id> --job <job-id> --log > "$LOG/run-<run-id>-job-<job-id>.log"
 適用対象archiveと頻度は該当版のmatrixに従い、選択されたarchiveは §0 の対応行と以下の操作を使ってnative環境で独立に実施する。Windows行はE17のWindows手順に従い、native Windows 11 x64で実施する。必須確認の一連の操作に総時間上限は設けない。B-CAS/USBの物理操作はユーザーが行い、各操作を依頼した時点から最大5分待つ。各物理操作を依頼する直前にHAOS/SCS側でCodexは`beep`、Claude Codeは`vibe`を実行する。各runの記録にはarchive名/SHA-256、source commit、環境ID/OS version/architecture、機種/USB path、実施時刻、コマンド、終了値、card status/generation/ATR/APDU応答、TS/counter、残留の有無を残す。
 
 1. 候補archiveのhash確認・展開、Q3U4のfirmware/RF/電源preflight、ログ先作成を済ませる。これらを含めて一連の確認に総時間上限は設けない。
-2. `px4d --list` と `--list-json` でQ3U4が8 receiver readyと列挙されることを確認し、JSON schema・boolean型・receiver capability値を照合する。M1UR/S1URのserial衝突やLNB非対応profile表示が変更対象なら、§0の該当する機種別追加確認も行う。
+2. `px4d --list-json`でQ3U4の両USB device、8 receiver、JSON schema・boolean型・receiver capability値を確認する。daemon起動後は`px4ctl status`でready、`px4ctl list`で8 receiverを確認する。M1UR/S1URのserial衝突やLNB非対応profile表示が変更対象なら、§0の該当する機種別追加確認も行う。
 3. daemonを起動したままreceiver captureを止め、X-CARD-HPのコマンド群を実行する。カード抜去を依頼する直前に通知し、依頼後最大5分待つ。`card-status`の`present=no`、ATR/APDUの`NO_CARD`（exit 9）を確認する。
 4. 再挿入を依頼する直前に通知し、依頼後最大5分待つ。generation更新、ATR/reset/APDU 10回の復帰を確認する。
 5. X-USB-HPで1 receiver clientを起動してUSB切断を観測する。USB切断を依頼する直前に通知し、依頼後最大5分待つ。clientが有限時間で`DISCONNECTED` / exit 7となり、ハングやclient process残留がないことを確認する。
-6. USB再接続を依頼する直前に通知し、依頼後最大5分待つ。`--list` / `--list-json`で再列挙を確認した後、旧daemonを停止して終了を待ち、X-STARTの手順で同じcandidateからdaemonを起動し直す。古いdaemonの自動復帰を合格条件にしない。
-7. 再起動後に`"$D/px4ctl" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" status`でreadyを確認し、8 receiverを30秒実行してTS条件をSPEC 10.2の適用項目で確認する。APDU 10回も再確認し、最後にdaemon/client、FD、IPC socket/control endpointの残留がないことを確認する。
+6. USB再接続を依頼する直前に通知し、依頼後最大5分待つ。`px4d --list-json`でUSB再列挙を確認した後、旧daemonを停止して終了を待ち、X-STARTの手順で同じcandidateからdaemonを起動し直す。古いdaemonの自動復帰を合格条件にしない。
+7. 再起動後に`"$D/px4ctl" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" status`でready、`px4ctl list`で8 receiverを確認し、8 receiverを30秒実行してTS条件をSPEC 10.2の適用項目で確認する。APDU 10回も再確認し、最後にdaemon/client、FD、IPC socket/control endpointの残留がないことを確認する。
 
 Linux musl aarch64はE15 Fedora aarch64上のAlpine arm64 Docker containerでcandidate artifactを実行する。hostがaarch64であることを`uname -m`等で確認し、CPU emulationを使わず、物理USB deviceをcontainerへ渡す。このartifact行はglibc aarch64の結果で代用せず、独立して実施・記録する。native aarch64 hostまたはUSB passthroughが利用できず物理確認を完了できない場合はgate未完了とする。
 
 同一lease retuneは§0.2に従い、該当するコード変更時の追加確認とする。receiver 7のTEI/continuity burstは自動合格にせず、SPEC 10.2.6aの比較条件に従う。
 
-## 4. 変更影響の追加確認とsoak（ユーザー決定）
+## 4. 変更影響の追加確認と追加soak（ユーザー決定）
 
-candidateで選択された短時間matrixとは別に、SPEC 10.5.1の分類、hunk/call path、platform guard、過去のvalidation record、candidateで観測したcounterを使い、影響し得るmodel/profile/runtime/access pathを整理する。この整理はsoak有無やtarget OSをエージェントが決める権限を与えない。
+毎releaseの代表機2時間と全archive短時間matrix、および初回/major追加条件は共通表に従う。それらとは別に追加試験が必要な場合、SPEC 10.5.1の分類、hunk/call path、platform guard、過去のvalidation record、candidateで観測したcounterを使い、影響し得るmodel/profile/runtime/access pathを整理する。この整理は追加soakの有無やtarget OSをエージェントが決める権限を与えない。
 
 安定性に影響し得るコード変更があれば、エージェントは次をユーザーへ提示し、回答を得るまでsoakを開始しない。
 
 - 変更と安定性への具体的な影響経路、および影響し得るOS/artifact/機種
 - 既存証拠で今回分かること、今回の短時間matrixで得た結果、未確認点
-- ユーザー選択肢: soakなし / 10分 / 30分 / 2時間。実施する場合は対象OSもユーザーが指定
+- 追加soakの選択肢: 実施なし / 指定時間。実施する場合は対象OSもユーザーが指定
 
-ユーザーはsoakを行わない選択もできる。選択された時間とOSを記録し、その指定範囲だけ試験する。agentはdiff class、canonical順、影響範囲、機材都合から時間・有無・OSを既定または自動決定しない。候補選択を求められた場合に限り、判断材料を比較して提示し、決定を待つ。
+ユーザーは追加soakを行わない選択もできる。選択された時間とOSを記録し、その指定範囲だけ試験する。agentはdiff class、canonical順、影響範囲、機材都合から追加soakの時間・有無・OSを既定または自動決定しない。候補選択を求められた場合に限り、判断材料を比較して提示し、決定を待つ。共通表で定める毎release/初回/majorの連続受信は追加soakと区別する。
 
-ユーザーがsoakを選んだときの実行方法は次の通り。
+ユーザーが追加soakを選んだときの実行方法は次の通り。
 
 - 10分/30分: 指定OSで指定profileの連続受信を行い、該当するstatus/card/retune/stop-reopenなどの挙動を記録する。
 - 2時間: 指定OSで、選択されたprofileに応じた負荷、反復status/APDU、retune/stop-reopen、FD数・RSSの経時傾向、cleanupを確認する。Q3U4では§0.1の8 receiver T/S混在を使う。
@@ -372,13 +384,13 @@ candidateで選択された短時間matrixとは別に、SPEC 10.5.1の分類、
 
 ### PX-M1UR / PX-S1UR の同一serial確認
 
-v0.26 の識別変更が対象のとき、両機種を同時接続できる環境では、§2 の exact candidate を使って `px4d --list` と `px4d --list-json` を個別に実行し、同じ serial の2筐体が別機種・別USB位置として現れ、双方の `serial_unique` が `false` であることを記録する。通常列挙を許さない Termux では、このコマンドの成功を要求しない。
+v0.26 の識別変更が対象のとき、両機種を同時接続できる環境では、§2 の exact candidate を使って `px4d --list-json` を実行し、同じ serial の2筐体が別機種・別USB位置として現れ、双方の `serial_unique` がJSON boolean `false` であることを記録する。通常列挙を許さない Termux では、このコマンドの成功を要求しない。
 
 実施可能なら、同じ状態で `px4d --device 000000000000001 --firmware "$FW" --runtime-dir "$RT"` の曖昧指定が候補と `--usb-path` を示して exit 2 となり、USB interface の claim と endpoint 公開の前に失敗することを確認する。stdout/stderr・終了コードとendpoint残存の有無を保存し、claim前拒否の根拠には模擬USB試験も対応付ける。この同時接続中は、受信・カード・LNB給電・電源制御の試験を行わない。物理USBの抜き差しは利用者の確認を得て行う。実施できない環境では未実施と理由を記録し、順次接続のcanaryや認定結果を同時接続時の識別結果へ流用しない。
 
 ### LNB capability表示・15V非対応profileの拒否確認
 
-`lnb_15v_supported`または15V非対応profileの変更時は、exact candidateでM1URとS1URを同時接続し、上の同一serial確認と同じnative列挙環境で`--list`と`--list-json`を実行する。テキストとJSONの両方で、M1URのISDB-T/S receiverとS1URのISDB-T receiverが`lnb_15v_supported=false`であることを確認する。Q3U4を同時に列挙した場合は、ISDB-T receiverがfalse、ISDB-S receiverがtrueであることも確認し、falseだけを一律に出す誤りを検出する。JSONでは値が文字列ではなくbooleanであることを確認する。Android Termuxは通常のUSB列挙を保証しないため、このlist確認を要求しない。
+`lnb_15v_supported`または15V非対応profileの変更時は、exact candidateでM1URとS1URを同時接続し、上の同一serial確認と同じnative列挙環境で`px4d --list-json`を実行する。M1URのISDB-T/S receiverとS1URのISDB-T receiverがJSON boolean `lnb_15v_supported=false`であることを確認する。Q3U4を同時に列挙した場合は、ISDB-T receiverがfalse、ISDB-S receiverがtrueであることも確認し、falseだけを一律に出す誤りを検出する。JSONでは値が文字列ではなくbooleanであることを確認する。Android Termuxは通常のUSB列挙を保証しないため、このlist確認を要求しない。
 
 PX-M1URのISDB-SはLNB 0Vで受信できるが、15V要求は`--allow-lnb-power`の有無によらず`UNSUPPORTED`（exit 3）で拒否され、LNB用GPIOへ書き込まない。LNB/GPIO動作を変更したcandidateでは、PX-M1URだけを接続し、同じS受信要求をdaemonのopt-inなし・ありの両方で試す。daemon起動には毎回X-STARTのコマンド群を使い、なしのrunは通常のX-START、ありのrunは`--allow-lnb-power`を追加して起動し、各run後にdaemonを停止する。各daemon起動後に、次のコマンドを実行してexit 3を記録する:
 
@@ -692,8 +704,7 @@ SPEC §1 の対象環境（Linux、Android、macOS）に含まれないため �
       throw "TS capture(s) exceeded the 90s bound without Kill; evidence in $LOG\ts-timeout.txt: $($timeout -join ', ')"
     }
   }
-  & "$D\px4d.exe" --list | Tee-Object "$LOG\list.txt"
-  & "$D\px4d.exe" --list-json | Out-File "$LOG\list.json"
+  & "$D\px4d.exe" --list-json | Out-File "$LOG\discovery.json"
   ```
 
   daemon起動・ready確認・受信・CARD・停止（X-START/X-LOAD/X-MON/X-CARD-HP/X-STOP相当）。`$ID`は`--device`、
@@ -987,7 +998,7 @@ SPEC §1 の対象環境（Linux、Android、macOS）に含まれないため �
     必要な試験が揃うまでgateを完了にしない。既存support claimや過去版だけのリスク受入を今回へ自動継承しない。
 
 - USB再接続（X-USB-HP相当）: 1 receiver clientを起動し、ユーザーの物理USB切断で`DISCONNECTED`/exit 7と
-  client残留なしを確認する。再接続後は`--list`/`--list-json`で再列挙を確認し、旧daemonはX-STOPと同じ
+  client残留なしを確認する。再接続後は`px4d --list-json`で再列挙を確認し、旧daemonはX-STOPと同じ
   `Stop-OwnedProcess $owned 35000 'px4d'`でcooperative stopしてから、同じ手順で起動し直す。readyを再確認し、
   短い受信とCARD APDUを再実行する。旧daemonの自動復帰を合格条件にしない。
 - 物理操作とsoak: B-CAS/USBの物理操作はユーザーが行い、各操作を依頼する直前にHAOS/SCS側でCodexは`beep`、
