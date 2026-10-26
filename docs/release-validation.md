@@ -1337,6 +1337,10 @@ container内のdiscovery JSON、status、TS、daemon/client exit、外側のhost
   application-local WinSCard DLLを確認する。配置・API・対象clientは[Windows WinSCard手順](platforms/windows-winscard.md)に従う。
   一般WinSCard全API、x86/native ARM64 DLL、Microsoft PC/SC IFD登録は対象外。native-card-adapter列は
   未試験なら`未認定`とし、Phase 1の実測やCI成功だけで合格へ変えない。
+- T05は上のE17 owned daemon手順内で別の60秒captureを起動し、対応CARD modelでは同じcapture中にstatus/listと
+  `card-apdu 90:30:00:00:00`を10回実行する。対象modelの既定channel planからreceiver/system/frequency/slotを設定し、
+  各commandのresponse/exit/start/endとcapture全体のstart/endを保存する。各control childは15秒bounded waitとし、
+  nonzero/timeoutならT05をincompleteにして外側のowned client/daemon bounded cleanupへ接続する。
 - preflight（read-only）:
   - `$PSVersionTable.PSVersion`、`[System.Environment]::OSVersion`、`chcp`のdefault code page、`$env:LOCALAPPDATA`を記録する。
   - `$env:LOCALAPPDATA`のowner SID・各ACE・protected flagをread-onlyで記録する。明示的な`--runtime-dir`を使う
@@ -1523,6 +1527,23 @@ container内のdiscovery JSON、status、TS、daemon/client exit、外側のhost
     "$rc" | Out-File (Join-Path $LOG "$label.rc")
     return $rc
   }
+  function Invoke-BoundedControl([string]$operation, [string[]]$arguments, [string]$label, $capture) {
+    $capture.Refresh()
+    if ($capture.HasExited) { throw "T05 capture ended before $label; record T05 incomplete." }
+    $started = [DateTime]::UtcNow.ToString('o')
+    $controlArgs = @('--device', $ID, '--runtime-dir', $RT, $operation) + $arguments
+    $child = Start-OwnedProcess (Join-Path $D 'px4ctl.exe') $controlArgs $true
+    $script:OwnedClients += $child
+    $rc = Stop-OwnedProcess $child 15000 $label
+    Forget-OwnedClient $child
+    $ended = [DateTime]::UtcNow.ToString('o')
+    $started | Out-File (Join-Path $LOG "$label.started.txt")
+    $ended | Out-File (Join-Path $LOG "$label.ended.txt")
+    $capture.Refresh()
+    if ($capture.HasExited) { throw "T05 capture ended before $label completed; record T05 incomplete." }
+    if ($rc -ne 0) { throw "$label exited $rc during T05; record T05 incomplete." }
+    return $rc
+  }
   function Wait-Captures($captures) {
     $timeout = @()
     foreach ($c in $captures) {
@@ -1603,6 +1624,32 @@ container内のdiscovery JSON、status、TS、daemon/client exit、外側のhost
       else { $captures += Start-Ts $r 'isdb-t' 527143000 '' }
     }
     Wait-Captures $captures
+
+    # T05 runs as a separate finite capture; choose a valid channel/receiver from this model's release plan.
+    $T05_RECEIVER = '<receiver-from-model-channel-plan>'; $T05_SYSTEM = '<isdb-t-or-isdb-s>'
+    $T05_FREQUENCY_HZ = '<frequency-hz-from-model-channel-plan>'; $T05_SLOT = '<slot-or-empty>'; $T05_SECONDS = 60
+    $t05CaptureStarted = [DateTime]::UtcNow.ToString('o')
+    $t05Capture = Start-Ts ([int]$T05_RECEIVER) $T05_SYSTEM ([long]$T05_FREQUENCY_HZ) $T05_SLOT $T05_SECONDS (Join-Path $LOG 't05.ts')
+    try {
+      Invoke-BoundedControl 'status' @() 't05-status' $t05Capture | Out-Null
+      Invoke-BoundedControl 'list' @() 't05-list' $t05Capture | Out-Null
+      1..10 | ForEach-Object {
+        Invoke-BoundedControl 'card-apdu' @('90:30:00:00:00') "t05-apdu-$($_)" $t05Capture | Out-Null
+      }
+      Wait-Captures @($t05Capture)
+      $t05Capture.Process.ExitCode | Set-Content (Join-Path $LOG 't05-capture.rc')
+      if ($t05Capture.Process.ExitCode -ne 0) { throw "T05 capture exited $($t05Capture.Process.ExitCode), expected 0." }
+      if (-not (Test-Path (Join-Path $LOG 't05.ts'))) { throw 'T05 capture TS is missing.' }
+      Get-FileHash -Algorithm SHA256 (Join-Path $LOG 't05.ts') | Out-File (Join-Path $LOG 't05.ts.sha256')
+      'complete: capture overlapped status/list and ten successful APDU commands' | Set-Content (Join-Path $LOG 't05-state.txt')
+    } catch {
+      'incomplete: T05 control/capture failure; owned client cleanup is handled by the outer bounded cleanup' | Set-Content (Join-Path $LOG 't05-state.txt')
+      throw
+    } finally {
+      $t05CaptureEnded = [DateTime]::UtcNow.ToString('o')
+      $t05CaptureStarted | Out-File (Join-Path $LOG 't05-capture.started.txt')
+      $t05CaptureEnded | Out-File (Join-Path $LOG 't05-capture.stage-ended.txt')
+    }
     (& "$D\px4ctl.exe" --device $ID --runtime-dir $RT status 2>> "$LOG\px4ctl.err") | Out-File "$LOG\status-after.txt"
 
     # T07 idle USB detach, stream detach, and new-daemon recovery are separate stages.
