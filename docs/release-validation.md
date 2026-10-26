@@ -59,6 +59,140 @@ PX4の通常の無指定時検証機種はPX-Q3U4だが、機種初回の対象�
 
 この表は現行配布targetとnative実行条件の対応である。実際のhost OS/ABI、USB access path、実施結果は各version文書へ記録する。production HAOS上で試験環境を変更する場合は別途承認済み手順に従う。
 
+## 端末nodeと環境状態の退避・復元（T01前）
+
+Termuxの`termux-usb -l`はUSB node path文字列のJSON配列を返す（例: `["/dev/bus/usb/001/004"]`）。配列要素をVID/PID辞書として扱わない。次をbootstrap時と再接続後に毎回実行し、選択結果・一覧をLOGに残す。製品/機種ごとに`TARGET_USB`と`EXPECTED_NODES`を表のUSB IDと当該stage（loader/runtime、単機能/primary+sibling）から設定する。ASICENはstage遷移ごとに期待ID/数を切り替える。0件、JSON型不正、対象一致数の不一致、sysfsで対象pathを対応付けできない場合はpermissionを要求せず停止する。無関係nodeは一覧に記録して対象選択から除外する。
+
+```sh
+: "${TARGET_USB:?set model/stage VID:PID, e.g. 3275:0080}"
+: "${EXPECTED_NODES:?set exact node count from model/stage}"
+case "$TARGET_USB" in [0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]) ;; *) echo "invalid VID:PID" >&2; exit 2;; esac
+case "$EXPECTED_NODES" in ''|*[!0-9]*|0) echo "invalid expected node count" >&2; exit 2;; esac
+termux-usb -l > "$LOG/termux-usb-paths.json"
+SYSFS_ROOT=${SYSFS_ROOT:-/sys/bus/usb/devices}
+python - "$LOG/termux-usb-paths.json" "$TARGET_USB" "$EXPECTED_NODES" "$LOG/termux-usb-map.json" "$SYSFS_ROOT" <<'PY'
+import glob, json, os, re, sys
+src, target, expected, out, sysroot = sys.argv[1:]
+paths = json.load(open(src, encoding="utf-8"))
+if not isinstance(paths, list) or any(not isinstance(p, str) for p in paths):
+    raise SystemExit("termux-usb -l must be a JSON array of USB path strings")
+matches, rows = [], []
+for path in paths:
+    m = re.fullmatch(r"/dev/bus/usb/(\d{3})/(\d{3})", path)
+    row = {"path": path, "vid_pid": None, "product": None}
+    if m:
+        bus, dev = (str(int(v)) for v in m.groups())
+        for node in glob.glob(sysroot + "/*"):
+            try:
+                if open(node + "/busnum").read().strip() == bus and open(node + "/devnum").read().strip() == dev:
+                    vid = open(node + "/idVendor").read().strip().lower()
+                    pid = open(node + "/idProduct").read().strip().lower()
+                    row["vid_pid"] = vid + ":" + pid
+                    product = node + "/product"
+                    row["product"] = open(product).read().strip() if os.path.exists(product) else ""
+                    break
+            except OSError:
+                continue
+    rows.append(row)
+    if row["vid_pid"] == target.lower():
+        matches.append(path)
+json.dump({"api_paths": paths, "mapped": rows, "target": target.lower(), "selected": matches}, open(out, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+if len(matches) != int(expected):
+    raise SystemExit(f"expected {expected} {target} node(s), found {len(matches)}; see {out}")
+PY
+cat "$LOG/termux-usb-map.json"
+python3 -c 'import json,sys; [print(p) for p in json.load(open(sys.argv[1]))["selected"]]' "$LOG/termux-usb-map.json" > "$LOG/termux-usb-selected-paths.txt"
+```
+
+PX4ではREADMEの選択機種USB IDを`TARGET_USB`にし、PX-Q3U4 (`0511:084a`) は同一筐体の2 nodeを`EXPECTED_NODES=2`、他の単機能機は1にする。
+
+結果が期待数と完全一致した場合だけ、JSONの`selected`に記録された各pathへ`termux-usb -r <path>`（または製品固有の`-r -e`）を実行する。USB permission後にdaemonを開始する。再接続時は古いpath/FDを使わず、同じ列挙・sysfs照合を再実行する。sysfs未読・node未対応・無許可候補複数は合格ではなく未達として記録する。
+
+環境依存状態を変える前に、承認済みの試験用account/add-on、保護されたrun専用LOG、復元可能な退避を用意する。次は手順を記載したものであり、今回の作業では実行しない。
+
+- **E02 HAOS/Supervisor options:** 対象addon自身のcontainer内にある認可済み`SUPERVISOR_TOKEN`で`/addons/self`だけを使う。SCS host等でtokenが得られない場合は停止する。APIのvalidated optionsはdefaultsとsecret解決値を含むためmode 600のprivate LOGだけに保存し、共有recordへコピーしない。options変更は次回addon startで有効になる。
+  ```sh
+  umask 077
+  mkdir -m 700 -p "$LOG/private"
+  : "${SUPERVISOR_TOKEN:?run inside the target add-on with its token}"
+  API=http://supervisor/addons/self
+  curl -fsS -H "Authorization: Bearer $SUPERVISOR_TOKEN" "$API/options/config" -o "$LOG/private/options-get.before.json"
+  python3 -c 'import json,sys; x=json.load(open(sys.argv[1])); json.dump(x.get("data",x),open(sys.argv[2],"w"),sort_keys=True)' "$LOG/private/options-get.before.json" "$LOG/private/addon-options.before.json"
+  chmod 600 "$LOG/private/"*.json
+  cp "$LOG/private/addon-options.before.json" "$LOG/private/addon-options.restore.json"
+  cp "$LOG/private/addon-options.before.json" "$LOG/private/addon-options.trial.json"
+  # 承認済みoptionsだけ編集し、schema validationを通す:
+  ${EDITOR:-vi} "$LOG/private/addon-options.trial.json"
+  python3 -m json.tool "$LOG/private/addon-options.trial.json" > /dev/null
+  python3 -c 'import json,sys; json.dump({"options":json.load(open(sys.argv[1]))},open(sys.argv[2],"w"))' "$LOG/private/addon-options.trial.json" "$LOG/private/options-trial.request.json"
+  curl -fsS -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H 'Content-Type: application/json' --data-binary @"$LOG/private/addon-options.trial.json" "$API/options/validate" -o "$LOG/private/options-trial.validate.json"
+  python3 -c 'import json,sys; x=json.load(open(sys.argv[1])); x=x.get("data",x); assert x.get("valid") is True' "$LOG/private/options-trial.validate.json"
+  curl -sS -o "$LOG/private/options-trial.post.json" -w '%{http_code}\n' -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H 'Content-Type: application/json' --data-binary @"$LOG/private/options-trial.request.json" "$API/options" > "$LOG/private/options-trial.status"
+  grep -Eq '^2[0-9][0-9]$' "$LOG/private/options-trial.status"
+  # run終了後、承認済み停止手順で元optionsを復元:
+  python3 -c 'import json,sys; json.dump({"options":json.load(open(sys.argv[1]))},open(sys.argv[2],"w"))' "$LOG/private/addon-options.restore.json" "$LOG/private/options-restore.request.json"
+  curl -sS -o "$LOG/private/options-restore.post.json" -w '%{http_code}\n' -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" -H 'Content-Type: application/json' --data-binary @"$LOG/private/options-restore.request.json" "$API/options" > "$LOG/private/options-restore.status"
+  grep -Eq '^2[0-9][0-9]$' "$LOG/private/options-restore.status"
+  curl -fsS -H "Authorization: Bearer $SUPERVISOR_TOKEN" "$API/options/config" -o "$LOG/private/options-get.after.json"
+  python3 -c 'import json,sys; x=json.load(open(sys.argv[1])); json.dump(x.get("data",x),open(sys.argv[2],"w"),sort_keys=True)' "$LOG/private/options-get.after.json" "$LOG/private/addon-options.after.json"
+  python3 -c 'import json,sys; assert json.load(open(sys.argv[1])) == json.load(open(sys.argv[2]))' "$LOG/private/addon-options.restore.json" "$LOG/private/addon-options.after.json"
+  ```
+
+
+
+optionsを適用した後と元値へ戻した後に、それぞれ別の認可済みHAOS CLI sessionから対象add-onだけを再起動する。HA Core/mirakcは再起動しない。
+
+```sh
+ADDON_SLUG='<target-addon-slug>'
+ha addons restart "$ADDON_SLUG"
+```
+
+- **E03 Linux module/udev/group:** 対象fileを決め、存在状態、内容、権限、所有者、video group membershipをLOGへ保存する。適用・udev reload・rebootは個別に承認された場合だけ行う。restoreは各ファイルの元内容または「元は不在」を復元し、対象userの元supplementary groupsを戻す。module再bind等が必要なら承認なしに行わず未達にする。
+  ```sh
+  set -eu
+  TEST_USER='<non-root-test-user>'; LOG='<private-run-log>'
+  for f in /etc/modprobe.d/smsusb-blacklist.conf /etc/udev/rules.d/99-usb-access.rules; do
+    n=$(basename "$f")
+    if [ -e "$f" ]; then cp -a "$f" "$LOG/$n.before"; printf 'present\n' > "$LOG/$n.state"; else printf 'absent\n' > "$LOG/$n.state"; fi
+  done
+  id "$TEST_USER" > "$LOG/test-user.before.txt"; PRIMARY_GROUP=$(id -gn "$TEST_USER")
+  id -nG "$TEST_USER" | python3 -c 'import sys; p=sys.argv[1]; print(",".join(g for g in sys.stdin.read().split() if g != p))' "$PRIMARY_GROUP" > "$LOG/groups.before.txt"
+  # 承認済みrunでのみ適用する。対象driver ruleとgroupを確定してから実行:
+  : "${BLACKLIST_MODULES:?set only the modules required by the selected product/model}"
+  : "${TARGET_USB:?set selected VID:PID}"
+  : > /etc/modprobe.d/smsusb-blacklist.conf
+  for module in $BLACKLIST_MODULES; do printf 'blacklist %s\n' "$module" >> /etc/modprobe.d/smsusb-blacklist.conf; done
+  VID=${TARGET_USB%:*}; PID=${TARGET_USB#*:}
+  printf 'SUBSYSTEM=="usb", ATTR{idVendor}=="%s", ATTR{idProduct}=="%s", MODE="0660", GROUP="video"\n' "$VID" "$PID" > /etc/udev/rules.d/99-usb-access.rules
+  udevadm control --reload-rules; udevadm trigger --subsystem-match=usb; usermod -aG video "$TEST_USER"
+  # 承認済み復元後にudev ruleを再読込する。既存driverのlive unbindはしない:
+  for f in /etc/modprobe.d/smsusb-blacklist.conf /etc/udev/rules.d/99-usb-access.rules; do
+    n=$(basename "$f")
+    if [ "$(cat "$LOG/$n.state")" = present ]; then cp -a "$LOG/$n.before" "$f"; cmp "$LOG/$n.before" "$f"; else rm -f "$f"; test ! -e "$f"; fi
+  done
+  # restore exact supplementary-group list using an authorized admin shell:
+  udevadm control --reload-rules
+  GROUPS_BEFORE=$(cat "$LOG/groups.before.txt")
+  if [ -n "$GROUPS_BEFORE" ]; then usermod -G "$GROUPS_BEFORE" "$TEST_USER"; else usermod -G '' "$TEST_USER"; fi
+  id "$TEST_USER" > "$LOG/test-user.after.txt"
+  PRIMARY_AFTER=$(id -gn "$TEST_USER")
+  id -nG "$TEST_USER" | python3 -c 'import sys; p=sys.argv[1]; print(",".join(g for g in sys.stdin.read().split() if g != p))' "$PRIMARY_AFTER" > "$LOG/groups.after.txt"
+  cmp "$LOG/groups.before.txt" "$LOG/groups.after.txt"
+  ```
+
+- **E07 Android stay-awake:** ADB shellの認可済みcontextで元値（nullを含む）を退避してから、明示された試験値だけを適用する。完了後、元値がnullならkeyを削除し、それ以外は元値を書戻して読戻す。権限不足なら変更せず停止する。
+  ```sh
+  adb shell settings get global stay_on_while_plugged_in > "$LOG/stay-awake.before.txt"
+  BEFORE=$(cat "$LOG/stay-awake.before.txt")
+  # 承認済み試験値を使う場合のみ。
+  TRIAL_VALUE='<approved-trial-value>'
+  adb shell settings put global stay_on_while_plugged_in "$TRIAL_VALUE"
+  # cleanup: Android settings getのnullを未設定として復元
+  if [ "$BEFORE" = null ]; then adb shell settings delete global stay_on_while_plugged_in; else adb shell settings put global stay_on_while_plugged_in "$BEFORE"; fi
+  adb shell settings get global stay_on_while_plugged_in > "$LOG/stay-awake.after.txt"
+  test "$(cat "$LOG/stay-awake.after.txt")" = "$BEFORE"
+  ```
+
 ## 共通試験シナリオ T00–T14
 
 ### run別candidateの取得と作業directory
@@ -199,11 +333,37 @@ E02/E03/E15-M等のOS権限不足はまず`id`, `stat`, `lsusb -t`（Termuxで�
 - **停止/cleanup:** 無関係processへsignalしない。test専用runtimeだけ片付け失敗log保持。
 - **記録:** PID/role/exit、process/FD/IPC/socket/runtime、復旧状態。
 
+### T09 helperの固定取得
+
+候補sourceとは独立した共通runbook helperを、Siano runbookのimmutable commit `a61e185ac3ae8a9c03b1efcd261bcef7d1a2043e`から取得する。candidate checkout/archive内のhelper有無に依存しない。POSIX/Termuxでは次を一度実行し、以後の全captureで`$TOOL/ts-check.py`を使う。
+
+```sh
+RUNBOOK_REF='a61e185ac3ae8a9c03b1efcd261bcef7d1a2043e'; HELPER_SHA256='fabe54eeb1188db4faf5ba6cbf81d8552b3386f73f58b3dd7a42641e23ac076d'
+TOOL="$WORK/tooling"; mkdir -m 700 -p "$TOOL"
+gh api -H 'Accept: application/vnd.github.raw' "repos/Khronos31/siano-userland/contents/docs/release-validation/ts-check.py?ref=$RUNBOOK_REF" > "$TOOL/ts-check.py"
+if command -v sha256sum >/dev/null 2>&1; then printf '%s  %s\n' "$HELPER_SHA256" "$TOOL/ts-check.py" | sha256sum -c -; else printf '%s  %s\n' "$HELPER_SHA256" "$TOOL/ts-check.py" | shasum -a 256 -c -; fi
+printf '%s\n' "$RUNBOOK_REF $HELPER_SHA256" > "$LOG/ts-helper-version.txt"
+```
+
+Windows PowerShell 5.1でも同じ固定版を新しいtooling directoryへ取得し、hash一致後にのみ使う。
+
+```powershell
+$RunbookRef = 'a61e185ac3ae8a9c03b1efcd261bcef7d1a2043e'; $HelperSha256 = 'fabe54eeb1188db4faf5ba6cbf81d8552b3386f73f58b3dd7a42641e23ac076d'
+$Tool = Join-Path $Work 'tooling'; New-Item -ItemType Directory -Path $Tool | Out-Null
+$Helper = Join-Path $Tool 'ts-check.py'
+Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/Khronos31/siano-userland/$RunbookRef/docs/release-validation/ts-check.py" -OutFile $Helper
+$Actual = (Get-FileHash -LiteralPath $Helper -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($Actual -ne $HelperSha256) { throw 'runbook TS helper hash mismatch' }
+"$RunbookRef $Actual" | Set-Content (Join-Path $LOG 'ts-helper-version.txt')
+```
+
+helperのversionはrunbook Git commitとSHA-256の組で固定する。candidate source SHA、artifact digest、helper ref/hashを別々に記録する。
+
 ### T09 TS・counter・終了値判定
 
 - **適用対象/頻度:** 全capture/soak。
-- **準備:** Python 3.11以上を`python3 --version`で確認し、手順書checkoutの[`ts-check.py`](release-validation/ts-check.py)を使う。候補ごとに新規作成した`$LOG`を使う。
-- **実操作/利用者への依頼:** POSIXでは各TSに`python3 <runbook-checkout>/docs/release-validation/ts-check.py "$LOG/<receiver>.ts" > "$LOG/<receiver>.ts-check.json"`を実行する。Windowsは同じhelperを`python <runbook-checkout>\docs\release-validation\ts-check.py "$LOG\<receiver>.ts"`で実行し、標準出力を`$LOG`へ保存する。全capture/soakの各TSで実行し、候補daemonのdrop/USB counterも記録する。
+- **準備:** Python 3.11以上を`python3 --version`で確認し、固定取得した`$TOOL/ts-check.py`（Windowsは`$Helper`）を使う。候補ごとに新規作成した`$LOG`を使う。
+- **実操作/利用者への依頼:** POSIXでは各TSに`python3 $TOOL/ts-check.py "$LOG/<receiver>.ts" > "$LOG/<receiver>.ts-check.json"`を実行する。Windowsは同じhelperを`python $Helper "$LOG\<receiver>.ts"`で実行し、標準出力を`$LOG`へ保存する。全capture/soakの各TSで実行し、候補daemonのdrop/USB counterも記録する。
 - **期待値/終了値:** 全TSが製品SPEC基準を満たし通常取得exit 0。非空file/counter 0だけでpassにしない。
 - **停止/cleanup:** 元TS/hash/logを残してT08 cleanup。
 - **記録:** `python3 --version`、helperのGit SHA、TS hash、helperのJSON/終了値、sync/TEI/continuity/drop/counter、client exit。
@@ -211,7 +371,7 @@ E02/E03/E15-M等のOS権限不足はまず`id`, `stat`, `lsusb -t`（Termuxで�
 Windowsで各TSを確認するcommand:
 
 ```powershell
-$helper = '<runbook-checkout>\docs\release-validation\ts-check.py'; $ts = Join-Path $LOG '<receiver>.ts'
+$helper = Join-Path $Tool 'ts-check.py'; $ts = Join-Path $LOG '<receiver>.ts'
 $json = Join-Path $LOG '<receiver>.ts-check.json'; $err = Join-Path $LOG '<receiver>.ts-check.err'
 & python $helper $ts 1> $json 2> $err; $parserRc = $LASTEXITCODE
 $parserRc | Set-Content (Join-Path $LOG '<receiver>.ts-check.rc')
