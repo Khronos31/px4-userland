@@ -108,9 +108,9 @@ PX4ではREADMEの選択機種USB IDを`TARGET_USB`にし、PX-Q3U4 (`0511:084a`
 
 結果が期待数と完全一致した場合だけ、JSONの`selected`に記録された各pathへ`termux-usb -r <path>`（または製品固有の`-r -e`）を実行する。USB permission後にdaemonを開始する。再接続時は古いpath/FDを使わず、同じ列挙・sysfs照合を再実行する。sysfs未読・node未対応・無許可候補複数は合格ではなく未達として記録する。
 
-環境依存状態を変える前に、承認済みの試験用account/add-on、保護されたrun専用LOG、復元可能な退避を用意する。次は手順を記載したものであり、今回の作業では実行しない。
+正式検証でE02/E03/E07等により環境状態を変更する場合は、ユーザー承認済みの対象・値・影響範囲を確定し、保護されたrun専用LOGと復元可能な状態保存を準備してから実行する。適用後に必要な試験を行い、終了時に保存値へ戻してreadback/比較する。承認範囲を超える変更やHA Core/mirakcの再起動は行わない。
 
-- **E02 HAOS/Supervisor options:** `/addons/self/info`の`options`は対象addon自身のapp recordに保存されたraw optionsで、`/options/config`のdefaults・secret解決後の値とは異なる。Supervisor APIの実装は[apps.py](https://github.com/home-assistant/supervisor/blob/main/supervisor/api/apps.py#L1620-L1700)および[options endpoints](https://github.com/home-assistant/supervisor/blob/main/supervisor/api/apps.py#L1832-L2015)を参照。対象addon内で認可済みtokenを使い、raw表現はmode 600のprivate backupにだけ保存する。値を画面・共有log・evidenceへ出さない。validateの`valid`がtrue以外、または読み出し/HTTP/JSON処理が失敗した場合はoptions POST前に終了する。Supervisorは本試験で操作しない。
+- **E02 HAOS/Supervisor options:** `/addons/self/info`の`options`は対象addon自身のapp recordに保存されたraw optionsで、`/options/config`のdefaults・secret解決後の値とは異なる。Supervisor APIの実装は[apps.py](https://github.com/home-assistant/supervisor/blob/main/supervisor/api/apps.py#L1620-L1700)および[options endpoints](https://github.com/home-assistant/supervisor/blob/main/supervisor/api/apps.py#L1832-L2015)を参照。対象addon内で認可済みtokenを使い、raw表現はmode 600のprivate backupにだけ保存する。値を画面・共有log・evidenceへ出さない。validateの`valid`がtrue以外、または読み出し/HTTP/JSON処理が失敗した場合はoptions POST前に終了する。承認済み範囲内で対象addonの起動・停止とoptions復元/比較を行い、HA Core/mirakcは再起動しない。
   ```sh
   set -eu
   umask 077
@@ -241,7 +241,7 @@ ha addons restart "$ADDON_SLUG"
   if [ "$RESTORE_RC" -ne 0 ]; then echo 'access state restoration incomplete; retain evidence and stop' >&2; exit "$RESTORE_RC"; fi
   ```
 
-- **E07 Android stay-awake:**初回ADB readが非0/空/不正値なら書込み前に停止する。`null`は未設定、十進整数は保存値として区別する。権限・readback失敗を無視しない。次は端末設定に触れないsynthetic確認用の状態遷移であり、実Androidへは実行しない。
+- **E07 Android stay-awake:**初回ADB readが非0/空/不正値なら書込み前に停止する。`null`は未設定、十進整数は保存値として区別する。権限・readback失敗を無視しない。正式検証では承認済み端末で設定を適用し、試験後に保存値へ戻してreadback/比較する。synthetic fixtureは局所確認に限り、実端末での検証を代替しない。
   ```sh
   set -eu
   LOG='<private-run-log>'
@@ -547,7 +547,7 @@ N/Aは製品機能上該当しない項目だけに使う。OS/ABI候補のunsup
 
 以下は確立済みのartifact別操作手順である。candidateに対する適用頻度と版固有matrixは該当版の `docs/release-validation/<version>.md` に従う。実施対象となるarchiveは候補artifact自体をnative architectureで起動し、別archive/OSの結果で置き換えない。Linux musl aarch64はE15のnative Fedora aarch64上でAlpine arm64 Docker containerを使い、CPU emulationなしで実施する。
 
-| 配布binary archive | 環境例 | 選択されたcandidateで行う実機操作 |
+| 配布binary archive | 環境例 | 各配布archiveで毎release必須の実機操作 |
 |---|---|---|
 | `linux-glibc-x86_64` | E03 AnduinOS x86_64 | 列挙、B-CAS抜去・再挿入（不在検出、ATR/reset/APDU復帰）、8 receiverの短い受信、USB切断・再接続と復旧確認 |
 | `linux-musl-x86_64` | E02 HAOS Alpine/musl add-on | 同上。試験用add-onの起動停止とSupervisor設定復元を含む |
@@ -561,7 +561,7 @@ N/Aは製品機能上該当しない項目だけに使う。OS/ABI候補のunsup
 
 このmatrixはrelease archive manifestの9 binary target（8 tar archiveとWindows ZIP 1つ）と、Q3U4の既存実機記録に基づく。過去の受信・抜差し結果は[validation-results.md](platforms/validation-results.md)に記録されている。[PR #15](https://github.com/Khronos31/px4-userland/pull/15)はfinal candidate artifact auditとhardware canaryを記録し、[Issue #4](https://github.com/Khronos31/px4-userland/issues/4)はusbip・LSM・libusb/access pathなどディストリビューション名だけでは覆えない検証軸を整理している。過去記録は今回candidateのmatrix結果を代替しない。
 
-各artifactの実機確認は列挙、短い受信、カード状態確認、B-CAS抜去/再挿入、USB切断/再接続、復旧確認を順に実行する。これら一連の確認に総時間上限を設けない。5分の上限はユーザーへ物理操作を依頼してから操作が完了するまでの待機だけに適用する。候補archiveのchecksum・展開、APDU、RF/電源/firmware、host準備は検証開始前に済ませる。5分以内に物理操作が行われなければ、その操作を未完了として記録し、物理deviceを使う工程を中断する。5分を超える連続負荷試験は短時間確認に混ぜず、ユーザーが決定するsoakへ分ける。
+各配布archiveの実機確認は列挙、短い受信、カード状態確認、B-CAS抜去/再挿入、USB切断/再接続、復旧確認を順に実行する。これら一連の確認に総時間上限を設けない。5分の上限はユーザーへ物理操作を依頼してから操作が完了するまでの待機だけに適用する。候補archiveのchecksum・展開、APDU、RF/電源/firmware、host準備は検証開始前に済ませる。5分以内に物理操作が行われなければ、その操作を未完了として記録し、物理deviceを使う工程を中断する。頻度表で毎release必須とする代表機2時間soakは実施する。これとは別の5分を超える追加連続負荷試験は、ユーザーが決定するsoakへ分ける。
 
 canonical runtime は、そのartifactの実機確認を代表する環境を指す。同一executableを共有するruntimeでもaccess pathが異なれば、証拠は自動継承しない。
 
@@ -608,10 +608,10 @@ Q3U4の8 receiver確認は次の8コマンドを同じ端末で個別に実行�
 "$D/px4-ts" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 1 --channel BS15_0 --lnb-voltage 0 --time 30 --output "$LOG/r1.ts" 2> "$LOG/r1.err" & R1=$!
 "$D/px4-ts" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 4 --channel BS15_0 --lnb-voltage 0 --time 30 --output "$LOG/r4.ts" 2> "$LOG/r4.err" & R4=$!
 "$D/px4-ts" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 5 --channel BS15_0 --lnb-voltage 0 --time 30 --output "$LOG/r5.ts" 2> "$LOG/r5.err" & R5=$!
-"$D/px4-ts" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 2 --channel T27 --time 30 --output "$LOG/r2.ts" 2> "$LOG/r2.err" & R2=$!
-"$D/px4-ts" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 3 --channel T27 --time 30 --output "$LOG/r3.ts" 2> "$LOG/r3.err" & R3=$!
-"$D/px4-ts" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 6 --channel T27 --time 30 --output "$LOG/r6.ts" 2> "$LOG/r6.err" & R6=$!
-"$D/px4-ts" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 7 --channel T27 --time 30 --output "$LOG/r7.ts" 2> "$LOG/r7.err" & R7=$!
+"$D/px4-ts" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 2 --system isdb-t --freq 527143000 --time 30 --output "$LOG/r2.ts" 2> "$LOG/r2.err" & R2=$!
+"$D/px4-ts" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 3 --system isdb-t --freq 527143000 --time 30 --output "$LOG/r3.ts" 2> "$LOG/r3.err" & R3=$!
+"$D/px4-ts" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 6 --system isdb-t --freq 527143000 --time 30 --output "$LOG/r6.ts" 2> "$LOG/r6.err" & R6=$!
+"$D/px4-ts" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 7 --system isdb-t --freq 527143000 --time 30 --output "$LOG/r7.ts" 2> "$LOG/r7.err" & R7=$!
 # 8個それぞれの終了値を記録する（各waitは個別に実行）。
 wait "$R0"; echo "$?" > "$LOG/r0.rc"
 wait "$R1"; echo "$?" > "$LOG/r1.rc"
@@ -660,7 +660,7 @@ pgrep -fl '[p]x4d'; rmdir "$RT"   # 残存 process / endpoint なし
 
 Q3U4 preflight: 両 USB device、15V adapter、両 RF lead を接続し、`px4d --list-json`の`enclosures[].devices[]`に両USB deviceと合計8 receiverが列挙されることを確認する。daemon起動後は`px4ctl status`のreadyと`px4ctl list`の8 receiverを確認してから開始する。
 
-選択された短時間確認におけるカード物理抜去・再挿入（X-CARD-HP）:
+各配布archiveの短時間確認におけるカード物理抜去・再挿入（X-CARD-HP）:
 
 以下は§0.1のdaemonを起動したまま、receiver captureを行っていない状態で実施する。HAOS/SCS側で各物理操作を依頼する直前に通知コマンドを実行する。Codexは`beep`、Claude Codeは`vibe`を使い、通知後にユーザーへ操作を依頼してから最大5分待つ。5分はその物理操作1回の応答待ちだけに適用する。要求した操作が未完了ならその操作とartifact gateを未完了として記録し、次へ進まない。
 
@@ -714,7 +714,7 @@ done
 
 判定: `card-status`の`present=no`とreader generationの変化、ATR/APDUの`NO_CARD`・exit 9を確認する。再挿入時は`present=yes`となりgenerationが再度変化し、ATR取得・reset・APDU 10回が成功することを確認する（過去の正常応答はSW `90 00`）。その後§0.1の8 receiverを30秒実行し、TS/counter条件はSPEC 10.2に従う。カード抜去・再挿入ができない場合、そのartifactの短時間gateは未完了。
 
-選択された短時間確認におけるUSB物理切断・再接続（X-USB-HP）:
+各配布archiveの短時間確認におけるUSB物理切断・再接続（X-USB-HP）:
 
 カードを挿入した状態でdaemonを起動し、8 receiver captureは止めておく。USB切断を観測するためのclientを1つだけ起動する。HAOS/SCS側で物理操作を依頼する直前に通知し、操作完了まで最大5分待つ。要求した操作が未完了ならその操作とartifact gateを未完了として記録し、次へ進まない。Q3U4は筐体の物理USBケーブル1本を外すと、2つの内部USB deviceが切断される。
 
@@ -790,9 +790,9 @@ receiver 7 で TEI/continuity burst が出て、SPEC 10.2.6a の比較条件（�
 3. 対象 claim ごとに `継承`、`今回再検証`、`未認定`、`対象外` のいずれかを記録し、根拠を書く。証拠の軸は SPEC 10.2.8 に従う。別 model、別 OS/runtime、別 access path、別 feature へ結果を外挿しない。同一 model・同一 runtime/access path・同一 feature の証拠は、対象 artifact の bytes が baseline と同一であるか、変更がその path へ影響しないと 10.5.1 の表で判定できる場合に継承できる。未知の影響は affected として扱い、`対象外` は SPEC の対象外または本手順 §0 の対象外に限る。
 4. 前回の適格なlong soakの日付やrelease数は事実情報として記録できるが、エージェントがsoak有無・時間・OSを決める規則として使わない。
 
-Termuxのarchitecture、Termux launcherのFD path、glibc/musl、native PC/SC adapterは別々のruntime/access pathとして扱う。Windows 11 x64（E17）のcandidate適用頻度は該当版のmatrixに従い、WindowsとWinSCardが対象に含まれる版ではnative libusb tuner、CARD_*、WinSCard、実機の物理回帰を以下の手順で行う。CIのbuild/offline test成功は`build-tested`のみを示し、実機matrixが未完了の間は当該行を`未認定`（`hardware-unverified`）として扱う。追加移植性確認は[移植性確認手順](platforms/portability-checks.md)に分離し、Android ad-hoc APKはdtv-android所管である。変更も新規claimもないpathを毎回試験しない。
+Termuxのarchitecture、Termux launcherのFD path、glibc/musl、native PC/SC adapterは別々のruntime/access pathとして扱う。Windows 11 x64（E17）のcandidate適用頻度は該当版のmatrixに従い、WindowsとWinSCardが対象に含まれる版ではnative libusb tuner、CARD_*、WinSCard、実機の物理回帰を以下の手順で行う。CIのbuild/offline test成功は`build-tested`のみを示し、実機matrixが未完了の間は当該行を`未認定`（`hardware-unverified`）として扱う。追加移植性確認は[移植性確認手順](platforms/portability-checks.md)に分離し、Android ad-hoc APKはdtv-android所管である。変更も新規claimもない追加runtime/access pathは毎回試験しない。ただし、毎release必須matrixに含まれる全配布archiveは実施する。
 
-影響分類が複数にまたがる、依存範囲が不明、または非影響を証明できない場合は `unknown/ambiguous` として、影響し得るpath集合をユーザーへの説明に含める。選択する短時間実機確認のarchiveは影響判定に関係なくcandidateそのものを使い、適用するarchive/OS頻度は該当版の `docs/release-validation/<version>.md` に従う。
+影響分類が複数にまたがる、依存範囲が不明、または非影響を証明できない場合は `unknown/ambiguous` として、影響し得るpath集合をユーザーへの説明に含める。毎release必須matrixの各配布archiveは影響判定に関係なくcandidateそのものを使い、適用するarchive/OS頻度は該当版の `docs/release-validation/<version>.md` に従う。
 
 ## 2. source / CI / 候補アーカイブ判定（毎回）
 
@@ -844,7 +844,7 @@ gh run view <run-id> --job <job-id> --log > "$LOG/run-<run-id>-job-<job-id>.log"
 
 ## 3. 配布アーカイブ別手順
 
-適用対象archiveと頻度は該当版のmatrixに従い、選択されたarchiveは §0 の対応行と以下の操作を使ってnative環境で独立に実施する。Windows行はE17のWindows手順に従い、native Windows 11 x64で実施する。必須確認の一連の操作に総時間上限は設けない。B-CAS/USBの物理操作はユーザーが行い、各操作を依頼した時点から最大5分待つ。各物理操作を依頼する直前にHAOS/SCS側でCodexは`beep`、Claude Codeは`vibe`を実行する。各runの記録にはarchive名/SHA-256、source commit、環境ID/OS version/architecture、機種/USB path、実施時刻、コマンド、終了値、card status/generation/ATR/APDU応答、TS/counter、残留の有無を残す。
+適用対象の各配布archiveと頻度は該当版のmatrixに従い、各archiveは §0 の対応行と以下の操作を使ってnative環境で独立に実施する。Windows行はE17のWindows手順に従い、native Windows 11 x64で実施する。必須確認の一連の操作に総時間上限は設けない。B-CAS/USBの物理操作はユーザーが行い、各操作を依頼した時点から最大5分待つ。各物理操作を依頼する直前にHAOS/SCS側でCodexは`beep`、Claude Codeは`vibe`を実行する。各runの記録にはarchive名/SHA-256、source commit、環境ID/OS version/architecture、機種/USB path、実施時刻、コマンド、終了値、card status/generation/ATR/APDU応答、TS/counter、残留の有無を残す。
 
 1. 候補archiveのhash確認・展開、Q3U4のfirmware/RF/電源preflight、ログ先作成を済ませる。これらを含めて一連の確認に総時間上限は設けない。
 2. `px4d --list-json`でQ3U4の両USB device、8 receiver、JSON schema・boolean型・receiver capability値を確認する。daemon起動後は`px4ctl status`でready、`px4ctl list`で8 receiverを確認する。M1UR/S1URのserial衝突やLNB非対応profile表示が変更対象なら、§0の該当する機種別追加確認も行う。
@@ -901,7 +901,7 @@ opt-inなし・ありの各runでログ名を分ける。15V拒否時に電圧�
 
 ### USB/cardの物理抜差し
 
-選択された短時間確認では、対象archiveのcandidateに対しB-CASカードの抜去/再挿入とUSB切断/再接続をユーザーが実施する。daemonを起動したままcard hotplugを行い、不在検出と再挿入後のATR/reset/APDU復帰を確認してから、30秒の8 receiver captureでTS/counterを確認する。各物理操作の応答待ち上限は個別に5分とし、要求直前にHAOS/SCS側でCodexは`beep`、Claude Codeは`vibe`を実行する。新しい`tuner-hardware-verified` / `card-core-hardware-verified` claimでは、SPEC 10.3が要求する各抜差しをそのclaimのqualificationで追加実施する。該当matrixで指定された抜差しができなければ、そのartifact/claimは未完了または未認定と記録する。
+各配布archiveの短時間確認では、そのarchiveのcandidateに対しB-CASカードの抜去/再挿入とUSB切断/再接続をユーザーが実施する。daemonを起動したままcard hotplugを行い、不在検出と再挿入後のATR/reset/APDU復帰を確認してから、30秒の8 receiver captureでTS/counterを確認する。各物理操作の応答待ち上限は個別に5分とし、要求直前にHAOS/SCS側でCodexは`beep`、Claude Codeは`vibe`を実行する。新しい`tuner-hardware-verified` / `card-core-hardware-verified` claimでは、SPEC 10.3が要求する各抜差しをそのclaimのqualificationで追加実施する。該当matrixで指定された抜差しができなければ、そのartifact/claimは未完了または未認定と記録する。
 
 ## 5. 結果の記録と公開可否
 
@@ -925,10 +925,10 @@ release限定dispositionを適用する。原試行と追加試験を別々に�
 次をすべて満たすまでStable公開へ進まない。
 
 - Stable共通のCI、candidate artifact audit、source/license、checksum gateが成功。
-- final candidateについて、該当版の `docs/release-validation/<version>.md` で当該releaseに適用される短時間matrixが成功し、ユーザーがsoakを選んだ場合は指定時間・OSの試験が完了している。soakのFD数・RSSが最終観測まで安定化しない持続的な増加を示し、外部要因を特定できない場合は `判定保留` とし、公開しない。
+- final candidateについて、毎release必須の代表機2時間soakと全配布archiveの短時間matrixが成功している。初回/majorの追加時間条件は共通頻度表に従い、これらとは別の追加soakはユーザーが指定した場合に完了する。soakのFD数・RSSが最終観測まで安定化しない持続的な増加を示し、外部要因を特定できない場合は `判定保留` とし、公開しない。
 - READMEの各support claimが実証または適格なbaseline継承に対応し、未試験のmodel × runtime/access path × featureを認定表示していない。
 - crash、hang、use-after-free、stale lease、再接続不能、カード経路の重大な未解決issueがない。
-- 当該releaseで選択された短時間matrixに未完了の配布artifactがある場合はStable gate未完了とし、そのままsupport表示だけで完了扱いしない。
+- 当該releaseの全配布archiveに適用される短時間matrixに未完了のartifactがある場合はStable gate未完了とし、そのままsupport表示だけで完了扱いしない。
 - SPEC 10.5-2の再現性確認（同一source commitの独立2 runによる10 archive（Windows ZIPを含む）と外側`SHA256SUMS`のbyte一致）を、未実施のままpass扱いしない。toolchain/build inputが異なる比較はinconclusiveとして成功とせず、matching pairを取り直す。正規化比較による合格は認めない。
 - README、LICENSE、THIRD_PARTY_NOTICES、provenance、checksum、support表示、release archiveの内容が一致し、公開前レビュー済み。
 - 現行 inventory に無い機種は実機未検証としてREADMEに明示すればリリース可能。Betaを機種追加の代わりに使わない。
