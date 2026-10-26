@@ -628,7 +628,7 @@ test "$ready" -eq 1 || { echo 'px4d did not become ready' >&2; exit 1; }
 
 受信と監視（X-LOAD / X-MON）:
 
-USB selectorを指定するdaemonには`--instance`が必要である。clientは`--instance`指定時に`--device`を省略できる。clientにも`--device`を指定する場合はdaemonと同じselectorを使い、instanceとruntime directoryも合わせる。短い単一receiver確認には次の形を使い、durationは該当版matrix値を設定する。
+USB device/fdを開くdaemonには対応するselectorが必要で、`--instance`はdaemon endpoint namespaceを指定する。daemonの既存USB claim/namespace lockが排他を担う。instance付きclientは既存endpointへ接続し、`--device`は省略できるが、その場合device identity照合は行わない。clientにも`--device`を渡す場合はdaemonと同じselectorを使い、identity assertionとして照合させる。instanceとruntime directoryもdaemonに合わせる。以下の単体受信と8 receiver例ではselectorを明示する。短い単一receiver確認には次の形を使い、durationは該当版matrix値を設定する。
 
 ```sh
 set -eu
