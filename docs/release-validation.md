@@ -567,60 +567,100 @@ canonical runtime は、そのartifactの実機確認を代表する環境を指
 
 ### 0.1 共通コマンド
 
-`<version>`、`<platform>`、`$ID`、`$INSTANCE`、`$FW`、`$RT`、`$LOG` は実値に置き換える。artifact は候補 commit の `release-candidate`（§2）だけを使い、手元 build や旧 archive で代用しない。
+artifact は候補 commit の `release-candidate`（§2）だけを使い、手元 build や旧 archive で代用しない。以下の変数は同じ検証端末で一度設定する。山括弧の例示値はshellへ入力せず、実値へ置き換える。値が空または未置換ならdaemon/clientを起動する前に停止する。
 
 artifact 検証と展開（X-PREP）:
 
 ```sh
+set -eu
+ARCHIVE='px4-userland-1.0.0-linux-glibc-x86_64.tar.gz' # 候補artifact名を設定
+FW='/absolute/path/to/user-provided-model-firmware.bin' # PX4 archiveにはfirmwareを同梱しない
+ID='usb:1-2.3'                                         # --list-jsonで確認した実在位置
+INSTANCE='candidate-q3u4'                              # この試験用のinstance名
+RUN_ID='rc-20261026-q3u4'                              # 記録に使う一意な名前
+FW_SHA256='5213a5a38872661277a2cc1b2dfdfe88faf06f41205f460f3b51857f0568b484'
+require_value() { name=$1 value=$2; case "$value" in ''|*'<'*|*'>'*) echo "invalid or unreplaced $name" >&2; return 1 ;; esac; }
+require_value ARCHIVE "$ARCHIVE"; require_value FW "$FW"; require_value ID "$ID"
+require_value INSTANCE "$INSTANCE"; require_value RUN_ID "$RUN_ID"
 sha256sum -c SHA256SUMS                              # macOS: shasum -a 256 -c
-D=$(mktemp -d); tar -xzf px4-userland-<version>-<platform>.tar.gz -C "$D"
-sha256sum "$FW"                                      # 5213a5a38872661277a2cc1b2dfdfe88faf06f41205f460f3b51857f0568b484
-RT=$(mktemp -d "${TMPDIR:-$HOME}/px4-userland-<run-id>.XXXXXX"); LOG=$(mktemp -d "${TMPDIR:-$HOME}/px4-logs-<run-id>.XXXXXX"); chmod 700 "$RT" "$LOG"
-ID=usb:<BUS-PORT>
-INSTANCE=<instance-token>
-"$D/px4d" --list-json > "$LOG/discovery.json"         # USB discovery JSON; inspect enclosures[].devices[] and receivers[]
+D=$(mktemp -d); RT=$(mktemp -d "${TMPDIR:-$HOME}/px4-userland-${RUN_ID}.XXXXXX")
+LOG=$(mktemp -d "${TMPDIR:-$HOME}/px4-logs-${RUN_ID}.XXXXXX"); chmod 700 "$D" "$RT" "$LOG"
+tar -xzf "$ARCHIVE" -C "$D"
+test -s "$FW"
+if [ "$(uname -s)" = Darwin ]; then printf '%s  %s\n' "$FW_SHA256" "$FW" | shasum -a 256 -c -; else printf '%s  %s\n' "$FW_SHA256" "$FW" | sha256sum -c -; fi
+"$D/px4d" --list-json > "$LOG/discovery.json"         # enclosures[].devices[]とreceivers[]を確認
+python3 - "$LOG/discovery.json" "${ID#usb:}" <<'PY'
+import json,sys
+root=json.load(open(sys.argv[1],encoding='utf-8'))
+def has_port(value):
+    if isinstance(value,dict): return value.get('port') == sys.argv[2] or any(has_port(v) for v in value.values())
+    if isinstance(value,list): return any(has_port(v) for v in value)
+    return False
+if not has_port(root): raise SystemExit('ID port absent from discovery JSON')
+PY
+test -x "$D/px4d"; test -x "$D/px4-ts"; test -x "$D/px4ctl"
 ```
 
 daemon 起動と準備完了確認（X-START）:
 
 ```sh
-"$D/px4d" --device "$ID" --instance "$INSTANCE" --firmware "$FW" --runtime-dir "$RT" 2> "$LOG/px4d.err" &
+"$D/px4d" --device "$ID" --instance "$INSTANCE" --firmware "$FW" --runtime-dir "$RT" > "$LOG/px4d.out" 2> "$LOG/px4d.err" &
 P=$!
-# statusを再実行してreadyを確認する。group modeならpx4d/px4ctlの両方に --group を付ける。
-"$D/px4ctl" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" status | tee "$LOG/status-start.txt"
-"$D/px4ctl" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" list | tee "$LOG/ctl-list.txt"
+cleanup_px4d() {
+  original=$?; trap - EXIT
+  if kill -0 "$P" 2>/dev/null; then kill -TERM "$P"; fi
+  if wait "$P"; then daemon_rc=0; else daemon_rc=$?; fi
+  echo "$daemon_rc" > "$LOG/px4d.rc"
+  if [ "$original" -eq 0 ] && [ "$daemon_rc" -ne 0 ]; then original=$daemon_rc; fi
+  exit "$original"
+}
+trap cleanup_px4d EXIT
+# statusを最大60秒再試行し、readyを確認する。group modeならpx4d/px4ctlの両方に --group を付ける。
+i=0; ready=0
+while [ "$i" -lt 60 ]; do
+  if "$D/px4ctl" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" status > "$LOG/status-start.txt" 2> "$LOG/status-start.err" && grep -q 'ready' "$LOG/status-start.txt"; then ready=1; break; fi
+  kill -0 "$P" || { echo 'px4d exited before ready' >&2; exit 1; }
+  i=$((i + 1)); sleep 1
+done
+test "$ready" -eq 1 || { echo 'px4d did not become ready' >&2; exit 1; }
+"$D/px4ctl" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" list > "$LOG/ctl-list.txt" 2> "$LOG/ctl-list.err"
 ```
 
 受信と監視（X-LOAD / X-MON）:
 
-USB selectorを指定するdaemonには`--instance`が必要である。clientにもdaemonと同じdevice selector、instance、runtime directoryを指定する。短い単一receiver確認には次の形を使い、`<SECONDS>`は該当版のmatrix値へ置き換える。
+USB selectorを指定するdaemonには`--instance`が必要である。clientは`--instance`指定時に`--device`を省略できる。clientにも`--device`を指定する場合はdaemonと同じselectorを使い、instanceとruntime directoryも合わせる。短い単一receiver確認には次の形を使い、durationは該当版matrix値を設定する。
 
 ```sh
-"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --receiver <ID> --channel T27 \
-  --runtime-dir "$RT" --output t27.ts --time <SECONDS>
+set -eu
+RECEIVER='0'; CAPTURE_SECONDS='10'
+require_value RECEIVER "$RECEIVER"; require_value CAPTURE_SECONDS "$CAPTURE_SECONDS"
+case "$RECEIVER:$CAPTURE_SECONDS" in *[!0-9:]*|:*) echo 'receiver/duration must be numeric' >&2; exit 1 ;; esac
+"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --receiver "$RECEIVER" --channel T27 \
+  --runtime-dir "$RT" --output "$LOG/t27.ts" --time "$CAPTURE_SECONDS" > "$LOG/t27.out" 2> "$LOG/t27.err" || { rc=$?; echo "$rc" > "$LOG/t27.rc"; exit "$rc"; }
+echo 0 > "$LOG/t27.rc"
 ```
 
 Q3U4の8 receiver確認は次の8コマンドを同じ端末で個別に実行する。各receiverは30秒で終了する。これは受信確認であり、物理操作の応答を待つ間の負荷継続には使わない。
 
 ```sh
+set -eu
 # Q3U4 8 receiver（受信継続: 0/1/4/5=S、2/3/6/7=T）
-"$D/px4-ts" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 0 --channel BS15_0 --lnb-voltage 0 --time 30 --output "$LOG/r0.ts" 2> "$LOG/r0.err" & R0=$!
-"$D/px4-ts" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 1 --channel BS15_0 --lnb-voltage 0 --time 30 --output "$LOG/r1.ts" 2> "$LOG/r1.err" & R1=$!
-"$D/px4-ts" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 4 --channel BS15_0 --lnb-voltage 0 --time 30 --output "$LOG/r4.ts" 2> "$LOG/r4.err" & R4=$!
-"$D/px4-ts" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 5 --channel BS15_0 --lnb-voltage 0 --time 30 --output "$LOG/r5.ts" 2> "$LOG/r5.err" & R5=$!
-"$D/px4-ts" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 2 --system isdb-t --freq 527143000 --time 30 --output "$LOG/r2.ts" 2> "$LOG/r2.err" & R2=$!
-"$D/px4-ts" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 3 --system isdb-t --freq 527143000 --time 30 --output "$LOG/r3.ts" 2> "$LOG/r3.err" & R3=$!
-"$D/px4-ts" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 6 --system isdb-t --freq 527143000 --time 30 --output "$LOG/r6.ts" 2> "$LOG/r6.err" & R6=$!
-"$D/px4-ts" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 7 --system isdb-t --freq 527143000 --time 30 --output "$LOG/r7.ts" 2> "$LOG/r7.err" & R7=$!
+"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 0 --channel BS15_0 --lnb-voltage 0 --time 30 --output "$LOG/r0.ts" > "$LOG/r0.out" 2> "$LOG/r0.err" & R0=$!
+"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 1 --channel BS15_0 --lnb-voltage 0 --time 30 --output "$LOG/r1.ts" > "$LOG/r1.out" 2> "$LOG/r1.err" & R1=$!
+"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 4 --channel BS15_0 --lnb-voltage 0 --time 30 --output "$LOG/r4.ts" > "$LOG/r4.out" 2> "$LOG/r4.err" & R4=$!
+"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 5 --channel BS15_0 --lnb-voltage 0 --time 30 --output "$LOG/r5.ts" > "$LOG/r5.out" 2> "$LOG/r5.err" & R5=$!
+"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 2 --system isdb-t --freq 527143000 --time 30 --output "$LOG/r2.ts" > "$LOG/r2.out" 2> "$LOG/r2.err" & R2=$!
+"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 3 --system isdb-t --freq 527143000 --time 30 --output "$LOG/r3.ts" > "$LOG/r3.out" 2> "$LOG/r3.err" & R3=$!
+"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 6 --system isdb-t --freq 527143000 --time 30 --output "$LOG/r6.ts" > "$LOG/r6.out" 2> "$LOG/r6.err" & R6=$!
+"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 7 --system isdb-t --freq 527143000 --time 30 --output "$LOG/r7.ts" > "$LOG/r7.out" 2> "$LOG/r7.err" & R7=$!
 # 8個それぞれの終了値を記録する（各waitは個別に実行）。
-wait "$R0"; echo "$?" > "$LOG/r0.rc"
-wait "$R1"; echo "$?" > "$LOG/r1.rc"
-wait "$R4"; echo "$?" > "$LOG/r4.rc"
-wait "$R5"; echo "$?" > "$LOG/r5.rc"
-wait "$R2"; echo "$?" > "$LOG/r2.rc"
-wait "$R3"; echo "$?" > "$LOG/r3.rc"
-wait "$R6"; echo "$?" > "$LOG/r6.rc"
-wait "$R7"; echo "$?" > "$LOG/r7.rc"
+FAIL=0
+for entry in "$R0:r0" "$R1:r1" "$R4:r4" "$R5:r5" "$R2:r2" "$R3:r3" "$R6:r6" "$R7:r7"; do
+  pid=${entry%%:*}; name=${entry#*:}
+  if wait "$pid"; then rc=0; else rc=$?; FAIL=1; fi
+  echo "$rc" > "$LOG/$name.rc"
+done
+test "$FAIL" -eq 0 || { echo 'one or more receiver clients failed; inspect per-client stdout/stderr and exit files' >&2; exit 1; }
 ```
 
 受信中の監視は別の端末で実行する。shell変数は端末間で引き継がれないため、起動端末に表示されたcandidate展開先 `$D`、device selector `$ID`、`$INSTANCE`、`$RT` と同じ実値をこの端末にも設定する。
@@ -628,11 +668,9 @@ wait "$R7"; echo "$?" > "$LOG/r7.rc"
 PX4の`card-apdu HEX`は単発送信である。反復確認は既存標準照会を通常コマンドで10回実行する。
 
 ```sh
-D=<candidate-directory>
-ID=usb:<BUS-PORT>
-INSTANCE=<instance-token>
-RT=<same-runtime-directory-as-startup-terminal>
-LOG=<same-private-log-directory>
+ D='/path/to/the-same-candidate-directory'; ID='usb:1-2.3'
+INSTANCE='candidate-q3u4'; RT='/path/to/the-same-runtime-directory'; LOG='/path/to/the-same-private-log-directory'
+for value in "$D" "$ID" "$INSTANCE" "$RT" "$LOG"; do case "$value" in ''|*'<'*|*'>'*) echo 'set copied candidate/device/instance/runtime/log values first' >&2; exit 2 ;; esac; done
 "$D/px4ctl" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" status
 for i in 1 2 3 4 5 6 7 8 9 10; do
   if "$D/px4ctl" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" card-apdu 90:30:00:00:00 > "$LOG/card-$i.apdu"; then rc=0; else rc=$?; fi
@@ -646,16 +684,23 @@ Termux での起動（X-START-TERMUX）:
 
 ```sh
 # Termux 2-FD（E05–E07）
-RT="$PREFIX/tmp/p4"; mkdir -p "$RT"; chmod 700 "$RT"
-"$D/px4-termux" --usb-device <path1> --usb-device <path2> --device "$ID" --firmware "$FW" --runtime-dir "$RT"
+RT="$PREFIX/tmp/px4-${RUN_ID}"; USB_DEVICE_1='/dev/bus/usb/001/004'; USB_DEVICE_2='/dev/bus/usb/001/005'
+for value in "$RT" "$USB_DEVICE_1" "$USB_DEVICE_2"; do case "$value" in ''|*'<'*|*'>'*) echo 'set selected Termux paths from termux-usb -l and sysfs first' >&2; exit 2 ;; esac; done
+mkdir -p "$RT"; chmod 700 "$RT"
+"$D/px4-termux" --usb-device "$USB_DEVICE_1" --usb-device "$USB_DEVICE_2" --device "$ID" --firmware "$FW" --runtime-dir "$RT"
 # 別セッションで §0.1 の px4d status確認コマンドをreadyになるまで再実行し、px4-ts / px4ctlを同じ $ID と $RT で実行する
 ```
 
 終了と残留確認（X-STOP / X-RESID）:
 
 ```sh
-kill -TERM $P; wait $P           # 0 を期待
-pgrep -fl '[p]x4d'; rmdir "$RT"   # 残存 process / endpoint なし
+if kill -0 "$P" 2>/dev/null; then kill -TERM "$P"; fi
+if wait "$P"; then rc=0; else rc=$?; fi
+echo "$rc" > "$LOG/px4d.rc"
+test "$rc" -eq 0 || { echo "px4d exit=$rc" >&2; exit "$rc"; }
+test ! -S "$RT/px4d.sock" || { echo 'px4d socket remains' >&2; exit 1; }
+test ! -e "$RT/px4d.lock" || { echo 'px4d lock remains' >&2; exit 1; }
+rmdir "$RT"
 ```
 
 Q3U4 preflight: 両 USB device、15V adapter、両 RF lead を接続し、`px4d --list-json`の`enclosures[].devices[]`に両USB deviceと合計8 receiverが列挙されることを確認する。daemon起動後は`px4ctl status`のreadyと`px4ctl list`の8 receiverを確認してから開始する。
@@ -802,14 +847,22 @@ Termuxのarchitecture、Termux launcherのFD path、glibc/musl、native PC/SC ad
 4. 工程2の試験完了前に候補source commitが変わった場合は、そのcommitのCIとartifactを取り直す。前のcommitのarchive、手元で別途作ったbuild、PR runの古いartifactを新candidateの代用にしない。工程3の試験結果commitは候補source commitの変更ではなく、工程4ではその結果commitにタグを付けてrelease CIを実行する。
 5. tag CIが生成した9 binary archiveを、実機試験に使ったfinal candidate archiveと比較する。inventory/type/mode/linkと全非文書payloadが一致することを要求する。binaryは更新された`README.md`、それを反映した`manifest.json`の`source_ref`およびREADMEのhash/size、内側`SHA256SUMS`だけを許す。source archiveは結果commitの明示的に許可された文書、commit/tree identity、それらのmanifest項目とchecksumだけを許す。source側のノート・記録も同じinventoryを維持する。公開workflowの共通検査が候補2runとtagを照合する。範囲と停止条件は [`releasing.md`](releasing.md)、記録は [`release-record.md`](release-record.md) に従う。
 
-手動dispatchとartifact取得には次の短いCLI手順を使える。`<candidate-ref>`、`<run-id>`、`<new-empty-dir>`を実際の値へ置き換え、artifactは新しい空ディレクトリへ展開する。既に成功済みの自動runが候補commitと一致するなら再dispatchしない。
+手動dispatchとartifact取得には次の短いCLI手順を使える。既に成功済みの自動runが候補commitと一致するなら再dispatchしない。未設定値・山括弧の未置換値・既存の展開先は停止条件とし、取得済みartifactを上書きしない。
 
 ```sh
-gh workflow run build_userland.yml --ref <candidate-ref>
+: "${CANDIDATE_REF:?export the exact candidate source ref}"
+case "$CANDIDATE_REF" in ''|*'<'*|*'>'*) echo 'invalid or unreplaced candidate ref' >&2; exit 2 ;; esac
+gh workflow run build_userland.yml --ref "$CANDIDATE_REF"
 gh run list --workflow build_userland.yml --limit 10
-gh run view <run-id> --json headSha,conclusion
-gh run download <run-id> --name release-candidate --dir <new-empty-dir>
-(cd <new-empty-dir> && sha256sum -c SHA256SUMS)
+: "${RUN_ID:?export the exact successful candidate run ID}"
+: "${ARTIFACT_DIR:?export a new empty artifact destination directory}"
+case "$RUN_ID" in ''|*[!0-9]*) echo 'run ID must be decimal' >&2; exit 2 ;; esac
+case "$ARTIFACT_DIR" in ''|*'<'*|*'>'*) echo 'invalid or unreplaced artifact directory' >&2; exit 2 ;; esac
+test ! -e "$ARTIFACT_DIR" || { echo 'artifact destination already exists' >&2; exit 1; }
+mkdir -m 700 "$ARTIFACT_DIR"
+gh run view "$RUN_ID" --json headSha,conclusion
+gh run download "$RUN_ID" --name release-candidate --dir "$ARTIFACT_DIR"
+(cd "$ARTIFACT_DIR" && sha256sum -c SHA256SUMS)
 ```
 
 CI が行う build・audit・smoke を成功後に同じ目的でローカル再実行しない。CIで失敗または未実施の項目がある場合に限り、原因調査に必要な既存コマンドを実行する。新しい汎用検証スクリプトは作らない。
@@ -916,7 +969,7 @@ release限定dispositionを適用する。原試行と追加試験を別々に�
 - 変更impact分類と hunk-level の call-path / guard 適用条件、対象/除外したmodel-profile・runtime/access path・featureと根拠
 - claimごとの `継承` / `今回再検証` / `未認定` / `対象外`、exact candidateでの試験有無
 - 適用するmatrixの各binary archiveと対応環境、各実機testの環境ID・host・device/USB ID・runtime/access path・archive SHA-256・日時（UTC）・コマンド・counter・結果・ログ保存先
-- soakについてユーザー決定（実施有無・時間・OS）と実施結果。receiver 7 fresh comparison、USB/card抜差しが追加で必要な場合は実施状態と理由
+- 必須の代表機2時間soakとOS別30分/10分確認の実施結果を各々記録する。これらに追加するsoakのユーザー決定（実施有無・時間・OS）と実施結果は別項目にする。receiver 7 fresh comparison、USB/card抜差しが追加で必要な場合は実施状態と理由
 - soakのFD数・RSS記録系列と、`安定` / `頭打ち` / `判定保留` のdispositionおよび理由
 - 残存blocker、既知の非blocking制限、README/support表示とrelease noteへの反映
 
@@ -1959,10 +2012,10 @@ container内のdiscovery JSON、status、TS、daemon/client exit、外側のhost
   client残留なしを確認する。再接続後は`px4d --list-json`で再列挙を確認し、旧daemonはX-STOPと同じ
   `Stop-OwnedProcess $owned 35000 'px4d'`でcooperative stopしてから、同じ手順で起動し直す。readyを再確認し、
   短い受信とCARD APDUを再実行する。旧daemonの自動復帰を合格条件にしない。
-- 物理操作とsoak: B-CAS/USBの物理操作はユーザーが行い、各操作を依頼する直前にHAOS/SCS側でCodexは`beep`、
-  Claude Codeは`vibe`を実行し、依頼から最大5分待つ。LNBは0Vのままとし、別途許可された隔離測定なしに15Vを
-  要求・測定しない。5分を超える連続負荷試験は本節に含めず、SPEC 10.5.2「Soak: user decision」に従って
-  短時間確認の完了後にユーザーが有無・時間・対象OSを決める。
+  - 物理操作とsoak: B-CAS/USBの物理操作はユーザーが行い、各操作を依頼する直前にHAOS/SCS側でCodexは`beep`、
+    Claude Codeは`vibe`を実行し、依頼から最大5分待つ。LNBは0Vのままとし、別途許可された隔離測定なしに15Vを
+    要求・測定しない。確定頻度表にあるWindows 30分・代表機2時間・OS別10分は必須確認として実施し、短時間確認へ置き換えない。
+    これらを超える追加連続負荷試験だけをSPEC 10.5.2「Soak: user decision」に従い、ユーザーが有無・時間・対象OSを決める。
 - 適用条件: Q3U4の項目（8 receiver同時captureを含む）は実際に接続した機種がQ3U4の場合だけ適用し、他profileは
   SPEC 10.2.7の該当項目を使う。TS/counterの合否はSPEC 10.2の適用条件で判定し、shell終了値だけで決めない。
   新しい汎用検証scriptやframeworkは追加しない。
