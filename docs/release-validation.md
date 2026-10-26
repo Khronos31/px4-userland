@@ -297,7 +297,7 @@ test -x "$D/px4d"; test -x "$D/px4-ts"; test -x "$D/px4ctl"
 python3 -c 'import json,sys; m=json.load(open("manifest.json")); assert m.get("source_ref")==sys.argv[1] and m.get("platform")==sys.argv[2]' "$SOURCE_SHA" "$TARGET"
 ```
 
-Windowsで`windows-x86_64`を試験する場合は、同じ成功runにある`release-candidate` artifactのID/nameを記録して取得する。Windows ZIPは通常配布archiveの代替ではない。
+Windowsの`windows-x86_64` ZIPも通常配布対象のarchiveである。同じ成功runにある`release-candidate` artifactのID/nameを記録して取得し、下記のWindows手順で検証する。
 
 ```powershell
 $ErrorActionPreference = 'Stop'
