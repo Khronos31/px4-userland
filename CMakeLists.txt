@@ -543,6 +543,8 @@ if(WIN32)
             userland/tests/ipc_state_tests.cpp
             userland/tests/mlt5pe_tests.cpp
             userland/tests/px4d_args_tests.cpp
+            userland/tests/px4d_listener_error_tests.cpp
+            userland/tools/px4d_listener_error.cpp
             userland/tools/px4d_list_format.cpp
             userland/tests/px4d_list_format_tests.cpp
             userland/tests/q3u4_frontend_tests.cpp
@@ -567,12 +569,14 @@ if(WIN32)
             px4_userland_core
             px4_userland_windows_platform
             px4_userland_windows_test_support
+            dtv::host_listener_context
             dtv::json
         )
         target_include_directories(px4_windows_tests PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
             ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
             ${CMAKE_CURRENT_SOURCE_DIR}/userland/tools
+            ${dtv_userland_core_SOURCE_DIR}/adapters/host_listener_context/include
         )
         target_compile_features(px4_windows_tests PRIVATE cxx_std_17)
         px4_enable_project_warnings(px4_windows_tests)
