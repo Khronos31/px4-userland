@@ -704,7 +704,7 @@ mkdir -p "$RT"; chmod 700 "$RT"
 # 別セッションで §0.1 の px4d status確認コマンドをreadyになるまで再実行し、px4-ts / px4ctlを同じ $ID と $RT で実行する
 ```
 
-終了と残留確認（X-STOP / X-RESID）: `wait "$P"`で自己起動したdaemonの終了を受け取った後は、そのprocessのFDとflock ownerはOSにより解放済みである。直後のendpoint/marker一覧を保存してから、専用task runtime内の残留markerだけを明示回収し、最後にruntimeが消えたことを別記録する。lock保持中のunlinkは行わない。
+終了と残留確認（X-STOP / X-RESID）: `wait "$P"`で自己起動したdaemonの終了を受け取った後は、そのprocessのFDとflock ownerはOSにより解放済みである。直後のendpoint/marker一覧を保存し、同じruntimeを使うclient/daemonを起動しないまま、専用task runtime内の残留markerだけを明示回収する。markerがあれば別processのholderがないことを同じinodeのnonblocking exclusive flockで確認し、probe自身のlockとFDを先に解放してからunlinkする。取得できなければmarker/runtimeを残して停止する。最後にruntimeが消えたことを別記録する。lock保持中のunlinkは行わない。
 
 ```sh
 if kill -0 "$P" 2>/dev/null; then kill -TERM "$P"; fi
@@ -716,7 +716,24 @@ test ! -S "$ENDPOINT/control.sock" || { echo 'control socket remains' >&2; exit 
 test ! -S "$ENDPOINT/stream.sock" || { echo 'stream socket remains' >&2; exit 1; }
 find "$RT" -mindepth 1 -print > "$LOG/runtime-after-daemon-stop.txt" || exit $?
 if [ -L "$ENDPOINT/.listener.lock" ]; then echo 'listener lock marker is a symlink; refusing cleanup' >&2; exit 1; fi
-if [ -e "$ENDPOINT/.listener.lock" ]; then rm -f -- "$ENDPOINT/.listener.lock" || exit $?; fi
+if [ -e "$ENDPOINT/.listener.lock" ]; then
+  python3 - "$ENDPOINT/.listener.lock" > "$LOG/listener-lock-probe.txt" 2>&1 <<'PY'
+import fcntl, os, sys
+path=sys.argv[1]
+fd=os.open(path, os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0))
+try:
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        raise SystemExit('listener lock is held by another owner; refusing cleanup')
+    print('nonblocking exclusive lock acquired; no other holder at probe time')
+    fcntl.flock(fd, fcntl.LOCK_UN)
+finally:
+    os.close(fd)
+PY
+  if [ "$?" -ne 0 ]; then cat "$LOG/listener-lock-probe.txt" >&2; exit 1; fi
+  rm -f -- "$ENDPOINT/.listener.lock" || exit $?
+fi
 rmdir "$ENDPOINT" || exit $?
 rmdir "$RT/px4-userland/v1" "$RT/px4-userland" "$RT" || exit $?
 test ! -e "$RT" || { echo 'owned runtime namespace remains after explicit cleanup' >&2; exit 1; }
