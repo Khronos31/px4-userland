@@ -7,7 +7,23 @@ namespace px4::userland::tools {
 namespace {
 
 using dtv::userland::host_listener_context::ListenerDiagnosticReason;
+using dtv::userland::host_listener_context::RuntimeDirectoryLayer;
 using dtv::userland::host_runtime::EndpointDiagnosticReason;
+
+const char* directory_layer_name(RuntimeDirectoryLayer layer)
+{
+    switch (layer) {
+    case RuntimeDirectoryLayer::runtime_root:
+        return "root";
+    case RuntimeDirectoryLayer::product:
+        return "product";
+    case RuntimeDirectoryLayer::version:
+        return "version";
+    case RuntimeDirectoryLayer::instance:
+        return "instance";
+    }
+    return "runtime";
+}
 
 const char* endpoint_reason(const dtv::userland::host_runtime::EndpointDiagnostic& endpoint,
                             std::string& advice)
@@ -46,6 +62,8 @@ std::string format_listener_error(
     message += " failed: ";
     message += error_string(static_cast<Error>(error));
 
+    const std::string directory = std::string(directory_layer_name(diagnostic.directory_layer)) +
+                                  " runtime directory";
     std::string advice;
     switch (diagnostic.reason) {
     case ListenerDiagnosticReason::endpoint_path: {
@@ -70,30 +88,34 @@ std::string format_listener_error(
         break;
     }
     case ListenerDiagnosticReason::runtime_directory_missing:
-        message += ": the runtime directory does not exist. Create the path selected by "
+        message += ": the " + directory + " does not exist. Create the path selected by "
                    "--runtime-dir PATH.";
         break;
     case ListenerDiagnosticReason::runtime_directory_lookup:
-        message += ": the runtime directory could not be inspected. Check --runtime-dir PATH "
+        message += ": the " + directory + " could not be inspected. Check --runtime-dir PATH "
                    "and its parent permissions.";
         break;
     case ListenerDiagnosticReason::runtime_directory_type:
-        message += ": the runtime directory must be a real directory, not a symlink. "
+        message += ": the " + directory + " must be a real directory, not a symlink. "
                    "Check --runtime-dir PATH.";
         break;
     case ListenerDiagnosticReason::runtime_directory_owner:
-        message += ": the runtime directory must be owned by the current user. "
+        message += ": the " + directory + " must be owned by the current user. "
                    "Check --runtime-dir PATH ownership.";
         break;
     case ListenerDiagnosticReason::runtime_directory_mode:
-        message += ": the runtime directory mode does not match its access setting. Private "
+        message += ": the " + directory + " mode does not match its access setting. Private "
                    "mode requires no group/other permissions; --group requires group "
                    "read/write/execute and no other permissions. Check --runtime-dir PATH.";
         break;
     case ListenerDiagnosticReason::runtime_directory_security:
-        message += ": the runtime directory failed the current-user owner/DACL security "
+        message += ": the " + directory + " failed the current-user owner/DACL security "
                    "check. Use a runtime directory owned by the current user with the "
                    "required private DACL.";
+        break;
+    case ListenerDiagnosticReason::runtime_directory_encoding:
+        message += ": --runtime-dir PATH is not valid UTF-8 on Windows; provide a valid "
+                   "UTF-8 path.";
         break;
     case ListenerDiagnosticReason::none:
         break;

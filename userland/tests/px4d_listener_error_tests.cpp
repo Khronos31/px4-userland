@@ -18,6 +18,27 @@ namespace {
 using namespace dtv::userland;
 using namespace dtv::userland::host_listener_context;
 
+bool test_runtime_directory_layer_diagnostic()
+{
+    ListenerDiagnostic diagnostic{};
+    diagnostic.reason = ListenerDiagnosticReason::runtime_directory_missing;
+    diagnostic.directory_layer = RuntimeDirectoryLayer::instance;
+    const std::string message = px4::userland::tools::format_listener_error(
+        Error::NOT_FOUND, diagnostic, "reservation");
+    CHECK(message.find("instance runtime directory does not exist") != std::string::npos);
+    return true;
+}
+
+bool test_runtime_directory_encoding_diagnostic()
+{
+    ListenerDiagnostic diagnostic{};
+    diagnostic.reason = ListenerDiagnosticReason::runtime_directory_encoding;
+    const std::string message = px4::userland::tools::format_listener_error(
+        Error::INVALID_ARGUMENT, diagnostic, "reservation");
+    CHECK(message.find("not valid UTF-8 on Windows") != std::string::npos);
+    return true;
+}
+
 bool test_endpoint_path_diagnostic()
 {
     std::string runtime_directory;
@@ -103,5 +124,7 @@ bool test_firmware_errors()
 bool run_px4d_listener_error_tests()
 {
     return test_endpoint_path_diagnostic() && test_runtime_directory_security_reason() &&
+           test_runtime_directory_layer_diagnostic() &&
+           test_runtime_directory_encoding_diagnostic() &&
            test_usb_selection_error() && test_firmware_errors();
 }
