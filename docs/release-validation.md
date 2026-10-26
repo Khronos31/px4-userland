@@ -704,7 +704,7 @@ mkdir -p "$RT"; chmod 700 "$RT"
 # 別セッションで §0.1 の px4d status確認コマンドをreadyになるまで再実行し、px4-ts / px4ctlを同じ $ID と $RT で実行する
 ```
 
-終了と残留確認（X-STOP / X-RESID）:
+終了と残留確認（X-STOP / X-RESID）: `wait "$P"`で自己起動したdaemonの終了を受け取った後は、そのprocessのFDとflock ownerはOSにより解放済みである。直後のendpoint/marker一覧を保存してから、専用task runtime内の残留markerだけを明示回収し、最後にruntimeが消えたことを別記録する。lock保持中のunlinkは行わない。
 
 ```sh
 if kill -0 "$P" 2>/dev/null; then kill -TERM "$P"; fi
@@ -714,8 +714,13 @@ test "$rc" -eq 0 || { echo "px4d exit=$rc" >&2; exit "$rc"; }
 ENDPOINT="$RT/px4-userland/v1/$INSTANCE"
 test ! -S "$ENDPOINT/control.sock" || { echo 'control socket remains' >&2; exit 1; }
 test ! -S "$ENDPOINT/stream.sock" || { echo 'stream socket remains' >&2; exit 1; }
-test ! -e "$ENDPOINT/.listener.lock" || { echo 'listener lock remains' >&2; exit 1; }
-rmdir "$RT"
+find "$RT" -mindepth 1 -print > "$LOG/runtime-after-daemon-stop.txt" || exit $?
+if [ -L "$ENDPOINT/.listener.lock" ]; then echo 'listener lock marker is a symlink; refusing cleanup' >&2; exit 1; fi
+if [ -e "$ENDPOINT/.listener.lock" ]; then rm -f -- "$ENDPOINT/.listener.lock" || exit $?; fi
+rmdir "$ENDPOINT" || exit $?
+rmdir "$RT/px4-userland/v1" "$RT/px4-userland" "$RT" || exit $?
+test ! -e "$RT" || { echo 'owned runtime namespace remains after explicit cleanup' >&2; exit 1; }
+echo 'owned runtime namespace removed after daemon/lock ownership release' > "$LOG/runtime-cleanup.txt"
 ```
 
 Q3U4 preflight: 両 USB device、15V adapter、両 RF lead を接続し、`px4d --list-json`の`enclosures[].devices[]`に両USB deviceと合計8 receiverが列挙されることを確認する。daemon起動後は`px4ctl status`のreadyと`px4ctl list`の8 receiverを確認してから開始する。
