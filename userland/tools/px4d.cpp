@@ -30,6 +30,7 @@
 #include "q3u4_power.h"
 #include "px4d_args.h"
 #include "px4d_list_format.h"
+#include "px4d_listener_error.h"
 #include "px4d_signals.h"
 
 #include <dtv/userland/host_listener_context/enclosure_context.h>
@@ -410,10 +411,11 @@ int serve_core(const Px4dArguments& arguments, const std::string& base_serial,
         std::fprintf(stderr, "Core enclosure context: %s\n", error_string(context.error()));
         return exit_status(context.error());
     }
-    const auto reserved = context.value()->reserve_namespace();
+    listener::ListenerDiagnostic listener_diagnostic{};
+    const auto reserved = context.value()->reserve_namespace(&listener_diagnostic);
     if (!reserved) {
-        std::fprintf(stderr, "Core endpoint reservation: %s\n",
-                     error_string(reserved.error()));
+        std::fprintf(stderr, "%s\n", tools::format_listener_error(
+            reserved.error(), listener_diagnostic, "reservation").c_str());
         return exit_status(reserved.error());
     }
     const auto published = context.value()->publish();
@@ -778,7 +780,8 @@ int main(int argc, char** argv)
     FirmwareProvider firmware_provider(arguments.firmware);
     const auto firmware = firmware_provider.load();
     if (!firmware) {
-        std::fprintf(stderr, "firmware: %s\n", error_string(firmware.error()));
+        std::fprintf(stderr, "%s\n",
+                     tools::format_firmware_error(firmware.error()).c_str());
         return exit_status(firmware.error());
     }
     Result<std::unique_ptr<Q3U4Runtime>> runtime =
@@ -802,7 +805,12 @@ int main(int argc, char** argv)
         runtime = Q3U4Runtime::open_native(requested_base_serial, usb_paths);
     }
     if (!runtime) {
-        std::fprintf(stderr, "device open: %s\n", error_string(runtime.error()));
+        if (arguments.usb_selector && runtime.error() == Error::INVALID_ARGUMENT) {
+            std::fprintf(stderr, "%s\n",
+                         tools::format_usb_selection_error(runtime.error()).c_str());
+        } else {
+            std::fprintf(stderr, "device open: %s\n", error_string(runtime.error()));
+        }
         if (mode == Px4dOpenMode::native && !arguments.usb_selector &&
             runtime.error() == Error::INVALID_ARGUMENT) {
             const auto grouping = Q3U4Runtime::enumerate_native();

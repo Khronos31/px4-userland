@@ -162,7 +162,9 @@ Px4dArguments parse_px4d_arguments(int argc,
     }
     if (have_device) {
         const auto selector = dtv::userland::identity::parse_device_selector(result.device);
-        if (!selector) return invalid("--device requires a canonical serial: or usb: selector");
+        if (!selector)
+            return invalid("--device requires serial: plus a 14- or 15-digit PX4 serial, "
+                           "or usb:BUS-PORT[,BUS-PORT] with one or two current paths");
         if (selector.value().kind == dtv::userland::identity::SelectorKind::serial) {
             const std::string_view serial(selector.value().serial.bytes.data(),
                                           selector.value().serial.length);
@@ -180,7 +182,8 @@ Px4dArguments parse_px4d_arguments(int argc,
     }
     if (have_instance &&
         (!valid_runtime_instance(result.instance) || valid_device_instance(result.instance)))
-        return invalid("--instance is invalid");
+        return invalid("--instance must be 1-80 ASCII letters, digits, '.', '_' or '-', "
+                       "excluding '.' and '..' and device serials");
     if (result.usb_selector && result.file_descriptor_count != 0U)
         return invalid("USB topology selector cannot be used with --fd");
     if (result.usb_selector && !have_instance)
