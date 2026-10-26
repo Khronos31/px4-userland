@@ -73,7 +73,8 @@ bool test_usb_selection_error()
     CHECK(message.find("exactly one ready PX4 enclosure") != std::string::npos);
     CHECK(message.find("both paths from the same paired enclosure") != std::string::npos);
     CHECK(message.find("px4d --list-json") != std::string::npos);
-    CHECK(message.find("--instance TOKEN") != std::string::npos);
+    CHECK(message.find("current path(s)") != std::string::npos);
+    CHECK(message.find("--instance") == std::string::npos);
     return true;
 }
 

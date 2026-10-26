@@ -113,7 +113,7 @@ std::string format_usb_selection_error(dtv::userland::Error error)
         message += ": the requested USB path did not resolve to exactly one ready PX4 "
                    "enclosure. ";
         message += "Use one current USB path for a single-device model or both paths from the "
-                   "same paired enclosure; inspect px4d --list-json and check --instance TOKEN.";
+                   "same paired enclosure; inspect px4d --list-json for the current path(s).";
     }
     return message;
 }
