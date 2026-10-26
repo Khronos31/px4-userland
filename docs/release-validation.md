@@ -603,6 +603,8 @@ test -x "$D/px4d"; test -x "$D/px4-ts"; test -x "$D/px4ctl"
 
 daemon 起動と準備完了確認（X-START）:
 
+X-PREP、X-START、X-LOAD/X-MON、X-STOP/X-RESIDは同じ対話shellで順に実行する。X-STARTの`EXIT` trapはそのshellを閉じるまでdaemonを保持するため、fenceを別scriptとして実行しない。
+
 ```sh
 "$D/px4d" --device "$ID" --instance "$INSTANCE" --firmware "$FW" --runtime-dir "$RT" > "$LOG/px4d.out" 2> "$LOG/px4d.err" &
 P=$!
@@ -638,6 +640,17 @@ case "$RECEIVER:$CAPTURE_SECONDS" in *[!0-9:]*|:*) echo 'receiver/duration must 
 "$D/px4-ts" --device "$ID" --instance "$INSTANCE" --receiver "$RECEIVER" --channel T27 \
   --runtime-dir "$RT" --output "$LOG/t27.ts" --time "$CAPTURE_SECONDS" > "$LOG/t27.out" 2> "$LOG/t27.err" || { rc=$?; echo "$rc" > "$LOG/t27.rc"; exit "$rc"; }
 echo 0 > "$LOG/t27.rc"
+```
+
+代表機の必須2時間runは同じactive candidate daemonの下で、短時間smokeと別に次を実行する。初回/majorのmacOS・WindowsではCAPTURE_SECONDS=1800、他OS/ABIでは600を設定する。
+
+```sh
+CAPTURE_SECONDS='7200'
+require_value CAPTURE_SECONDS "$CAPTURE_SECONDS"
+"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --receiver "$RECEIVER" --channel T27 \
+  --runtime-dir "$RT" --output "$LOG/representative-soak.ts" --time "$CAPTURE_SECONDS" \
+  > "$LOG/representative-soak.out" 2> "$LOG/representative-soak.err" || { rc=$?; echo "$rc" > "$LOG/representative-soak.rc"; exit "$rc"; }
+echo 0 > "$LOG/representative-soak.rc"
 ```
 
 Q3U4の8 receiver確認は次の8コマンドを同じ端末で個別に実行する。各receiverは30秒で終了する。これは受信確認であり、物理操作の応答を待つ間の負荷継続には使わない。
@@ -698,8 +711,10 @@ if kill -0 "$P" 2>/dev/null; then kill -TERM "$P"; fi
 if wait "$P"; then rc=0; else rc=$?; fi
 echo "$rc" > "$LOG/px4d.rc"
 test "$rc" -eq 0 || { echo "px4d exit=$rc" >&2; exit "$rc"; }
-test ! -S "$RT/px4d.sock" || { echo 'px4d socket remains' >&2; exit 1; }
-test ! -e "$RT/px4d.lock" || { echo 'px4d lock remains' >&2; exit 1; }
+ENDPOINT="$RT/px4-userland/v1/$INSTANCE"
+test ! -S "$ENDPOINT/control.sock" || { echo 'control socket remains' >&2; exit 1; }
+test ! -S "$ENDPOINT/stream.sock" || { echo 'stream socket remains' >&2; exit 1; }
+test ! -e "$ENDPOINT/.listener.lock" || { echo 'listener lock remains' >&2; exit 1; }
 rmdir "$RT"
 ```
 
@@ -1322,8 +1337,10 @@ consumer終了後、記録済みの自分のPIDだけを停止し、各終了値
 
 ```sh
 set -eu
-WORK='<new-private-e15m-run-dir>'; D='<extracted-linux-musl-aarch64-candidate-dir>'
-LOG="$WORK/log"; RT="$WORK/runtime"; FW='<verified-firmware-file>'; mkdir -m 700 -p "$LOG" "$RT"
+WORK='<new-private-e15m-run-dir>'; D='<extracted-linux-musl-aarch64-candidate-dir>'; FW='<verified-firmware-file>'
+require_value() { name=$1 value=$2; case "$value" in ''|*'<'*|*'>'*) echo "invalid or unreplaced $name" >&2; return 1 ;; esac; }
+require_value WORK "$WORK"; require_value D "$D"; require_value FW "$FW"
+LOG="$WORK/log"; RT="$WORK/runtime"; mkdir -m 700 -p "$LOG" "$RT"
 test -d "$D"; test -r "$FW"; test ! -e "$LOG/discovery.json"
 if podman pull docker.io/library/alpine:3.22 > "$LOG/alpine-pull.txt" 2>&1; then PULL_RC=0; else PULL_RC=$?; fi
 printf '%s\n' "$PULL_RC" > "$LOG/alpine-pull.rc"
