@@ -152,6 +152,7 @@ int main(int argc, char** argv)
                                               &failure_kind, &diagnostics);
     if (!result) {
         std::fprintf(stderr, "px4-ts: %s\n", error_string(result.error()));
+        print_px4_ts_run_diagnostic(stderr, "px4-ts", result.error(), diagnostics);
         std::fprintf(stderr, "written packets=%llu bytes=%llu\n",
                      static_cast<unsigned long long>(diagnostics.packets_written),
                      static_cast<unsigned long long>(diagnostics.packets_written * 188U));

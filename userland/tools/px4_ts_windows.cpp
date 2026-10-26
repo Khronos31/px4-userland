@@ -207,6 +207,8 @@ int main(int argc, char** argv)
     }
     if (error != Error::OK) {
         std::fprintf(stderr, "px4-ts: %s\n", error_string(error));
+        if (!result)
+            print_px4_ts_run_diagnostic(stderr, "px4-ts", result.error(), diagnostics);
         std::fprintf(stderr, "written packets=%llu bytes=%llu\n",
                      static_cast<unsigned long long>(completed),
                      static_cast<unsigned long long>(completed * 188U));

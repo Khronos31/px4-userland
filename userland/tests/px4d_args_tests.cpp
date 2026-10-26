@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -220,7 +221,12 @@ bool test_device_and_general_rejections()
         const Arguments invalid_selector{"px4d", "--device", selector,
                                          "--firmware", "firmware.bin",
                                          "--instance", "named"};
-        PX4D_CHECK(!parse(invalid_selector).valid);
+        const Px4dArguments parsed = parse(invalid_selector);
+        PX4D_CHECK(!parsed.valid);
+        if (std::string_view(selector) == "usb:") {
+            PX4D_CHECK(parsed.error.find("usb:BUS-PORT[,BUS-PORT]") !=
+                       std::string_view::npos);
+        }
     }
     const Arguments three_paths{"px4d", "--device", "usb:1-1,1-2,1-3",
                                 "--firmware", "firmware.bin", "--instance", "named"};
@@ -231,7 +237,10 @@ bool test_device_and_general_rejections()
     PX4D_CHECK(!parse(address_selector).valid);
     Arguments bad_instance = native_arguments();
     bad_instance.insert(bad_instance.end(), {"--instance", "../bad"});
-    PX4D_CHECK(!parse(bad_instance).valid);
+    const Px4dArguments bad_instance_result = parse(bad_instance);
+    PX4D_CHECK(!bad_instance_result.valid);
+    PX4D_CHECK(bad_instance_result.error.find("1-80 ASCII letters") !=
+               std::string_view::npos);
     Arguments reserved_instance = native_arguments();
     reserved_instance.insert(reserved_instance.end(), {"--instance", "999999999999999"});
     PX4D_CHECK(!parse(reserved_instance).valid);
