@@ -887,8 +887,14 @@ sha256sum "$RUN1_DIR/SHA256SUMS" "$RUN2_DIR/SHA256SUMS"
 5. 両runのjob IDと結論を確認し、各artifact build jobのrunner image version/IDおよびtoolchain/build inputをCI logから記録する。`Set up job`内にrunner version・image label/versionが記録される。build jobのログでは、workflowのtoolchain inventory step、package managerの導入version、container digest、SDK/NDK versionなどを確認する。ログを次のように取得し、比較に使った原本を`$LOG`へ保存する。
 
 ```sh
-gh run view <run-id> --json jobs --jq '.jobs[] | [.databaseId, .name, .conclusion] | @tsv'
-gh run view <run-id> --job <job-id> --log > "$LOG/run-<run-id>-job-<job-id>.log"
+set -eu
+: "${RUN_ID:?export the exact candidate workflow run ID}"
+: "${JOB_ID:?export the exact job ID from that run}"
+: "${LOG:?use the private log directory from candidate preparation}"
+case "$RUN_ID:$JOB_ID" in *[!0-9:]*|:*|*:) echo 'run and job IDs must be decimal' >&2; exit 2 ;; esac
+test -d "$LOG"
+gh run view "$RUN_ID" --json jobs --jq '.jobs[] | [.databaseId, .name, .conclusion] | @tsv'
+gh run view "$RUN_ID" --job "$JOB_ID" --log > "$LOG/run-$RUN_ID-job-$JOB_ID.log"
 ```
 
 正規化（UUID・署名・timestampのマスク等）による合格は認めない。両runのrunner image version/ID、toolchain識別子、libusb source checksumをrelease recordに残す。
