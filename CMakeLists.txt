@@ -471,6 +471,7 @@ if(WIN32)
         add_executable(px4d
             userland/tools/px4d.cpp
             userland/tools/px4d_list_format.cpp
+            userland/tools/px4d_listener_error.cpp
             userland/tools/px4ctl_format.cpp
             userland/tools/px4d_signals.cpp
             userland/src/windows/windows_sleep.cpp
@@ -850,6 +851,8 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
         userland/tests/ipc_state_tests.cpp
         userland/tests/mlt5pe_tests.cpp
         userland/tests/px4d_args_tests.cpp
+        userland/tests/px4d_listener_error_tests.cpp
+        userland/tools/px4d_listener_error.cpp
         userland/tests/px4d_signal_tests.cpp
         userland/tests/q3u4_frontend_tests.cpp
         userland/tests/q3u4_card_backend_tests.cpp
@@ -867,6 +870,7 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
         target_sources(px4_userland_tests PRIVATE userland/src/control_workers.cpp)
     endif()
     target_link_libraries(px4_userland_tests PRIVATE px4_userland_core px4_userland_test_support)
+    target_link_libraries(px4_userland_tests PRIVATE dtv::host_listener_context)
     if(PX4_ENABLE_LIBUSB)
         target_link_libraries(px4_userland_tests PRIVATE px4_userland_libusb_transport)
     endif()
@@ -881,6 +885,7 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
     target_include_directories(px4_userland_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
         ${CMAKE_CURRENT_SOURCE_DIR}/userland/tools
+        ${dtv_userland_core_SOURCE_DIR}/adapters/host_listener_context/include
     )
     target_sources(px4_userland_tests PRIVATE userland/src/q3u4_stream.cpp)
     target_sources(px4_userland_tests PRIVATE userland/tools/px4d_signals.cpp)
@@ -1053,6 +1058,7 @@ if(TARGET px4_userland_posix_ipc)
         add_executable(px4d
             userland/tools/px4d.cpp
             userland/tools/px4d_list_format.cpp
+            userland/tools/px4d_listener_error.cpp
             userland/tools/px4ctl_format.cpp
             userland/tools/px4d_signals.cpp
             userland/src/px4d_args.cpp
