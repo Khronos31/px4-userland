@@ -486,6 +486,8 @@ public:
             session.final_snapshot = TunerStreamFinalSnapshot{};
             session.terminal = StreamTerminal::none;
             session.counters = StreamCounters{};
+            session.counters.availability.fill(
+                dtv::userland::wire::MeasureState::valid);
             session.continuity_checker.reset();
             session.continuity.fill(StartupContinuity{});
             session.stabilizing = stabilization_.enabled();
