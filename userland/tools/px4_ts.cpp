@@ -155,12 +155,11 @@ int main(int argc, char** argv)
     const auto result = Px4TsRunner::run_wire(arguments, profile, output, clock, signal,
                                               &failure_kind, &diagnostics);
     const auto flushed = output.finish(signal);
+    diagnostics.packets_written = output.written_packets();
     if (!result) {
         std::fprintf(stderr, "px4-ts: %s\n", error_string(result.error()));
         print_px4_ts_run_diagnostic(stderr, "px4-ts", result.error(), diagnostics);
-        std::fprintf(stderr, "written packets=%llu bytes=%llu\n",
-                     static_cast<unsigned long long>(diagnostics.packets_written),
-                     static_cast<unsigned long long>(diagnostics.packets_written * 188U));
+        print_px4_ts_written_diagnostic(stderr, diagnostics.packets_written);
         if (diagnostics.stop_counters_valid)
             print_counters("STOP_STREAM", diagnostics.stop_counters);
         if (diagnostics.stream_end_valid) {
