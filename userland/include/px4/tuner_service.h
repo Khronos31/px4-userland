@@ -5,6 +5,8 @@
 #include "px4/error.h"
 #include "px4/ipc.h"
 
+#include <dtv/userland/records.h>
+
 #include <array>
 #include <cstdint>
 #include <mutex>
@@ -170,6 +172,15 @@ struct TunerStreamCounters final {
     std::uint64_t queue_drops = 0U;
     std::uint64_t usb_errors = 0U;
     std::uint64_t empty_intervals = 0U;
+    std::array<dtv::userland::wire::MeasureState, 8U> availability{
+        dtv::userland::wire::MeasureState::unknown,
+        dtv::userland::wire::MeasureState::unknown,
+        dtv::userland::wire::MeasureState::unknown,
+        dtv::userland::wire::MeasureState::unknown,
+        dtv::userland::wire::MeasureState::unknown,
+        dtv::userland::wire::MeasureState::unknown,
+        dtv::userland::wire::MeasureState::unknown,
+        dtv::userland::wire::MeasureState::unknown};
 };
 
 struct TunerStreamFinalSnapshot final {

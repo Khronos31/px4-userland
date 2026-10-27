@@ -140,7 +140,7 @@ CountersPayload counters_payload(const TunerStreamCounters& counters) noexcept
     return CountersPayload{counters.packets, counters.bytes, counters.sync_errors,
                            counters.tei_packets, counters.continuity_errors,
                            counters.queue_drops, counters.usb_errors,
-                           counters.empty_intervals};
+                           counters.empty_intervals, counters.availability};
 }
 
 ErrorCode stream_end_error(TunerStreamTerminal terminal) noexcept
