@@ -8,6 +8,7 @@
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <fcntl.h>
 #include <poll.h>
@@ -17,12 +18,15 @@ namespace px4::userland::cli {
 
 class Px4TsBatchedFdOutput final : public Px4TsOutput {
 public:
+    using WriteFunction = ssize_t (*)(int, const void*, std::size_t);
+
     static constexpr std::size_t kPacketSize = 188U;
     static constexpr std::size_t kPacketsPerWrite = 256U;
     static constexpr std::size_t kBufferSize = kPacketSize * kPacketsPerWrite;
 
-    explicit Px4TsBatchedFdOutput(int fd, bool close_fd) noexcept
-        : fd_(fd), close_fd_(close_fd)
+    explicit Px4TsBatchedFdOutput(int fd, bool close_fd,
+                                  WriteFunction write_function = ::write) noexcept
+        : fd_(fd), close_fd_(close_fd), write_function_(write_function)
     {
         if (fd_ < 0) return;
         original_flags_ = ::fcntl(fd_, F_GETFL);
@@ -46,6 +50,8 @@ public:
     bool ready() const noexcept { return ready_; }
 
     int system_error() const noexcept { return system_error_; }
+
+    std::uint64_t written_packets() const noexcept { return written_packets_; }
 
     Result<void> write(ByteView bytes, const Px4TsSignal& signal) noexcept override
     {
@@ -83,9 +89,12 @@ private:
         std::size_t offset = 0U;
         while (offset < buffered_) {
             const ssize_t written =
-                ::write(fd_, buffer_.data() + offset, buffered_ - offset);
+                write_function_(fd_, buffer_.data() + offset, buffered_ - offset);
             if (written > 0) {
+                const std::size_t previous_offset = offset;
                 offset += static_cast<std::size_t>(written);
+                written_packets_ += offset / kPacketSize -
+                                    previous_offset / kPacketSize;
                 if (offset < buffered_ && signal.stop_requested())
                     return fail(EINTR);
                 continue;
@@ -116,13 +125,27 @@ private:
 
     int fd_ = -1;
     bool close_fd_ = false;
+    WriteFunction write_function_ = nullptr;
     int original_flags_ = -1;
     bool ready_ = false;
     bool failed_ = false;
     int system_error_ = 0;
+    std::uint64_t written_packets_ = 0U;
     std::array<std::uint8_t, kBufferSize> buffer_{};
     std::size_t buffered_ = 0U;
 };
+
+}  // namespace px4::userland::cli
+
+namespace px4::userland::cli {
+
+inline void print_px4_ts_written_diagnostic(FILE* stream,
+                                             std::uint64_t packets) noexcept
+{
+    std::fprintf(stream, "written packets=%llu bytes=%llu\n",
+                 static_cast<unsigned long long>(packets),
+                 static_cast<unsigned long long>(packets * 188U));
+}
 
 }  // namespace px4::userland::cli
 

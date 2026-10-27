@@ -23,6 +23,20 @@ public:
     bool stopped = false;
 };
 
+std::size_t partial_write_limit = 0U;
+bool partial_write_done = false;
+
+ssize_t partial_write_then_epipe(int fd, const void* bytes,
+                                 std::size_t size) noexcept
+{
+    if (partial_write_done) {
+        errno = EPIPE;
+        return -1;
+    }
+    partial_write_done = true;
+    return ::write(fd, bytes, size < partial_write_limit ? size : partial_write_limit);
+}
+
 int fail(const char* message, int fd, const char* path) noexcept
 {
     std::fprintf(stderr, "%s\n", message);
@@ -57,6 +71,7 @@ bool test_pipe_output() noexcept
     expected.reserve(600U * Px4TsBatchedFdOutput::kPacketSize);
     TestSignal signal;
     bool write_ok = true;
+    std::uint64_t written_packets = 0U;
     {
         Px4TsBatchedFdOutput output(descriptors[1], true);
         if (!output.ready()) {
@@ -74,11 +89,13 @@ bool test_pipe_output() noexcept
                 }
             }
             if (write_ok && !output.finish(signal)) write_ok = false;
+            written_packets = output.written_packets();
         }
     }
     reader.join();
     (void)::close(descriptors[0]);
-    return write_ok && read_ok && received == expected;
+    return write_ok && read_ok && received == expected &&
+           written_packets == 600U;
 }
 
 bool test_epipe() noexcept
@@ -97,9 +114,48 @@ bool test_epipe() noexcept
             return false;
     }
     if (output.write(dtv::userland::ByteView{packet.data(), packet.size()}, signal) ||
-        output.system_error() != EPIPE)
+        output.system_error() != EPIPE || output.written_packets() != 0U)
         return false;
     return !output.finish(signal);
+}
+
+bool test_partial_write_diagnostic() noexcept
+{
+    char path[] = "/tmp/px4-ts-batched-output-partial-XXXXXX";
+    const int fd = ::mkstemp(path);
+    if (fd < 0) return false;
+    (void)::unlink(path);
+    partial_write_limit = 2U * Px4TsBatchedFdOutput::kPacketSize + 10U;
+    partial_write_done = false;
+    TestSignal signal;
+    Px4TsBatchedFdOutput output(fd, true, partial_write_then_epipe);
+    if (!output.ready()) return false;
+    std::array<std::uint8_t, Px4TsBatchedFdOutput::kPacketSize> packet{};
+    packet[0U] = 0x47U;
+    for (std::size_t index = 0U;
+         index < Px4TsBatchedFdOutput::kPacketsPerWrite - 1U; ++index) {
+        if (!output.write(dtv::userland::ByteView{packet.data(), packet.size()}, signal))
+            return false;
+    }
+    if (output.write(dtv::userland::ByteView{packet.data(), packet.size()}, signal) ||
+        output.system_error() != EPIPE || output.written_packets() != 2U)
+        return false;
+    struct stat status {};
+    if (::fstat(fd, &status) != 0 ||
+        status.st_size != static_cast<off_t>(partial_write_limit))
+        return false;
+    FILE* diagnostic = std::tmpfile();
+    if (diagnostic == nullptr) return false;
+    print_px4_ts_written_diagnostic(diagnostic, output.written_packets());
+    if (std::fflush(diagnostic) != 0 || std::fseek(diagnostic, 0L, SEEK_SET) != 0) {
+        (void)std::fclose(diagnostic);
+        return false;
+    }
+    char line[64U]{};
+    const bool matches = std::fgets(line, sizeof(line), diagnostic) != nullptr &&
+                         std::strcmp(line, "written packets=2 bytes=376\n") == 0;
+    (void)std::fclose(diagnostic);
+    return matches;
 }
 
 bool test_non_owned_fd() noexcept
@@ -170,7 +226,8 @@ int main()
     if (!output.write(dtv::userland::ByteView{packet.data(), packet.size()}, signal))
         return fail("full batch write failed", -1, path.c_str());
     if (::fstat(fd, &status) != 0 ||
-        status.st_size != static_cast<off_t>(Px4TsBatchedFdOutput::kBufferSize))
+        status.st_size != static_cast<off_t>(Px4TsBatchedFdOutput::kBufferSize) ||
+        output.written_packets() != Px4TsBatchedFdOutput::kPacketsPerWrite)
         return fail("full batch was not flushed", -1, path.c_str());
 
     for (std::size_t index = Px4TsBatchedFdOutput::kPacketsPerWrite;
@@ -187,7 +244,8 @@ int main()
     signal.stopped = true;
     if (!output.finish(signal)) return fail("finish failed", -1, path.c_str());
     if (::fstat(fd, &status) != 0 ||
-        status.st_size != static_cast<off_t>(expected.size()))
+        status.st_size != static_cast<off_t>(expected.size()) ||
+        output.written_packets() != 273U)
         return fail("finish did not flush the tail", -1, path.c_str());
 
     std::vector<std::uint8_t> actual(expected.size());
@@ -199,6 +257,8 @@ int main()
         return fail("write after stop was not rejected", -1, path.c_str());
     if (!test_pipe_output()) return fail("pipe partial-write test failed", -1, path.c_str());
     if (!test_epipe()) return fail("EPIPE propagation test failed", -1, path.c_str());
+    if (!test_partial_write_diagnostic())
+        return fail("partial-write diagnostic count failed", -1, path.c_str());
     if (!test_non_owned_fd())
         return fail("non-owned fd was not preserved", -1, path.c_str());
     return 0;
