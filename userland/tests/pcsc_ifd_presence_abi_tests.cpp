@@ -44,6 +44,7 @@ bool test_presence_transport_errors()
 {
     TempRuntime runtime;
     if (!runtime.valid()) return false;
+    if (::chmod(runtime.path().c_str(), 0755) != 0) return false;
     constexpr const char* serial = "00001205000960";
     std::string device_name = "px4-userland:runtime=" + runtime.path() +
         ":device=" + serial + ":access=group";
@@ -51,6 +52,7 @@ bool test_presence_transport_errors()
         IFDHICCPresence(0U) != IFD_COMMUNICATION_ERROR ||
         IFDHCloseChannel(0U) != IFD_SUCCESS) return false;
 
+    if (::chmod(runtime.path().c_str(), 0700) != 0) return false;
     device_name = "px4-userland:runtime=" + runtime.path() +
         ":device=" + serial + ":access=user";
     if (IFDHCreateChannelByName(0U, device_name.data()) != IFD_SUCCESS ||
