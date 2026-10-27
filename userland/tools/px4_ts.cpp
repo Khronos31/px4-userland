@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include <dtv/host_ts/px4_ts_core.h>
-#include <dtv/host_ts/px4_ts_posix.h>
 #include "px4/identity.h"
+#include "px4_ts_batched_output.h"
 
 #include <cerrno>
 #include <chrono>
@@ -143,7 +143,7 @@ int main(int argc, char** argv)
             return 70;
         }
     }
-    Px4TsFdOutput output(fd, !stdout_output);
+    Px4TsBatchedFdOutput output(fd, !stdout_output);
     if (!output.ready()) {
         std::fprintf(stderr, "output setup failed\n");
         return 70;
@@ -154,6 +154,7 @@ int main(int argc, char** argv)
     Px4TsRunDiagnostics diagnostics;
     const auto result = Px4TsRunner::run_wire(arguments, profile, output, clock, signal,
                                               &failure_kind, &diagnostics);
+    const auto flushed = output.finish(signal);
     if (!result) {
         std::fprintf(stderr, "px4-ts: %s\n", error_string(result.error()));
         print_px4_ts_run_diagnostic(stderr, "px4-ts", result.error(), diagnostics);
@@ -167,7 +168,15 @@ int main(int argc, char** argv)
             std::fprintf(stderr, "STREAM_END error=%u\n",
                          static_cast<unsigned int>(diagnostics.stream_end.error_code));
         }
+        if (!flushed) {
+            std::fprintf(stderr, "output: %s\n", std::strerror(output.system_error()));
+            return px4_ts_exit_status(flushed.error(), Px4TsFailureKind::output);
+        }
         return px4_ts_exit_status(result.error(), failure_kind);
+    }
+    if (!flushed) {
+        std::fprintf(stderr, "output: %s\n", std::strerror(output.system_error()));
+        return px4_ts_exit_status(flushed.error(), Px4TsFailureKind::output);
     }
     print_counters("stream", result.value().counters);
     return 0;
