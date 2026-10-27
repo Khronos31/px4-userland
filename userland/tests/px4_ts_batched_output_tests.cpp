@@ -133,7 +133,7 @@ int main()
 {
     struct sigaction ignore_pipe {};
     ignore_pipe.sa_handler = SIG_IGN;
-    if (::sigemptyset(&ignore_pipe.sa_mask) != 0 ||
+    if (sigemptyset(&ignore_pipe.sa_mask) != 0 ||
         ::sigaction(SIGPIPE, &ignore_pipe, nullptr) != 0)
         return 1;
 
