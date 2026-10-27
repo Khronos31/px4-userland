@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "px4/q3u4_stream.h"
 #include "px4/ts_continuity.h"
+#include "dtv/userland/detail/diagnostic_log.h"
 
 #include "tagged_ts_demux.h"
 #include "mlt5pe_frontend.h"
@@ -814,6 +815,10 @@ public:
             if (session.count == session.capacity) {
                 ++session.counters.queue_drops;
                 session.terminal = StreamTerminal::slow_consumer;
+                dtv::userland::detail::diagnostic_log(
+                    "px4_ring_terminal receiver=%zu terminal=slow_consumer count=%zu capacity=%zu drops=%llu",
+                    receiver, session.count, session.capacity,
+                    static_cast<unsigned long long>(session.counters.queue_drops));
                 session.changed.notify_all();
                 return Result<void>::success();
             }
