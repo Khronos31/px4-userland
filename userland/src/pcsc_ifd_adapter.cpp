@@ -774,12 +774,16 @@ IfdResult IfdAdapter::presence(std::uint64_t lun) noexcept
     const auto connected = ensure_client();
     if (!connected) {
         const IfdResult result = fail(connected.error(), IfdOperation::status);
-        return result == IfdResult::response_timeout || result == IfdResult::not_supported
+        return result == IfdResult::no_such_device ||
+               result == IfdResult::response_timeout || result == IfdResult::not_supported
             ? IfdResult::communication_error : result;
     }
     const auto status = refresh_status();
     if (!status) {
         const IfdResult result = fail(status.error(), IfdOperation::status);
+        if (result == IfdResult::no_such_device && status.error() != Error::NOT_FOUND) {
+            return IfdResult::communication_error;
+        }
         return result == IfdResult::response_timeout || result == IfdResult::not_supported
             ? IfdResult::communication_error : result;
     }

@@ -56,7 +56,7 @@ bool test_presence_transport_errors()
     device_name = "px4-userland:runtime=" + runtime.path() +
         ":device=" + serial + ":access=user";
     if (IFDHCreateChannelByName(0U, device_name.data()) != IFD_SUCCESS ||
-        IFDHICCPresence(0U) != IFD_NO_SUCH_DEVICE ||
+        IFDHICCPresence(0U) != IFD_COMMUNICATION_ERROR ||
         IFDHCloseChannel(0U) != IFD_SUCCESS) return false;
 
     const std::string product = runtime.path() + "/px4-userland";
@@ -92,6 +92,10 @@ bool test_presence_transport_errors()
 
 int main()
 {
+    if (IFDHICCPresence(1U) != IFD_NO_SUCH_DEVICE) {
+        std::fputs("IFDHICCPresence invalid LUN ABI fixture failed\n", stderr);
+        return 1;
+    }
     if (!test_presence_transport_errors()) {
         std::fputs("IFDHICCPresence transport error ABI fixture failed\n", stderr);
         return 1;
