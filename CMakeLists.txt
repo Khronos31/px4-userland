@@ -940,6 +940,16 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
         endif()
         px4_enable_project_warnings(px4_ifd_tests)
         add_test(NAME px4_ifd_tests COMMAND px4_ifd_tests)
+        add_executable(px4_ifd_presence_abi_tests
+            userland/tests/pcsc_ifd_presence_abi_tests.cpp)
+        target_include_directories(px4_ifd_presence_abi_tests PRIVATE
+            ${PX4_PCSC_IFD_INCLUDE_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/tests)
+        target_compile_features(px4_ifd_presence_abi_tests PRIVATE cxx_std_17)
+        target_link_libraries(px4_ifd_presence_abi_tests PRIVATE px4_ifdhandler)
+        px4_enable_project_warnings(px4_ifd_presence_abi_tests)
+        add_test(NAME px4_ifd_presence_abi_tests COMMAND px4_ifd_presence_abi_tests)
+        set_tests_properties(px4_ifd_presence_abi_tests PROPERTIES TIMEOUT 20)
         add_test(NAME px4_ifd_symbols
             COMMAND ${CMAKE_COMMAND}
                 -DNM=${CMAKE_NM}
