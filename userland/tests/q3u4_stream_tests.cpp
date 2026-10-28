@@ -899,6 +899,8 @@ bool test_wire_tei_and_bridge_sync_counter()
                  samples.values[0U].demux_invalid_tags == 1U);
     STREAM_CHECK(samples.values[1U].bridge == 0U &&
                  samples.values[1U].receiver == 1U && samples.values[1U].attached);
+    plane.emit_diagnostic_sample_for_test(1U);
+    STREAM_CHECK(samples.count == 2U);
     std::array<std::uint8_t, 188U> output{};
     const auto first_read = plane.read(value, MutableByteView{output.data(), output.size()},
                                        Timeout{1000U});
