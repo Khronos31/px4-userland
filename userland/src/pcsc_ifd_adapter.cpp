@@ -772,11 +772,20 @@ IfdResult IfdAdapter::presence(std::uint64_t lun) noexcept
     std::lock_guard<std::mutex> lock(mutex_);
     if (!valid_lun(lun) || !channel_configured()) return IfdResult::no_such_device;
     const auto connected = ensure_client();
-    if (!connected) return IfdResult::icc_not_present;
+    if (!connected) {
+        const IfdResult result = fail(connected.error(), IfdOperation::status);
+        return result == IfdResult::no_such_device ||
+               result == IfdResult::response_timeout || result == IfdResult::not_supported
+            ? IfdResult::communication_error : result;
+    }
     const auto status = refresh_status();
     if (!status) {
-        (void)fail(status.error(), IfdOperation::status);
-        return IfdResult::icc_not_present;
+        const IfdResult result = fail(status.error(), IfdOperation::status);
+        if (result == IfdResult::no_such_device && status.error() != Error::NOT_FOUND) {
+            return IfdResult::communication_error;
+        }
+        return result == IfdResult::response_timeout || result == IfdResult::not_supported
+            ? IfdResult::communication_error : result;
     }
     return status.value().present ? IfdResult::icc_present :
                                     IfdResult::icc_not_present;

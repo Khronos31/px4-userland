@@ -475,9 +475,27 @@ bool test_adapter_state_and_recovery()
     state.status_error = Error::OK;
     CHECK(adapter.create_channel_by_name(0U, name) == IfdResult::success);
     state.status_error = Error::DISCONNECTED;
+    CHECK(adapter.presence(0U) == IfdResult::communication_error);
+    CHECK(adapter.presence(0U) == IfdResult::communication_error);
+    state.status_error = Error::NOT_READY;
+    CHECK(adapter.presence(0U) == IfdResult::communication_error);
+    state.status_error = Error::NOT_FOUND;
+    CHECK(adapter.presence(0U) == IfdResult::no_such_device);
+    state.status_error = Error::TIMEOUT;
+    CHECK(adapter.presence(0U) == IfdResult::communication_error);
+    state.status_error = Error::UNSUPPORTED;
+    CHECK(adapter.presence(0U) == IfdResult::communication_error);
+    state.status_error = Error::NO_CARD;
     CHECK(adapter.presence(0U) == IfdResult::icc_not_present);
+    state.status_error = Error::CARD_REMOVED;
     CHECK(adapter.presence(0U) == IfdResult::icc_not_present);
-    CHECK(state.factory_connects == 4U && state.closes == 4U);
+    state.factory_connect_error = Error::TIMEOUT;
+    CHECK(adapter.close_channel(0U) == IfdResult::success);
+    CHECK(adapter.create_channel_by_name(0U, name) == IfdResult::success);
+    CHECK(adapter.presence(0U) == IfdResult::communication_error);
+    state.factory_connect_error = Error::UNSUPPORTED;
+    CHECK(adapter.presence(0U) == IfdResult::communication_error);
+    CHECK(state.factory_connects == 11U && state.closes == 8U);
     return true;
 }
 
@@ -485,7 +503,7 @@ bool test_adapter_lazy_reconnect()
 {
     MockState state;
     state.present = true;
-    state.factory_connect_error = Error::NOT_FOUND;
+    state.factory_connect_error = Error::NOT_READY;
     MockFactory factory(state);
     IfdAdapter adapter(factory);
     constexpr const char* name =
@@ -493,7 +511,7 @@ bool test_adapter_lazy_reconnect()
 
     CHECK(adapter.create_channel_by_name(0U, name) == IfdResult::success);
     CHECK(state.factory_connects == 1U);
-    CHECK(adapter.presence(0U) == IfdResult::icc_not_present);
+    CHECK(adapter.presence(0U) == IfdResult::communication_error);
     CHECK(state.factory_connects == 2U);
 
     std::array<std::uint8_t, 1U> attribute{};
@@ -794,7 +812,7 @@ bool test_exported_abi_over_real_ipc()
     CHECK(runner.healthy());
     CHECK(server->shutdown());
     CHECK(!std::filesystem::exists(socket_path));
-    CHECK(IFDHICCPresence(0U) == IFD_ICC_NOT_PRESENT);
+    CHECK(IFDHICCPresence(0U) == IFD_COMMUNICATION_ERROR);
     CHECK(IFDHCloseChannel(0U) == IFD_SUCCESS);
     return true;
 }
