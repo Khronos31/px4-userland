@@ -923,6 +923,17 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
     px4_enable_project_warnings(px4-ts-product-cli-tests)
     add_test(NAME px4-ts-product-cli-tests COMMAND px4-ts-product-cli-tests)
 
+    if(TARGET px4_userland_posix_ipc)
+        add_executable(px4-ts-posix-output-tests
+            userland/tests/px4_ts_batched_output_tests.cpp)
+        target_include_directories(px4-ts-posix-output-tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/tools)
+        target_link_libraries(px4-ts-posix-output-tests PRIVATE dtv::host_ts)
+        target_compile_features(px4-ts-posix-output-tests PRIVATE cxx_std_17)
+        px4_enable_project_warnings(px4-ts-posix-output-tests)
+        add_test(NAME px4-ts-posix-output-tests COMMAND px4-ts-posix-output-tests)
+    endif()
+
     if(PX4_PCSC_IFD_AVAILABLE)
         add_executable(px4_ifd_tests userland/tests/pcsc_ifd_tests.cpp)
         target_include_directories(px4_ifd_tests PRIVATE
