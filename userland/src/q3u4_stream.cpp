@@ -944,6 +944,8 @@ public:
             empty_event_sample_gate_calls[
                 bridge_index(bridge.receiver_base)].fetch_add(1U, std::memory_order_relaxed);
         }
+#else
+        (void)successful_empty_event;
 #endif
 #if defined(DTV_USERLAND_DIAGNOSTICS)
         const std::uint64_t now_us = dtv::userland::detail::diagnostic_now_us();
