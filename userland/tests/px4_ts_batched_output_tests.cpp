@@ -25,6 +25,9 @@ public:
 
 std::size_t partial_write_limit = 0U;
 bool partial_write_done = false;
+TestSignal* stop_after_write_signal = nullptr;
+bool stop_after_write_pipe_full = false;
+std::size_t stop_after_write_fill_packets = 0U;
 
 ssize_t partial_write_then_epipe(int fd, const void* bytes,
                                  std::size_t size) noexcept
@@ -35,6 +38,31 @@ ssize_t partial_write_then_epipe(int fd, const void* bytes,
     }
     partial_write_done = true;
     return ::write(fd, bytes, size < partial_write_limit ? size : partial_write_limit);
+}
+
+ssize_t stop_when_pipe_full(int fd, const void* bytes, std::size_t size) noexcept
+{
+    const ssize_t written = ::write(fd, bytes, size);
+    if (!stop_after_write_pipe_full && written > 0) {
+        std::array<std::uint8_t, Px4TsBatchedFdOutput::kPacketSize> packet{};
+        packet[0U] = 0x47U;
+        for (;;) {
+            const ssize_t filled = ::write(fd, packet.data(), packet.size());
+            if (filled == static_cast<ssize_t>(packet.size())) {
+                ++stop_after_write_fill_packets;
+                continue;
+            }
+            if (filled < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
+                return filled;
+            break;
+        }
+        stop_after_write_pipe_full = true;
+    } else if (stop_after_write_pipe_full && written < 0 &&
+               (errno == EAGAIN || errno == EWOULDBLOCK) &&
+               stop_after_write_signal != nullptr) {
+        stop_after_write_signal->stopped = true;
+    }
+    return written;
 }
 
 int fail(const char* message, int fd, const char* path) noexcept
@@ -96,6 +124,64 @@ bool test_pipe_output() noexcept
     (void)::close(descriptors[0]);
     return write_ok && read_ok && received == expected &&
            written_packets == 600U;
+}
+
+bool test_stop_when_pipe_fills() noexcept
+{
+    int descriptors[2]{};
+    if (::pipe(descriptors) != 0) return false;
+    TestSignal signal;
+    stop_after_write_signal = &signal;
+    stop_after_write_pipe_full = false;
+    stop_after_write_fill_packets = 0U;
+    bool stopped_cleanly = false;
+    bool timeout_result = false;
+    std::uint64_t written_packets = 0U;
+    {
+        Px4TsBatchedFdOutput output(descriptors[1], true, stop_when_pipe_full);
+        if (output.ready()) {
+            std::array<std::uint8_t, Px4TsBatchedFdOutput::kPacketSize> packet{};
+            packet[0U] = 0x47U;
+            bool accepted = true;
+            for (std::size_t index = 0U;
+                 index < 2U * Px4TsBatchedFdOutput::kPacketsPerWrite; ++index) {
+                const auto written = output.write(
+                    dtv::userland::ByteView{packet.data(), packet.size()}, signal);
+                if (!written) {
+                    accepted = false;
+                    timeout_result = written.error() == px4::userland::Error::TIMEOUT;
+                    break;
+                }
+            }
+            stopped_cleanly = !accepted && signal.stop_requested() &&
+                output.system_error() == 0 &&
+                output.written_packets() > 0U &&
+                output.written_packets() <
+                    2U * Px4TsBatchedFdOutput::kPacketsPerWrite;
+            written_packets = output.written_packets();
+        }
+    }
+    stop_after_write_signal = nullptr;
+
+    std::vector<std::uint8_t> received;
+    std::array<std::uint8_t, 4096U> buffer{};
+    for (;;) {
+        const ssize_t count = ::read(descriptors[0], buffer.data(), buffer.size());
+        if (count > 0) {
+            received.insert(received.end(), buffer.begin(),
+                            buffer.begin() + static_cast<std::size_t>(count));
+            continue;
+        }
+        if (count < 0 && errno == EINTR) continue;
+        if (count < 0) stopped_cleanly = false;
+        break;
+    }
+    (void)::close(descriptors[0]);
+    return stopped_cleanly &&
+           timeout_result &&
+           received.size() == (written_packets + stop_after_write_fill_packets) *
+                                  Px4TsBatchedFdOutput::kPacketSize &&
+           received.size() % Px4TsBatchedFdOutput::kPacketSize == 0U;
 }
 
 bool test_epipe() noexcept
@@ -256,6 +342,8 @@ int main()
         px4::userland::Error::TIMEOUT)
         return fail("write after stop was not rejected", -1, path.c_str());
     if (!test_pipe_output()) return fail("pipe partial-write test failed", -1, path.c_str());
+    if (!test_stop_when_pipe_fills())
+        return fail("stop split a pipe packet or failed to stop cleanly", -1, path.c_str());
     if (!test_epipe()) return fail("EPIPE propagation test failed", -1, path.c_str());
     if (!test_partial_write_diagnostic())
         return fail("partial-write diagnostic count failed", -1, path.c_str());

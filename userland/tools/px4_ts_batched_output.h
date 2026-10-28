@@ -12,6 +12,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <poll.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 namespace px4::userland::cli {
@@ -33,6 +34,17 @@ public:
         if (original_flags_ < 0 ||
             ::fcntl(fd_, F_SETFL, original_flags_ | O_NONBLOCK) < 0) {
             return;
+        }
+        struct stat status {};
+        if (::fstat(fd_, &status) == 0 && S_ISFIFO(status.st_mode)) {
+            const long pipe_buf = ::fpathconf(fd_, _PC_PIPE_BUF);
+            write_limit_ = kPacketSize;
+            if (pipe_buf > 0) {
+                const std::size_t limit = static_cast<std::size_t>(pipe_buf);
+                const std::size_t packets = limit / kPacketSize;
+                if (packets > 0U) write_limit_ = packets * kPacketSize;
+            }
+            packet_atomic_writes_ = true;
         }
         ready_ = true;
     }
@@ -84,33 +96,56 @@ private:
         return Result<void>::failure(Error::INTERNAL);
     }
 
+    Result<void> stop() noexcept
+    {
+        buffered_ = 0U;
+        return Result<void>::failure(Error::TIMEOUT);
+    }
+
     Result<void> flush_buffer(const Px4TsSignal& signal) noexcept
     {
         std::size_t offset = 0U;
         while (offset < buffered_) {
             const ssize_t written =
-                write_function_(fd_, buffer_.data() + offset, buffered_ - offset);
+                write_function_(fd_, buffer_.data() + offset,
+                                (buffered_ - offset) < write_limit_
+                                    ? buffered_ - offset : write_limit_);
             if (written > 0) {
                 const std::size_t previous_offset = offset;
                 offset += static_cast<std::size_t>(written);
                 written_packets_ += offset / kPacketSize -
                                     previous_offset / kPacketSize;
-                if (offset < buffered_ && signal.stop_requested())
+                if (offset < buffered_ && signal.stop_requested()) {
+                    if (packet_atomic_writes_ && offset % kPacketSize == 0U)
+                        return stop();
                     return fail(EINTR);
+                }
                 continue;
             }
             if (written < 0 && errno == EINTR) {
-                if (signal.stop_requested()) return fail(EINTR);
+                if (signal.stop_requested()) {
+                    if (packet_atomic_writes_ && offset % kPacketSize == 0U)
+                        return stop();
+                    return fail(EINTR);
+                }
                 continue;
             }
             if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-                if (signal.stop_requested()) return fail(EAGAIN);
+                if (signal.stop_requested()) {
+                    if (packet_atomic_writes_ && offset % kPacketSize == 0U)
+                        return stop();
+                    return fail(EAGAIN);
+                }
                 pollfd descriptor{fd_, POLLOUT, 0};
                 int polled = 0;
                 do {
                     polled = ::poll(&descriptor, 1U, 100);
                 } while (polled < 0 && errno == EINTR && !signal.stop_requested());
-                if (signal.stop_requested()) return fail(EINTR);
+                if (signal.stop_requested()) {
+                    if (packet_atomic_writes_ && offset % kPacketSize == 0U)
+                        return stop();
+                    return fail(EINTR);
+                }
                 if (polled < 0) return fail(errno);
                 if (polled > 0 &&
                     (descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0)
@@ -131,6 +166,8 @@ private:
     bool failed_ = false;
     int system_error_ = 0;
     std::uint64_t written_packets_ = 0U;
+    std::size_t write_limit_ = kBufferSize;
+    bool packet_atomic_writes_ = false;
     std::array<std::uint8_t, kBufferSize> buffer_{};
     std::size_t buffered_ = 0U;
 };
