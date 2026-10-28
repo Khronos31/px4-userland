@@ -1117,31 +1117,94 @@ bool test_startup_sync_deferral_and_failure_bound()
     STREAM_CHECK(promoted_stats && promoted_stats.value().sync_errors == 0U);
     STREAM_CHECK(plane.detach(value));
 
-    FakeTransport bad_dev1;
-    FakeTransport bad_dev2;
-    auto failed = Q3U4StreamDataPlane::create_for_test(
-        bad_dev1, bad_dev2, Q3U4StreamDataPlane::kMinQueuePackets,
+    FakeTransport budget_dev1;
+    FakeTransport budget_dev2;
+    auto budgeted = Q3U4StreamDataPlane::create_for_test(
+        budget_dev1, budget_dev2, Q3U4StreamDataPlane::kMinQueuePackets,
         Q3U4StreamDataPlane::StartupStabilizationTestConfig{4U, 2U, 8U});
-    STREAM_CHECK(failed);
-    auto& bad_plane = *failed.value();
-    const auto bad = attachment(0U, 112U);
-    STREAM_CHECK(bad_plane.attach(bad));
-    STREAM_CHECK(bad_dev1.wait_for_count(1U));
-    std::vector<std::uint8_t> never_stable;
-    for (std::size_t index = 0U; index < 8U; ++index)
-        append_packet(never_stable, wire_packet(
-            1U, 0x101U, static_cast<std::uint8_t>((index * 2U) & 0x0fU)));
-    barrier = bad_dev1.wait_count() + 1U;
-    bad_dev1.push(std::move(never_stable));
-    STREAM_CHECK(bad_dev1.wait_for_count(barrier));
-    read = bad_plane.read(bad, MutableByteView{output.data(), output.size()},
-                          Timeout{1000U});
-    STREAM_CHECK(read && read.value().eof &&
-                 read.value().terminal == StreamTerminal::sync_error);
-    const auto failed_stats = bad_plane.stats(bad);
-    STREAM_CHECK(failed_stats && failed_stats.value().sync_errors == 1U &&
-                 failed_stats.value().packets == 0U);
-    STREAM_CHECK(bad_plane.detach(bad));
+    STREAM_CHECK(budgeted);
+    auto& budget_plane = *budgeted.value();
+    const auto budget_receiver = attachment(0U, 112U);
+    const auto sibling = attachment(1U, 113U);
+    STREAM_CHECK(budget_plane.attach(budget_receiver));
+    STREAM_CHECK(budget_plane.attach(sibling));
+    STREAM_CHECK(budget_dev1.wait_for_count(1U));
+
+    std::vector<std::uint8_t> before_budget;
+    for (std::size_t index = 0U; index < 7U; ++index)
+        append_packet(before_budget, wire_packet(9U, 0x101U,
+                                                 static_cast<std::uint8_t>(index)));
+    for (std::size_t index = 0U; index < 6U; ++index)
+        append_packet(before_budget, wire_packet(2U, 0x102U,
+                                                 static_cast<std::uint8_t>(index)));
+    barrier = budget_dev1.wait_count() + 2U;
+    budget_dev1.push(std::move(before_budget));
+    STREAM_CHECK(budget_dev1.wait_for_count(barrier));
+
+    read = budget_plane.read(budget_receiver,
+                             MutableByteView{output.data(), output.size()}, Timeout{0U});
+    STREAM_CHECK(read && read.value().timed_out && !read.value().eof);
+    const auto before_budget_stats = budget_plane.stats(budget_receiver);
+    STREAM_CHECK(before_budget_stats && before_budget_stats.value().packets == 0U &&
+                 before_budget_stats.value().tei_packets == 0U);
+
+    std::vector<std::uint8_t> after_budget;
+    append_packet(after_budget, wire_packet(9U, 0x101U, 7U));
+    const auto tei_packet = wire_packet(1U, 0x101U, 15U, 1U, false, true);
+    append_packet(after_budget, tei_packet);
+    const auto baseline_packet = wire_packet(1U, 0x101U, 0U);
+    append_packet(after_budget, baseline_packet);
+    const auto clean_packet = wire_packet(1U, 0x101U, 1U);
+    append_packet(after_budget, clean_packet);
+    const auto continuity_fault = wire_packet(1U, 0x101U, 3U);
+    append_packet(after_budget, continuity_fault);
+    const auto sibling_first = wire_packet(2U, 0x102U, 6U);
+    const auto sibling_second = wire_packet(2U, 0x102U, 7U);
+    const auto sibling_third = wire_packet(2U, 0x102U, 8U);
+    append_packet(after_budget, sibling_first);
+    append_packet(after_budget, sibling_second);
+    append_packet(after_budget, sibling_third);
+    barrier = budget_dev1.wait_count() + 2U;
+    budget_dev1.push(std::move(after_budget));
+    STREAM_CHECK(budget_dev1.wait_for_count(barrier));
+
+    std::vector<std::uint8_t> expected;
+    for (const auto* packet : {&tei_packet, &baseline_packet,
+                               &clean_packet, &continuity_fault}) {
+        auto ts_packet = *packet;
+        ts_packet[0U] = 0x47U;
+        expected.insert(expected.end(), ts_packet.begin(), ts_packet.end());
+    }
+    std::array<std::uint8_t, 4U * TaggedTsDemux::kPacketSize> budget_output{};
+    read = budget_plane.read(budget_receiver,
+                             MutableByteView{budget_output.data(), budget_output.size()},
+                             Timeout{1000U});
+    STREAM_CHECK(read && read.value().bytes == expected.size());
+    STREAM_CHECK(std::memcmp(budget_output.data(), expected.data(), expected.size()) == 0);
+    const auto budget_stats = budget_plane.stats(budget_receiver);
+    STREAM_CHECK(budget_stats && budget_stats.value().packets == 4U &&
+                 budget_stats.value().tei_packets == 9U &&
+                 budget_stats.value().continuity_errors == 1U &&
+                 budget_stats.value().sync_errors == 0U &&
+                 budget_stats.value().queue_drops == 0U);
+
+    std::array<std::uint8_t, 2U * TaggedTsDemux::kPacketSize> sibling_output{};
+    read = budget_plane.read(sibling,
+                             MutableByteView{sibling_output.data(), sibling_output.size()},
+                             Timeout{1000U});
+    STREAM_CHECK(read && read.value().bytes == sibling_output.size() &&
+                 sibling_output[0U] == 0x47U &&
+                 sibling_output[TaggedTsDemux::kPacketSize] == 0x47U);
+    const auto sibling_stats = budget_plane.stats(sibling);
+    STREAM_CHECK(sibling_stats && sibling_stats.value().packets == 2U &&
+                 sibling_stats.value().tei_packets == 0U &&
+                 sibling_stats.value().continuity_errors == 0U &&
+                 sibling_stats.value().sync_errors == 0U);
+    STREAM_CHECK(budget_plane.terminal(budget_receiver).value() == StreamTerminal::none &&
+                 budget_plane.terminal(sibling).value() == StreamTerminal::none);
+    STREAM_CHECK(budget_plane.detach(budget_receiver));
+    STREAM_CHECK(budget_plane.detach(sibling));
+    STREAM_CHECK(budget_dev1.wait_for_stop_count(1U));
     return true;
 }
 

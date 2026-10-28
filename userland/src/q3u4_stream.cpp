@@ -63,9 +63,9 @@ StreamLayout mlt_stream_layout(DeviceModel model) noexcept
 // reference kernel driver observed the last startup continuity disturbance at
 // packet 10793.  Hold an entire receiver stream private until it has crossed a
 // larger observation window and has also supplied a clean tail after the last
-// attributable fault.  Once promoted, this gate is permanently disabled for
-// the attachment epoch: every later TEI, continuity gap, and sync loss remains
-// visible through the normal counters.
+// attributable fault.  Once promoted or the startup budget is exhausted, this
+// gate is permanently disabled for the attachment epoch: every later TEI,
+// continuity gap, and sync loss remains visible through the normal counters.
 struct StartupStabilizationPolicy final {
     std::size_t minimum_packets = 16384U;
     std::size_t clean_packets = 4096U;
@@ -137,6 +137,7 @@ public:
         bool stabilizing = true;
         bool stabilization_ready = false;
         bool stabilization_boundary_established = false;
+        bool startup_budget_fallback = false;
         bool startup_continuity_established = false;
         std::size_t startup_packets = 0U;
         std::size_t startup_clean_packets = 0U;
@@ -493,6 +494,7 @@ public:
             session.stabilizing = stabilization_.enabled();
             session.stabilization_ready = false;
             session.stabilization_boundary_established = false;
+            session.startup_budget_fallback = false;
             session.startup_continuity_established = false;
             session.startup_packets = 0U;
             session.startup_clean_packets = 0U;
@@ -802,7 +804,8 @@ public:
                 ++session.counters.tei_packets;
             const ContinuityObservation observation =
                 observe_continuity(session, packet);
-            if (observation == ContinuityObservation::boundary)
+            if (observation == ContinuityObservation::boundary &&
+                !session.startup_budget_fallback)
                 return Result<void>::success();
             if (observation == ContinuityObservation::fault)
                 ++session.counters.continuity_errors;
@@ -883,19 +886,22 @@ public:
             session.stabilization_ready)
             return;
 
-        // Never wait forever on a persistently damaged startup epoch.  The
-        // terminal snapshot reports the observed startup fault classes.  A
-        // stream that never established continuity receives one sync error so
-        // it cannot be mistaken for a clean empty capture.
-        session.counters.sync_errors = session.startup_faults.sync_errors;
-        session.counters.tei_packets = session.startup_faults.tei_packets;
-        session.counters.continuity_errors =
+        // Preserve the withheld startup faults and publish only later packets.
+        session.counters.sync_errors += session.startup_faults.sync_errors;
+        session.counters.tei_packets += session.startup_faults.tei_packets;
+        session.counters.continuity_errors +=
             session.startup_faults.continuity_errors;
-        if (session.counters.sync_errors == 0U &&
-            session.counters.tei_packets == 0U &&
-            session.counters.continuity_errors == 0U)
-            session.counters.sync_errors = 1U;
-        session.terminal = StreamTerminal::sync_error;
+        session.startup_budget_fallback = true;
+        publish_session_locked(session);
+    }
+
+    void publish_session_locked(Session& session) noexcept
+    {
+        session.stabilizing = false;
+        session.stabilization_ready = false;
+        session.stabilization_boundary_established = true;
+        session.continuity_checker.reset();
+        session.continuity.fill(StartupContinuity{});
         session.changed.notify_all();
     }
 
@@ -907,16 +913,11 @@ public:
             if (!session.attached || session.terminal != StreamTerminal::none ||
                 !session.stabilizing || !session.stabilization_ready)
                 continue;
-            session.stabilizing = false;
-            session.stabilization_ready = false;
-            session.stabilization_boundary_established = true;
             // No startup packet entered the public ring.  Reset PID state at
             // this exact publication boundary so the existing one-transition
             // session-boundary validation still applies.  From the next USB
             // event onward no integrity observation is suppressed.
-            session.continuity_checker.reset();
-            session.continuity.fill(StartupContinuity{});
-            session.changed.notify_all();
+            publish_session_locked(session);
         }
     }
 

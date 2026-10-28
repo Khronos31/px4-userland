@@ -1,6 +1,6 @@
 # px4-userland 仕様
 
-Status: Frozen v0.37 (2026-10-11)
+Status: Frozen v0.38 (2026-10-27)
 
 本書の`MUST`、`MUST NOT`、`SHOULD`は規範要件を示す。実機観測で前提の誤りが判明した場合も暗黙に
 実装だけを変えず、本書のversionと変更理由を更新してから実装する。
@@ -39,6 +39,10 @@ Termuxランチャーにもbuild/package時に同じ`VERSION`を埋め込み、�
 省略し、未知を空配列にしない。serial不明・開けないUSB等はungrouped観測とscan issueへ残し、
 USB descriptor読み取り失敗もscan不完全として伝える。JSONで表せないserialは別の識別文字列へ
 置き換えずnullとする。Core pin、動的STATUS、selector、受信/Card/LNB操作経路は変更しない。
+
+### v0.38 change record (2026-10-27)
+
+- Preserve IT930x startup minimum-packet and consecutive-clean promotion conditions. If a receiver reaches the startup packet budget without meeting them, stop withholding at that boundary and publish subsequent demux-accepted TS packets unchanged, including TEI and continuity-boundary packets, rather than ending the stream with a startup `sync_error`. Startup packets already withheld remain discarded; startup fault counters remain visible, and output packet bytes/counters continue unchanged after publication. This recovers output availability and does not certify TS quality.
 
 ### v0.37 change record (2026-10-11)
 
@@ -951,7 +955,8 @@ TEI packet、不正size/sync/AFC/adaptation length/PCRは別のresultとし、�
 不正packetのPIDも信頼できないため、全PIDのduplicate隣接性だけを無効にする。
 その他のadaptation field構文・PES/PSIの検証は範囲外とする。
 Q3U4/MLT/single-receiver data planeの既存TEI計数は維持し、不正header resultはCC計数から除外する。
-wire format、counter field、およびIT930x固有の起動境界・stabilizationとそのreset時点は維持する。
+wire format、counter field、通常のIT930x起動stable条件・promotion境界・reset時点は維持する。budget上限時の
+未昇格sessionのfallbackはv0.38 change recordに従う。
 
 checkerは動的allocationを行わず、8192 PIDについて各々直前の188 bytesと小さな状態を保持する。
 stream ownerは約1.6 MiB/receiverの領域をcallback前に確保し、session境界で明示的にresetする。
