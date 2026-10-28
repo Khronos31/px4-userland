@@ -106,6 +106,95 @@ bool test_aligned_tags_and_copy()
     return true;
 }
 
+#if defined(DTV_USERLAND_DIAGNOSTICS)
+struct BoundaryState final {
+    std::vector<TaggedTsDemux::PacketBoundaryObservation> observations;
+};
+
+void record_boundary(void* context,
+                     const TaggedTsDemux::PacketBoundaryObservation& observation) noexcept
+{
+    static_cast<BoundaryState*>(context)->observations.push_back(observation);
+}
+
+bool test_transfer_boundary_same_packet_scalars()
+{
+    std::vector<std::uint8_t> stream(23U, 0xa5U);
+    std::vector<Packet> expected;
+    for (std::uint8_t tag = 1U; tag <= 4U; ++tag) {
+        Packet packet = make_packet(tag, 0x25U);
+        packet[1U] = (tag == 2U) ? 0x80U : 0x01U;
+        packet[3U] = tag == 1U ? 0x10U
+                       : tag == 2U ? 0x30U
+                       : tag == 3U ? 0x20U
+                                   : 0x00U;
+        packet[4U] = tag == 2U ? 183U : 184U;
+        Packet output = packet;
+        output[0U] = 0x47U;
+        expected.push_back(output);
+        append_packet(stream, packet);
+    }
+    append_packet(stream, make_packet(5U, 0x31U));
+    const auto original = stream;
+
+    for (std::size_t split = 0U; split <= stream.size(); ++split) {
+        TaggedTsDemux demux;
+        SinkState sink;
+        BoundaryState boundaries;
+        demux.observe_transfer_input(ByteView{stream.data(), split});
+        DEMUX_CHECK(demux.push(ByteView{stream.data(), split}, record_packet, &sink,
+                               nullptr, nullptr, record_boundary, &boundaries));
+        demux.observe_transfer_input(
+            ByteView{stream.data() + split, stream.size() - split});
+        DEMUX_CHECK(demux.push(
+            ByteView{stream.data() + split, stream.size() - split}, record_packet,
+            &sink, nullptr, nullptr, record_boundary, &boundaries));
+        DEMUX_CHECK(stream == original);
+        DEMUX_CHECK(check_output(sink, expected));
+        DEMUX_CHECK(boundaries.observations.size() == 5U);
+        for (std::size_t index = 0U; index < 4U; ++index) {
+            const auto& observation = boundaries.observations[index];
+            DEMUX_CHECK(observation.packet_ordinal == index);
+            DEMUX_CHECK(observation.wire_tag == index + 1U);
+            DEMUX_CHECK(observation.forwarded);
+            DEMUX_CHECK(observation.transfer_input_available);
+            DEMUX_CHECK(observation.transfer_copy_mismatch_mask == 0U);
+            DEMUX_CHECK(observation.demux_sink_mismatch_mask == 0U);
+            DEMUX_CHECK(observation.transfer_input.tei == (index == 1U));
+            DEMUX_CHECK(observation.transfer_input.adaptation_field_control ==
+                        (index == 0U ? 1U : index == 1U ? 3U : index == 2U ? 2U : 0U));
+            DEMUX_CHECK(observation.transfer_input.adaptation_field_length ==
+                        (index == 1U || index == 2U ? (index == 1U ? 183U : 184U) : 0U));
+            DEMUX_CHECK(observation.transfer_input.adaptation_length_overrun ==
+                        (index == 2U));
+        }
+        DEMUX_CHECK(boundaries.observations[4U].packet_ordinal == 4U);
+        DEMUX_CHECK(boundaries.observations[4U].wire_tag == 5U);
+        DEMUX_CHECK(!boundaries.observations[4U].forwarded);
+        DEMUX_CHECK(boundaries.observations[4U].transfer_input_available);
+        DEMUX_CHECK(boundaries.observations[4U].transfer_copy_mismatch_mask == 0U);
+
+        demux.reset();
+        sink.packets.clear();
+        sink.receiver_indices.clear();
+        boundaries.observations.clear();
+        for (std::size_t index = 0U; index < stream.size(); ++index) {
+            demux.observe_transfer_input(ByteView{stream.data() + index, 1U});
+            DEMUX_CHECK(demux.push(ByteView{stream.data() + index, 1U}, record_packet,
+                                   &sink, nullptr, nullptr, record_boundary,
+                                   &boundaries));
+        }
+        DEMUX_CHECK(boundaries.observations.size() == 5U);
+        for (std::size_t index = 0U; index < boundaries.observations.size(); ++index) {
+            DEMUX_CHECK(boundaries.observations[index].packet_ordinal == index);
+            DEMUX_CHECK(boundaries.observations[index].transfer_input_available);
+            DEMUX_CHECK(boundaries.observations[index].transfer_copy_mismatch_mask == 0U);
+        }
+    }
+    return true;
+}
+#endif
+
 bool test_every_split_position()
 {
     std::vector<std::uint8_t> stream;
@@ -444,7 +533,11 @@ bool test_plain_single_receiver_ts()
 
 bool run_tagged_ts_demux_tests()
 {
-    return test_aligned_tags_and_copy() && test_every_split_position() &&
+    return test_aligned_tags_and_copy()
+#if defined(DTV_USERLAND_DIAGNOSTICS)
+           && test_transfer_boundary_same_packet_scalars()
+#endif
+           && test_every_split_position() &&
            test_one_byte_feed() && test_garbage_false_sync_and_remainder() &&
            test_invalid_tags_are_consumed() && test_mlt5pe_five_tags() &&
            test_aligned_tei_observer_preserves_boundary() &&

@@ -41,12 +41,14 @@ constexpr StreamLayout kMlt5PeLayout{1U, 5U, true, 5U, {{0, 1, 2, 3, 4}}};
 
 constexpr std::uint64_t kDiagnosticSampleIntervalUs = 10000000U;
 
+#if defined(DTV_USERLAND_DIAGNOSTICS) || defined(PX4_Q3U4_STREAM_TEST_ACCESS)
 bool diagnostic_sample_due(std::uint64_t now_us,
                            std::uint64_t last_sample_us) noexcept
 {
     return now_us >= last_sample_us &&
            now_us - last_sample_us >= kDiagnosticSampleIntervalUs;
 }
+#endif
 
 struct DiagnosticSample final {
     std::uint8_t bridge = 0U;
@@ -196,6 +198,41 @@ public:
         TaggedTsDemux demux;
         TaggedTsDemux::Counters demux_counters{};
 #if defined(DTV_USERLAND_DIAGNOSTICS)
+        struct BoundaryDiagnostic final {
+            struct ReceiverCounts final {
+                std::uint64_t packets = 0U;
+                std::uint64_t forwarded = 0U;
+                std::uint64_t transfer_tei = 0U;
+                std::uint64_t demux_tei = 0U;
+                std::uint64_t sink_tei = 0U;
+                std::uint64_t transfer_adaptation_overruns = 0U;
+                std::uint64_t demux_adaptation_overruns = 0U;
+                std::uint64_t sink_adaptation_overruns = 0U;
+                std::array<std::uint64_t, 4U> transfer_afc{};
+                std::array<std::uint64_t, 4U> demux_afc{};
+                std::array<std::uint64_t, 4U> sink_afc{};
+            };
+            struct Example final {
+                std::size_t packet_ordinal = 0U;
+                std::size_t receiver = 0U;
+                std::uint8_t tag = 0U;
+                std::uint8_t transfer_copy_mask = 0U;
+                std::uint8_t demux_sink_mask = 0U;
+                TaggedTsDemux::PacketHeaderScalars transfer;
+                TaggedTsDemux::PacketHeaderScalars demux;
+                TaggedTsDemux::PacketHeaderScalars sink;
+            };
+            std::uint64_t transfer_events = 0U;
+            std::uint64_t transfer_bytes = 0U;
+            std::uint64_t packets = 0U;
+            std::uint64_t forwarded = 0U;
+            std::uint64_t missing_transfer_input = 0U;
+            std::uint64_t transfer_copy_mismatches = 0U;
+            std::uint64_t demux_sink_mismatches = 0U;
+            std::array<ReceiverCounts, 4U> receivers{};
+            std::array<Example, 8U> examples{};
+            std::size_t example_count = 0U;
+        } boundary_diagnostic;
         std::uint64_t last_diagnostic_sample_us = 0U;
 #endif
         std::condition_variable state_changed;
@@ -243,9 +280,24 @@ public:
                 // only an actually empty event increments empty_intervals.
                 const bool published_before =
                     owner.bridge_has_published_packets(receiver_base);
+#if defined(DTV_USERLAND_DIAGNOSTICS)
+                if (owner.boundary_diagnostic_enabled()) {
+                    ++boundary_diagnostic.transfer_events;
+                    boundary_diagnostic.transfer_bytes += event.value().size;
+                    demux.observe_transfer_input(
+                        ByteView{event.value().data, event.value().size});
+                }
+#endif
                 const auto pushed = demux.push(
                     ByteView{event.value().data, event.value().size},
-                    &Impl::packet_sink, this, &Impl::wire_tag_observer, this);
+                    &Impl::packet_sink, this, &Impl::wire_tag_observer, this
+#if defined(DTV_USERLAND_DIAGNOSTICS)
+                    , owner.boundary_diagnostic_enabled()
+                          ? &Impl::packet_boundary_observer
+                          : nullptr,
+                    this
+#endif
+                    );
                 const auto current = demux.counters();
                 owner.count_sync_deltas(receiver_base, demux_counters, current,
                                         published_before);
@@ -259,6 +311,10 @@ public:
                     break;
                 }
             }
+#if defined(DTV_USERLAND_DIAGNOSTICS)
+            if (owner.boundary_diagnostic_enabled())
+                owner.emit_boundary_diagnostic(*this);
+#endif
         }
     };
 
@@ -321,6 +377,153 @@ public:
             bridge->owner.count_wire_tei(bridge->receiver_base + static_cast<std::size_t>(mapped));
     }
 
+#if defined(DTV_USERLAND_DIAGNOSTICS)
+    bool boundary_diagnostic_enabled() const noexcept
+    {
+        return layout_.bridge_count == 2U &&
+               layout_.receivers_per_bridge == 4U &&
+               layout_.tag_count == 4U && !layout_.plain_ts;
+    }
+
+    static void packet_boundary_observer(
+        void* context,
+        const TaggedTsDemux::PacketBoundaryObservation& observation) noexcept
+    {
+        auto* bridge = static_cast<Bridge*>(context);
+        auto& summary = bridge->boundary_diagnostic;
+        ++summary.packets;
+        const auto add_header = [](const TaggedTsDemux::PacketHeaderScalars& header,
+                                   std::array<std::uint64_t, 4U>& afc,
+                                   std::uint64_t& tei,
+                                   std::uint64_t& overruns) noexcept {
+            if (header.tei) ++tei;
+            if (header.adaptation_field_control < afc.size())
+                ++afc[header.adaptation_field_control];
+            if (header.adaptation_length_overrun) ++overruns;
+        };
+        std::size_t local_receiver = bridge->owner.layout_.receivers_per_bridge;
+        if (observation.wire_tag != 0U &&
+            observation.wire_tag <= bridge->owner.layout_.tag_count) {
+            const std::int8_t mapped = bridge->owner.layout_.tag_to_receiver[
+                observation.wire_tag - 1U];
+            if (mapped >= 0) local_receiver = static_cast<std::size_t>(mapped);
+        }
+        Bridge::BoundaryDiagnostic::ReceiverCounts* receiver_counts =
+            local_receiver < bridge->owner.layout_.receivers_per_bridge
+                ? &summary.receivers[local_receiver]
+                : nullptr;
+        if (receiver_counts != nullptr) ++receiver_counts->packets;
+        if (!observation.transfer_input_available) {
+            ++summary.missing_transfer_input;
+        } else {
+            if (receiver_counts != nullptr)
+                add_header(observation.transfer_input,
+                           receiver_counts->transfer_afc,
+                           receiver_counts->transfer_tei,
+                           receiver_counts->transfer_adaptation_overruns);
+            if (observation.transfer_copy_mismatch_mask != 0U)
+                ++summary.transfer_copy_mismatches;
+        }
+        if (receiver_counts != nullptr)
+            add_header(observation.demux_input, receiver_counts->demux_afc,
+                       receiver_counts->demux_tei,
+                       receiver_counts->demux_adaptation_overruns);
+        if (observation.forwarded) {
+            ++summary.forwarded;
+            if (receiver_counts != nullptr) ++receiver_counts->forwarded;
+            if (receiver_counts != nullptr)
+                add_header(observation.sink, receiver_counts->sink_afc,
+                           receiver_counts->sink_tei,
+                           receiver_counts->sink_adaptation_overruns);
+            if (observation.demux_sink_mismatch_mask != 0U)
+                ++summary.demux_sink_mismatches;
+        }
+
+        if ((!observation.transfer_input_available ||
+             observation.transfer_copy_mismatch_mask != 0U ||
+             observation.demux_sink_mismatch_mask != 0U) &&
+            summary.example_count < summary.examples.size()) {
+            auto& example = summary.examples[summary.example_count++];
+            example.packet_ordinal = observation.packet_ordinal;
+            example.receiver = local_receiver < bridge->owner.layout_.receivers_per_bridge
+                                   ? bridge->receiver_base + local_receiver
+                                   : bridge->receiver_base +
+                                         bridge->owner.layout_.receivers_per_bridge;
+            example.tag = observation.wire_tag;
+            example.transfer_copy_mask = observation.transfer_copy_mismatch_mask;
+            example.demux_sink_mask = observation.demux_sink_mismatch_mask;
+            example.transfer = observation.transfer_input;
+            example.demux = observation.demux_input;
+            example.sink = observation.sink;
+        }
+    }
+
+    void emit_boundary_diagnostic(const Bridge& bridge) const noexcept
+    {
+        const auto& summary = bridge.boundary_diagnostic;
+        if (summary.transfer_events == 0U) return;
+        dtv::userland::detail::diagnostic_log(
+            "component=q3_boundary event=summary bridge=%u transfer_events=%llu transfer_bytes=%llu packets=%llu forwarded=%llu missing_transfer=%llu scanner_sample_overflow=%u transfer_copy_mismatches=%llu demux_sink_mismatches=%llu",
+            static_cast<unsigned>(bridge.receiver_base / layout_.receivers_per_bridge),
+            static_cast<unsigned long long>(summary.transfer_events),
+            static_cast<unsigned long long>(summary.transfer_bytes),
+            static_cast<unsigned long long>(summary.packets),
+            static_cast<unsigned long long>(summary.forwarded),
+            static_cast<unsigned long long>(summary.missing_transfer_input),
+            bridge.demux.transfer_input_sample_overflowed() ? 1U : 0U,
+            static_cast<unsigned long long>(summary.transfer_copy_mismatches),
+            static_cast<unsigned long long>(summary.demux_sink_mismatches));
+        for (std::size_t receiver = 0U; receiver < summary.receivers.size(); ++receiver) {
+            const auto& counts = summary.receivers[receiver];
+            dtv::userland::detail::diagnostic_log(
+                "component=q3_boundary event=receiver bridge=%u receiver=%u packets=%llu forwarded=%llu transfer_tei=%llu demux_tei=%llu sink_tei=%llu transfer_adaptation_overruns=%llu demux_adaptation_overruns=%llu sink_adaptation_overruns=%llu transfer_afc=%llu/%llu/%llu/%llu demux_afc=%llu/%llu/%llu/%llu sink_afc=%llu/%llu/%llu/%llu",
+                static_cast<unsigned>(bridge.receiver_base /
+                                      layout_.receivers_per_bridge),
+                static_cast<unsigned>(bridge.receiver_base + receiver),
+                static_cast<unsigned long long>(counts.packets),
+                static_cast<unsigned long long>(counts.forwarded),
+                static_cast<unsigned long long>(counts.transfer_tei),
+                static_cast<unsigned long long>(counts.demux_tei),
+                static_cast<unsigned long long>(counts.sink_tei),
+                static_cast<unsigned long long>(counts.transfer_adaptation_overruns),
+                static_cast<unsigned long long>(counts.demux_adaptation_overruns),
+                static_cast<unsigned long long>(counts.sink_adaptation_overruns),
+                static_cast<unsigned long long>(counts.transfer_afc[0U]),
+                static_cast<unsigned long long>(counts.transfer_afc[1U]),
+                static_cast<unsigned long long>(counts.transfer_afc[2U]),
+                static_cast<unsigned long long>(counts.transfer_afc[3U]),
+                static_cast<unsigned long long>(counts.demux_afc[0U]),
+                static_cast<unsigned long long>(counts.demux_afc[1U]),
+                static_cast<unsigned long long>(counts.demux_afc[2U]),
+                static_cast<unsigned long long>(counts.demux_afc[3U]),
+                static_cast<unsigned long long>(counts.sink_afc[0U]),
+                static_cast<unsigned long long>(counts.sink_afc[1U]),
+                static_cast<unsigned long long>(counts.sink_afc[2U]),
+                static_cast<unsigned long long>(counts.sink_afc[3U]));
+        }
+        for (std::size_t index = 0U; index < summary.example_count; ++index) {
+            const auto& example = summary.examples[index];
+            dtv::userland::detail::diagnostic_log(
+                "component=q3_boundary event=example bridge=%u ordinal=%zu receiver=%zu tag=%u transfer_copy_mask=%u demux_sink_mask=%u tei=%u/%u/%u afc=%u/%u/%u adaptation_length=%u/%u/%u",
+                static_cast<unsigned>(bridge.receiver_base /
+                                      layout_.receivers_per_bridge),
+                example.packet_ordinal, example.receiver,
+                static_cast<unsigned>(example.tag),
+                static_cast<unsigned>(example.transfer_copy_mask),
+                static_cast<unsigned>(example.demux_sink_mask),
+                example.transfer.tei ? 1U : 0U,
+                example.demux.tei ? 1U : 0U,
+                example.sink.tei ? 1U : 0U,
+                static_cast<unsigned>(example.transfer.adaptation_field_control),
+                static_cast<unsigned>(example.demux.adaptation_field_control),
+                static_cast<unsigned>(example.sink.adaptation_field_control),
+                static_cast<unsigned>(example.transfer.adaptation_field_length),
+                static_cast<unsigned>(example.demux.adaptation_field_length),
+                static_cast<unsigned>(example.sink.adaptation_field_length));
+        }
+    }
+#endif
+
     bool valid_receiver(std::size_t receiver) const noexcept
     {
         return receiver < layout_.bridge_count * layout_.receivers_per_bridge;
@@ -363,6 +566,7 @@ public:
         bridge.demux.reset();
         bridge.demux_counters = bridge.demux.counters();
 #if defined(DTV_USERLAND_DIAGNOSTICS)
+        bridge.boundary_diagnostic = Bridge::BoundaryDiagnostic{};
         bridge.last_diagnostic_sample_us =
             dtv::userland::detail::diagnostic_now_us();
 #endif
