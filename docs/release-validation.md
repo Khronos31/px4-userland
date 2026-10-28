@@ -1,6 +1,6 @@
 # 安定版リリース前検証手順
 
-この文書はPX4のStable releaseで再利用する準備・操作・判定・cleanupの正本です。版ごとの適用matrixと検証記録は [`release-validation/1.0.0.md`](release-validation/1.0.0.md) のように版別文書へ記録します。過去候補の実測値は今回候補の合格を意味しません。CLI引数は現行 [`README.md`](../README.md) に合わせます。
+この文書はPX4のStable releaseで再利用する準備・操作・判定・cleanupの正本です。版ごとの適用matrixと検証記録は版別文書へ記録します。過去候補の実測値は今回候補の合格を意味しません。CLI引数は現行 [`README.md`](../README.md) に合わせます。
 
 この文書は Stable リリースごとの実行手順を定める。合否条件と認定条件の正本は [`SPEC.md`](../SPEC.md) 10章であり、両者に差があれば SPEC を優先し、手順書を更新する。
 
@@ -19,7 +19,7 @@
 
 ## 製品固有の適用条件
 
-PX4の通常の無指定時検証機種はPX-Q3U4だが、機種初回の対象を限定しない。PX4が対象とする全機種で初回手順を個別に実施し、結果は[`release-validation/initial-model-checks.md`](release-validation/initial-model-checks.md)へ機種別に、版ごとの実績は[`release-validation/1.0.0.md`](release-validation/1.0.0.md)へ記録する。
+PX4の通常の無指定時検証機種はPX-Q3U4だが、機種初回の対象を限定しない。PX4が対象とする全機種で初回手順を個別に実施し、結果は[`release-validation/initial-model-checks.md`](release-validation/initial-model-checks.md)へ機種別に記録する。
 
 | 区分 | 製品固有の確認 |
 |---|---|
@@ -972,7 +972,7 @@ Linux musl aarch64はE15 Fedora aarch64上のAlpine arm64 Docker containerでcan
 - 2時間: 指定OSで、選択されたprofileに応じた負荷、反復status/APDU、retune/stop-reopen、FD数・RSSの経時傾向、cleanupを確認する。Q3U4では§0.1の8 receiver T/S混在を使う。
 - いずれもshell終了値だけで合否を決めない。TS/counterはSPECの受入条件を使う。FD/RSSは数値固定の合否閾値を設定せず、非安定な持続増加は`判定保留`として調査する。
 
-追加profile認定、single receiver認定、PX-M1UR/PX-S1UR同一serial確認、receiver 7比較の個別条件はSPEC 10.2.6a/10.2.7と各記録を参照する。これらの認定をreleaseごとの代表Linux x86_64 2時間、またはmajor versionごとの各OS/architecture短TSの代わりに使わない。1.0.0初回matrixへの適用は [`release-validation/1.0.0.md`](release-validation/1.0.0.md) に従う。
+追加profile認定、single receiver認定、PX-M1UR/PX-S1UR同一serial確認、receiver 7比較の個別条件はSPEC 10.2.6a/10.2.7と各記録を参照する。これらの認定をreleaseごとの代表Linux x86_64 2時間、またはmajor versionごとの各OS/architecture短TSの代わりに使わない。
 
 ### PX-M1UR / PX-S1UR の同一serial確認
 
