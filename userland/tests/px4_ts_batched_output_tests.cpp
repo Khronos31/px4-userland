@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <thread>
 #include <unistd.h>
@@ -32,6 +33,19 @@ volatile std::sig_atomic_t received_stop_signal = 0;
 int signal_to_raise = 0;
 int signal_pipe_read_fd = -1;
 std::size_t signal_pipe_fill_packets = 0U;
+int signal_socket_read_fd = -1;
+int signal_socket_stop_signal = 0;
+std::size_t signal_socket_partial_limit = 72U;
+bool signal_socket_partial_done = false;
+
+enum class SignalSocketMode {
+    raise_on_eagain,
+    tail_full,
+    close_consumer,
+    partial_write,
+};
+
+SignalSocketMode signal_socket_mode = SignalSocketMode::raise_on_eagain;
 
 enum class SignalPipeMode {
     fill_after_write,
@@ -125,6 +139,186 @@ ssize_t signal_pipe_write(int fd, const void* bytes, std::size_t size) noexcept
         (errno == EAGAIN || errno == EWOULDBLOCK))
         (void)::raise(signal_to_raise);
     return written;
+}
+
+ssize_t signal_socket_write(int fd, const void* bytes, std::size_t size) noexcept
+{
+    if (signal_socket_mode == SignalSocketMode::close_consumer &&
+        signal_socket_read_fd >= 0) {
+        (void)::close(signal_socket_read_fd);
+        signal_socket_read_fd = -1;
+        (void)::raise(signal_socket_stop_signal);
+    }
+    if (signal_socket_mode == SignalSocketMode::partial_write &&
+        !signal_socket_partial_done) {
+        const std::size_t partial_size = size < signal_socket_partial_limit
+            ? size : signal_socket_partial_limit;
+        const ssize_t written = ::write(fd, bytes, partial_size);
+        if (written > 0) {
+            signal_socket_partial_done = true;
+            (void)::raise(signal_socket_stop_signal);
+        }
+        return written;
+    }
+
+    const ssize_t written = ::write(fd, bytes, size);
+    if ((signal_socket_mode == SignalSocketMode::raise_on_eagain ||
+         signal_socket_mode == SignalSocketMode::tail_full) &&
+        written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+        (void)::raise(signal_socket_stop_signal);
+    return written;
+}
+
+bool fill_socket_with_packets(int fd, std::size_t& packets) noexcept
+{
+    std::array<std::uint8_t, Px4TsBatchedFdOutput::kPacketSize> packet{};
+    packet[0U] = 0x47U;
+    for (;;) {
+        const ssize_t written = ::write(fd, packet.data(), packet.size());
+        if (written == static_cast<ssize_t>(packet.size())) {
+            ++packets;
+            continue;
+        }
+        return written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK);
+    }
+}
+
+bool test_real_signal_socket_path(int stop_signal, SignalSocketMode mode) noexcept
+{
+    int descriptors[2]{};
+    if (::socketpair(AF_UNIX, SOCK_STREAM, 0, descriptors) != 0) return false;
+    int send_buffer_size = 4096;
+    if (::setsockopt(descriptors[1], SOL_SOCKET, SO_SNDBUF, &send_buffer_size,
+                     sizeof(send_buffer_size)) != 0) {
+        (void)::close(descriptors[0]);
+        (void)::close(descriptors[1]);
+        return false;
+    }
+    received_stop_signal = 0;
+    signal_socket_stop_signal = stop_signal;
+    signal_socket_mode = mode;
+    signal_socket_read_fd = descriptors[0];
+    signal_socket_partial_done = false;
+    std::size_t prefilled_packets = 0U;
+    if (mode == SignalSocketMode::tail_full) {
+        const int write_flags = ::fcntl(descriptors[1], F_GETFL);
+        if (write_flags < 0 ||
+            ::fcntl(descriptors[1], F_SETFL, write_flags | O_NONBLOCK) != 0 ||
+            !fill_socket_with_packets(descriptors[1], prefilled_packets)) {
+            (void)::close(descriptors[0]);
+            (void)::close(descriptors[1]);
+            signal_socket_read_fd = -1;
+            return false;
+        }
+    }
+
+    ActualSignal signal;
+    bool stopped = false;
+    bool read_ok = true;
+    std::uint64_t written_packets = 0U;
+    std::vector<std::uint8_t> received;
+    std::thread reader;
+    if (mode == SignalSocketMode::partial_write) {
+        reader = std::thread([&]() noexcept {
+            std::array<std::uint8_t, 4096U> buffer{};
+            for (;;) {
+                const ssize_t count = ::read(descriptors[0], buffer.data(), buffer.size());
+                if (count > 0) {
+                    received.insert(received.end(), buffer.begin(),
+                                    buffer.begin() + static_cast<std::size_t>(count));
+                    continue;
+                }
+                if (count == 0) break;
+                if (errno == EINTR) continue;
+                read_ok = false;
+                break;
+            }
+        });
+    }
+
+    {
+        Px4TsBatchedFdOutput output(descriptors[1], true, signal_socket_write);
+        bool accepted = output.ready();
+        std::array<std::uint8_t, Px4TsBatchedFdOutput::kPacketSize> packet{};
+        packet[0U] = 0x47U;
+        const std::size_t packet_count = mode == SignalSocketMode::raise_on_eagain
+            ? 2U * Px4TsBatchedFdOutput::kPacketsPerWrite : 12U;
+        for (std::size_t index = 0U; accepted && index < packet_count; ++index) {
+            const auto written = output.write(
+                dtv::userland::ByteView{packet.data(), packet.size()}, signal);
+            if (!written) {
+                accepted = false;
+                stopped = written.error() == px4::userland::Error::TIMEOUT &&
+                    signal.stop_requested() &&
+                    Px4TsBatchedFdOutput::finish_exit_status(
+                        written.error(), signal.stop_requested()) == 0;
+            }
+        }
+        if (accepted) {
+            const auto finished = output.finish(signal);
+            stopped = !finished &&
+                finished.error() == px4::userland::Error::TIMEOUT &&
+                signal.stop_requested() &&
+                Px4TsBatchedFdOutput::finish_exit_status(
+                    finished.error(), signal.stop_requested()) == 0;
+        }
+        written_packets = output.written_packets();
+    }
+
+    if (mode == SignalSocketMode::partial_write) {
+        reader.join();
+        (void)::close(descriptors[0]);
+        signal_socket_read_fd = -1;
+        return stopped && read_ok && received_stop_signal == stop_signal &&
+               signal_socket_partial_done && written_packets == 1U &&
+               received.size() == Px4TsBatchedFdOutput::kPacketSize &&
+               received.size() % Px4TsBatchedFdOutput::kPacketSize == 0U;
+    }
+
+    if (signal_socket_read_fd >= 0) {
+        std::array<std::uint8_t, 4096U> buffer{};
+        for (;;) {
+            const ssize_t count = ::read(signal_socket_read_fd, buffer.data(), buffer.size());
+            if (count > 0) {
+                received.insert(received.end(), buffer.begin(),
+                                buffer.begin() + static_cast<std::size_t>(count));
+                continue;
+            }
+            if (count < 0 && errno == EINTR) continue;
+            if (count < 0 && errno != EAGAIN && errno != EWOULDBLOCK) read_ok = false;
+            break;
+        }
+        (void)::close(signal_socket_read_fd);
+        signal_socket_read_fd = -1;
+    }
+    if (mode == SignalSocketMode::close_consumer)
+        return stopped && received_stop_signal == stop_signal && written_packets == 0U;
+    return stopped && read_ok && received_stop_signal == stop_signal &&
+           received.size() == (written_packets + prefilled_packets) *
+                                  Px4TsBatchedFdOutput::kPacketSize &&
+           received.size() % Px4TsBatchedFdOutput::kPacketSize == 0U;
+}
+
+bool test_socket_epipe_without_stop() noexcept
+{
+    int descriptors[2]{};
+    if (::socketpair(AF_UNIX, SOCK_STREAM, 0, descriptors) != 0) return false;
+    (void)::close(descriptors[0]);
+    received_stop_signal = 0;
+    ActualSignal signal;
+    Px4TsBatchedFdOutput output(descriptors[1], true);
+    if (!output.ready()) return false;
+    std::array<std::uint8_t, Px4TsBatchedFdOutput::kPacketSize> packet{};
+    packet[0U] = 0x47U;
+    for (std::size_t index = 0U; index < 12U; ++index) {
+        if (!output.write(dtv::userland::ByteView{packet.data(), packet.size()}, signal))
+            return false;
+    }
+    const auto finished = output.finish(signal);
+    return !finished && finished.error() == px4::userland::Error::INTERNAL &&
+           output.system_error() == EPIPE &&
+           Px4TsBatchedFdOutput::finish_exit_status(
+               finished.error(), signal.stop_requested()) == 70;
 }
 
 int fail(const char* message, int fd, const char* path) noexcept
@@ -514,9 +708,26 @@ int main()
         if (!test_real_signal_finish_path(stop_signal,
                                           SignalPipeMode::close_consumer))
             return fail("signal and consumer close did not exit cleanly", -1, path.c_str());
+        if (!test_real_signal_socket_path(stop_signal,
+                                          SignalSocketMode::raise_on_eagain))
+            return fail("signal during socket batch write did not stop on a packet boundary",
+                        -1, path.c_str());
+        if (!test_real_signal_socket_path(stop_signal, SignalSocketMode::tail_full))
+            return fail("signal during socket tail finish did not stop on a packet boundary",
+                        -1, path.c_str());
+        if (!test_real_signal_socket_path(stop_signal,
+                                          SignalSocketMode::close_consumer))
+            return fail("signal and socket consumer close did not stop cleanly",
+                        -1, path.c_str());
+        if (!test_real_signal_socket_path(stop_signal,
+                                          SignalSocketMode::partial_write))
+            return fail("partial socket packet was not completed before stop",
+                        -1, path.c_str());
     }
     if (!test_finish_epipe_without_stop())
         return fail("ordinary finish EPIPE was not preserved", -1, path.c_str());
+    if (!test_socket_epipe_without_stop())
+        return fail("ordinary socket finish EPIPE was not preserved", -1, path.c_str());
     if (!test_epipe()) return fail("EPIPE propagation test failed", -1, path.c_str());
     if (!test_partial_write_diagnostic())
         return fail("partial-write diagnostic count failed", -1, path.c_str());

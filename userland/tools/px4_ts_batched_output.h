@@ -12,7 +12,9 @@
 #include <cstring>
 #include <fcntl.h>
 #include <poll.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 namespace px4::userland::cli {
@@ -24,6 +26,7 @@ public:
     static constexpr std::size_t kPacketSize = 188U;
     static constexpr std::size_t kPacketsPerWrite = 256U;
     static constexpr std::size_t kBufferSize = kPacketSize * kPacketsPerWrite;
+    static constexpr std::size_t kStopPacketPollLimit = 10U;
 
     explicit Px4TsBatchedFdOutput(int fd, bool close_fd,
                                   WriteFunction write_function = ::write) noexcept
@@ -44,7 +47,22 @@ public:
                 const std::size_t packets = limit / kPacketSize;
                 if (packets > 0U) write_limit_ = packets * kPacketSize;
             }
-            packet_atomic_writes_ = true;
+            packet_boundary_writes_ = true;
+        } else if (::fstat(fd_, &status) == 0 && S_ISSOCK(status.st_mode)) {
+            int socket_type = 0;
+            socklen_t socket_type_size = sizeof(socket_type);
+            struct sockaddr_storage address {};
+            socklen_t address_size = sizeof(address);
+            if (::getsockopt(fd_, SOL_SOCKET, SO_TYPE, &socket_type,
+                             &socket_type_size) == 0 &&
+                socket_type == SOCK_STREAM &&
+                ::getsockname(fd_, reinterpret_cast<struct sockaddr*>(&address),
+                              &address_size) == 0 &&
+                address.ss_family == AF_UNIX) {
+                write_limit_ = kPacketSize;
+                packet_boundary_writes_ = true;
+                socket_stream_writes_ = true;
+            }
         }
         ready_ = true;
     }
@@ -111,7 +129,14 @@ private:
     bool stopping_at_packet_boundary(const Px4TsSignal& signal,
                                      std::size_t offset) const noexcept
     {
-        return packet_atomic_writes_ && offset % kPacketSize == 0U &&
+        return packet_boundary_writes_ && offset % kPacketSize == 0U &&
+               signal.stop_requested();
+    }
+
+    bool completing_stopped_socket_packet(const Px4TsSignal& signal,
+                                           std::size_t offset) const noexcept
+    {
+        return socket_stream_writes_ && offset % kPacketSize != 0U &&
                signal.stop_requested();
     }
 
@@ -120,11 +145,17 @@ private:
         if (buffered_ == 0U) return Result<void>::success();
         if (stopping_at_packet_boundary(signal, 0U)) return stop();
         std::size_t offset = 0U;
+        std::size_t stop_packet_retries = 0U;
         while (offset < buffered_) {
+            std::size_t write_size = (buffered_ - offset) < write_limit_
+                ? buffered_ - offset : write_limit_;
+            if (socket_stream_writes_ && offset % kPacketSize != 0U) {
+                const std::size_t packet_remaining =
+                    kPacketSize - offset % kPacketSize;
+                if (write_size > packet_remaining) write_size = packet_remaining;
+            }
             const ssize_t written =
-                write_function_(fd_, buffer_.data() + offset,
-                                (buffered_ - offset) < write_limit_
-                                    ? buffered_ - offset : write_limit_);
+                write_function_(fd_, buffer_.data() + offset, write_size);
             if (written > 0) {
                 const std::size_t previous_offset = offset;
                 offset += static_cast<std::size_t>(written);
@@ -132,13 +163,19 @@ private:
                                     previous_offset / kPacketSize;
                 if (offset < buffered_ && signal.stop_requested()) {
                     if (stopping_at_packet_boundary(signal, offset)) return stop();
-                    return fail(EINTR);
+                    if (!socket_stream_writes_ || offset % kPacketSize == 0U)
+                        return fail(EINTR);
                 }
                 continue;
             }
             if (written < 0 && errno == EINTR) {
                 if (signal.stop_requested()) {
                     if (stopping_at_packet_boundary(signal, offset)) return stop();
+                    if (completing_stopped_socket_packet(signal, offset)) {
+                        if (++stop_packet_retries >= kStopPacketPollLimit)
+                            return fail(EINTR);
+                        continue;
+                    }
                     return fail(EINTR);
                 }
                 continue;
@@ -146,7 +183,8 @@ private:
             if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
                 if (signal.stop_requested()) {
                     if (stopping_at_packet_boundary(signal, offset)) return stop();
-                    return fail(EAGAIN);
+                    if (!completing_stopped_socket_packet(signal, offset))
+                        return fail(EAGAIN);
                 }
                 pollfd descriptor{fd_, POLLOUT, 0};
                 int polled = 0;
@@ -155,8 +193,14 @@ private:
                 } while (polled < 0 && errno == EINTR && !signal.stop_requested());
                 if (signal.stop_requested()) {
                     if (stopping_at_packet_boundary(signal, offset)) return stop();
-                    return fail(EINTR);
+                    if (!completing_stopped_socket_packet(signal, offset))
+                        return fail(EINTR);
+                    if (++stop_packet_retries >= kStopPacketPollLimit)
+                        return fail(EAGAIN);
                 }
+                if (polled < 0 && errno == EINTR &&
+                    completing_stopped_socket_packet(signal, offset))
+                    continue;
                 if (polled < 0) return fail(errno);
                 if (polled > 0 &&
                     (descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0)
@@ -181,7 +225,8 @@ private:
     int system_error_ = 0;
     std::uint64_t written_packets_ = 0U;
     std::size_t write_limit_ = kBufferSize;
-    bool packet_atomic_writes_ = false;
+    bool packet_boundary_writes_ = false;
+    bool socket_stream_writes_ = false;
     std::array<std::uint8_t, kBufferSize> buffer_{};
     std::size_t buffered_ = 0U;
 };
