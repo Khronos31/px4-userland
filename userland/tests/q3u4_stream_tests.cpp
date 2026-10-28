@@ -875,10 +875,12 @@ bool test_wire_tei_and_bridge_sync_counter()
     const auto timeout_stats = plane.stats(value);
     STREAM_CHECK(timeout_stats && timeout_stats.value().empty_intervals >= 1U);
     const std::size_t zero_baseline = dev1.wait_count();
+    const std::size_t zero_gate_baseline = plane.empty_event_sample_gate_calls_for_test(0U);
     dev1.push(std::vector<std::uint8_t>{});
     STREAM_CHECK(dev1.wait_for_count(zero_baseline + 2U));
     const auto zero_stats = plane.stats(value);
     STREAM_CHECK(zero_stats && zero_stats.value().empty_intervals >= 2U);
+    STREAM_CHECK(plane.empty_event_sample_gate_calls_for_test(0U) == zero_gate_baseline + 1U);
 
     auto tagged = stream(1U, 4U);
     const auto wire_tei = wire_packet(9U, 0x101U, 4U);
@@ -896,6 +898,7 @@ bool test_wire_tei_and_bridge_sync_counter()
                  samples.values[0U].tei_packets == 2U &&
                  samples.values[0U].wire_tei_packets == 1U &&
                  samples.values[0U].mpeg_tei_packets == 1U &&
+                 samples.values[0U].empty_intervals >= 2U &&
                  samples.values[0U].demux_invalid_tags == 1U);
     STREAM_CHECK(samples.values[1U].bridge == 0U &&
                  samples.values[1U].receiver == 1U && samples.values[1U].attached);

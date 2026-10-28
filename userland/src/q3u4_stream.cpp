@@ -235,6 +235,7 @@ public:
                 }
                 if (event.value().size == 0U) {
                     owner.count_empty(receiver_base);
+                    owner.maybe_sample_diagnostics(*this, true);
                     continue;
                 }
                 // short_transfer has no dedicated counter in the wire/API
@@ -752,6 +753,12 @@ public:
     {
         if (bridge < layout_.bridge_count) emit_diagnostic_sample(bridges_[bridge]);
     }
+
+    std::size_t empty_event_sample_gate_calls_for_test(std::uint8_t bridge) const noexcept
+    {
+        return bridge < layout_.bridge_count
+            ? empty_event_sample_gate_calls[bridge].load(std::memory_order_relaxed) : 0U;
+    }
 #endif
 
     Result<StreamTerminal> terminal(const TunerAttachment& attachment) const noexcept
@@ -930,8 +937,14 @@ public:
     }
 #endif
 
-    void maybe_sample_diagnostics(Bridge& bridge) noexcept
+    void maybe_sample_diagnostics(Bridge& bridge, bool successful_empty_event = false) noexcept
     {
+#if defined(PX4_Q3U4_STREAM_TEST_ACCESS)
+        if (successful_empty_event) {
+            empty_event_sample_gate_calls[
+                bridge_index(bridge.receiver_base)].fetch_add(1U, std::memory_order_relaxed);
+        }
+#endif
 #if defined(DTV_USERLAND_DIAGNOSTICS)
         const std::uint64_t now_us = dtv::userland::detail::diagnostic_now_us();
         if (!diagnostic_sample_due(now_us, bridge.last_diagnostic_sample_us)) return;
@@ -1209,6 +1222,7 @@ public:
     void* packet_enqueue_observer_context = nullptr;
     Q3U4StreamDataPlane::DiagnosticSampleObserver diagnostic_sample_observer = nullptr;
     void* diagnostic_sample_observer_context = nullptr;
+    std::array<std::atomic<std::size_t>, kBridgeCount> empty_event_sample_gate_calls{};
 #endif
 };
 
@@ -1394,6 +1408,12 @@ void Q3U4StreamDataPlane::set_diagnostic_sample_observer_for_test(
     DiagnosticSampleObserver observer, void* context) noexcept
 {
     if (impl_ != nullptr) impl_->set_diagnostic_sample_observer(observer, context);
+}
+
+std::size_t Q3U4StreamDataPlane::empty_event_sample_gate_calls_for_test(
+    std::uint8_t bridge) const noexcept
+{
+    return impl_ != nullptr ? impl_->empty_event_sample_gate_calls_for_test(bridge) : 0U;
 }
 
 void Q3U4StreamDataPlane::emit_diagnostic_sample_for_test(

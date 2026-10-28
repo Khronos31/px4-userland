@@ -112,6 +112,7 @@ public:
     using DiagnosticSampleObserver = void (*)(void*, const DiagnosticSampleForTest&) noexcept;
     void set_diagnostic_sample_observer_for_test(
         DiagnosticSampleObserver observer, void* context) noexcept;
+    std::size_t empty_event_sample_gate_calls_for_test(std::uint8_t bridge) const noexcept;
     void emit_diagnostic_sample_for_test(std::uint8_t bridge) noexcept;
     static bool diagnostic_sample_due_for_test(
         std::uint64_t now_us, std::uint64_t last_sample_us) noexcept;
