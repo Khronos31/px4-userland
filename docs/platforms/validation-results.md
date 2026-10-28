@@ -1393,7 +1393,7 @@ Bliss OSではバックグラウンド時にTermux UID全体が凍結し、`term
 
 - 2時間の8 receiver soakではreceiver 0〜6はtransport error 0。receiver 7でTEI 10,974、continuity error 453、sync/queue-drop/USB error 0。同じ約11k TEIの署名は同一個体の参照カーネルドライバ（`tsukumijima/px4_drv`）でも同一周波数（T22）で再現しており、本ドライバ固有の回帰ではなく個体固有の既知事象として記録しています（原因および他個体での挙動は未確認）。
 - FreeBSDでは接続直後に片bridgeのfirmware version queryが1回TIMEOUTする事象を2回観測。再試行後は正常。
-- Windowsは本プロダクトのサポート外。
+- Windowsは正式配布対象だが、この時点の記録にWindows native archiveの実機検証結果はなく、Windows hardware gateは未達。
 
 ## 2026-10-13 v0.2.1 candidate reproducibility review
 
