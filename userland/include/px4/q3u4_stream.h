@@ -87,6 +87,34 @@ public:
     // absent from production headers/binaries.
     void set_packet_enqueue_observer_for_test(
         PacketEnqueueObserver observer, void* context) noexcept;
+    struct DiagnosticSampleForTest final {
+        std::uint8_t bridge = 0U;
+        std::uint8_t receiver = 0U;
+        bool attached = false;
+        StreamTerminal terminal = StreamTerminal::none;
+        std::size_t ring_count = 0U;
+        std::size_t ring_capacity = 0U;
+        std::uint64_t packets = 0U;
+        std::uint64_t bytes = 0U;
+        std::uint64_t tei_packets = 0U;
+        std::uint64_t wire_tei_packets = 0U;
+        std::uint64_t mpeg_tei_packets = 0U;
+        std::uint64_t continuity_errors = 0U;
+        std::uint64_t queue_drops = 0U;
+        std::uint64_t usb_errors = 0U;
+        std::uint64_t empty_intervals = 0U;
+        std::size_t demux_invalid_tags = 0U;
+        std::size_t demux_sync_losses = 0U;
+        std::size_t demux_input_bytes = 0U;
+        std::size_t demux_emitted_packets = 0U;
+        std::size_t demux_buffered_bytes = 0U;
+    };
+    using DiagnosticSampleObserver = void (*)(void*, const DiagnosticSampleForTest&) noexcept;
+    void set_diagnostic_sample_observer_for_test(
+        DiagnosticSampleObserver observer, void* context) noexcept;
+    void emit_diagnostic_sample_for_test(std::uint8_t bridge) noexcept;
+    static bool diagnostic_sample_due_for_test(
+        std::uint64_t now_us, std::uint64_t last_sample_us) noexcept;
 #endif
     Result<StreamCounters> stats(const TunerAttachment& attachment) const noexcept override;
     // Sync loss occurs before a receiver tag can be recovered.  The bridge

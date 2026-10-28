@@ -852,6 +852,16 @@ bool test_wire_tei_and_bridge_sync_counter()
                                                 Q3U4StreamDataPlane::kMinQueuePackets);
     STREAM_CHECK(created);
     auto& plane = *created.value();
+    struct DiagnosticSamples final {
+        std::array<Q3U4StreamDataPlane::DiagnosticSampleForTest, 4U> values{};
+        std::size_t count = 0U;
+    } samples;
+    plane.set_diagnostic_sample_observer_for_test(
+        [](void* context, const Q3U4StreamDataPlane::DiagnosticSampleForTest& sample) noexcept {
+            auto* value = static_cast<DiagnosticSamples*>(context);
+            if (value->count < value->values.size())
+                value->values[value->count++] = sample;
+        }, &samples);
     const auto value = attachment(0U, 9U);
     const auto sibling = attachment(1U, 19U);
     STREAM_CHECK(plane.attach(value));
@@ -878,6 +888,17 @@ bool test_wire_tei_and_bridge_sync_counter()
     const std::size_t first_processed_call = dev1.wait_count() + 2U;
     dev1.push(std::move(tagged));
     STREAM_CHECK(dev1.wait_for_count(first_processed_call));
+    plane.emit_diagnostic_sample_for_test(0U);
+    STREAM_CHECK(samples.count == 2U && samples.values[0U].bridge == 0U &&
+                 samples.values[0U].receiver == 0U && samples.values[0U].attached &&
+                 samples.values[0U].ring_count == 5U &&
+                 samples.values[0U].ring_capacity == Q3U4StreamDataPlane::kMinQueuePackets &&
+                 samples.values[0U].tei_packets == 2U &&
+                 samples.values[0U].wire_tei_packets == 1U &&
+                 samples.values[0U].mpeg_tei_packets == 1U &&
+                 samples.values[0U].demux_invalid_tags == 1U);
+    STREAM_CHECK(samples.values[1U].bridge == 0U &&
+                 samples.values[1U].receiver == 1U && samples.values[1U].attached);
     std::array<std::uint8_t, 188U> output{};
     const auto first_read = plane.read(value, MutableByteView{output.data(), output.size()},
                                        Timeout{1000U});
@@ -916,6 +937,15 @@ bool test_wire_tei_and_bridge_sync_counter()
     STREAM_CHECK(sync_errors && sync_errors.value() >= 1U);
     STREAM_CHECK(plane.detach(value));
     STREAM_CHECK(plane.detach(sibling));
+    return true;
+}
+
+bool test_diagnostic_sample_interval()
+{
+    STREAM_CHECK(!Q3U4StreamDataPlane::diagnostic_sample_due_for_test(100U, 101U));
+    STREAM_CHECK(!Q3U4StreamDataPlane::diagnostic_sample_due_for_test(10000099U, 100U));
+    STREAM_CHECK(Q3U4StreamDataPlane::diagnostic_sample_due_for_test(10000100U, 100U));
+    STREAM_CHECK(Q3U4StreamDataPlane::diagnostic_sample_due_for_test(30000000U, 100U));
     return true;
 }
 
@@ -1601,7 +1631,11 @@ bool run_q3u4_stream_tests()
     if (replacement && !wake) std::fprintf(stderr, "q3u4_stream: wake failed\n");
     const bool tei = wake && test_wire_tei_and_bridge_sync_counter();
     if (wake && !tei) std::fprintf(stderr, "q3u4_stream: tei failed\n");
-    const bool initial_sync = tei && test_initial_sync_recovery_is_session_boundary();
+    const bool diagnostic_interval = tei && test_diagnostic_sample_interval();
+    if (tei && !diagnostic_interval)
+        std::fprintf(stderr, "q3u4_stream: diagnostic interval failed\n");
+    const bool initial_sync = diagnostic_interval &&
+                              test_initial_sync_recovery_is_session_boundary();
     if (tei && !initial_sync)
         std::fprintf(stderr, "q3u4_stream: initial sync boundary failed\n");
     const bool stabilization = initial_sync && test_capture_startup_stabilization();

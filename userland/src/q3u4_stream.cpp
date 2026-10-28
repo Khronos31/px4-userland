@@ -39,6 +39,37 @@ constexpr StreamLayout kQ3U4Layout{2U, 4U, false, 4U, {{0, 1, 2, 3, -1}}};
 constexpr StreamLayout kW3U4Layout{1U, 4U, false, 4U, {{0, 1, 2, 3, -1}}};
 constexpr StreamLayout kMlt5PeLayout{1U, 5U, true, 5U, {{0, 1, 2, 3, 4}}};
 
+constexpr std::uint64_t kDiagnosticSampleIntervalUs = 10000000U;
+
+bool diagnostic_sample_due(std::uint64_t now_us,
+                           std::uint64_t last_sample_us) noexcept
+{
+    return now_us >= last_sample_us &&
+           now_us - last_sample_us >= kDiagnosticSampleIntervalUs;
+}
+
+struct DiagnosticSample final {
+    std::uint8_t bridge = 0U;
+    std::uint8_t receiver = 0U;
+    StreamTerminal terminal = StreamTerminal::none;
+    std::size_t ring_count = 0U;
+    std::size_t ring_capacity = 0U;
+    std::uint64_t packets = 0U;
+    std::uint64_t bytes = 0U;
+    std::uint64_t tei_packets = 0U;
+    std::uint64_t wire_tei_packets = 0U;
+    std::uint64_t mpeg_tei_packets = 0U;
+    std::uint64_t continuity_errors = 0U;
+    std::uint64_t queue_drops = 0U;
+    std::uint64_t usb_errors = 0U;
+    std::uint64_t empty_intervals = 0U;
+    std::size_t demux_invalid_tags = 0U;
+    std::size_t demux_sync_losses = 0U;
+    std::size_t demux_input_bytes = 0U;
+    std::size_t demux_emitted_packets = 0U;
+    std::size_t demux_buffered_bytes = 0U;
+};
+
 StreamLayout mlt_stream_layout(DeviceModel model) noexcept
 {
     if (model == DeviceModel::px_mlt5pe || model == DeviceModel::dtv02a_5ts_p)
@@ -133,6 +164,9 @@ public:
         TunerStreamFinalSnapshot final_snapshot{};
         StreamTerminal terminal = StreamTerminal::none;
         StreamCounters counters{};
+#if defined(DTV_USERLAND_DIAGNOSTICS) || defined(PX4_Q3U4_STREAM_TEST_ACCESS)
+        std::uint64_t diagnostic_wire_tei_packets = 0U;
+#endif
         TsContinuityChecker continuity_checker;
         std::array<StartupContinuity, kPidCount> continuity{};
         bool stabilizing = true;
@@ -161,6 +195,9 @@ public:
         std::size_t attached_count = 0U;
         TaggedTsDemux demux;
         TaggedTsDemux::Counters demux_counters{};
+#if defined(DTV_USERLAND_DIAGNOSTICS)
+        std::uint64_t last_diagnostic_sample_us = 0U;
+#endif
         std::condition_variable state_changed;
 
         Bridge(Impl& owner_value, Transport& transport_value,
@@ -180,11 +217,16 @@ public:
 
         void run() noexcept
         {
+#if defined(DTV_USERLAND_DIAGNOSTICS)
+            last_diagnostic_sample_us =
+                dtv::userland::detail::diagnostic_now_us();
+#endif
             while (!stopping()) {
                 const auto event = transport.wait_stream(Timeout{kPumpWaitMs});
                 if (!event) {
                     if (event.error() == Error::TIMEOUT) {
                         owner.count_empty(receiver_base);
+                        owner.maybe_sample_diagnostics(*this);
                         continue;
                     }
                     owner.mark_bridge_terminal(*this, terminal_for_error(event.error()));
@@ -207,6 +249,7 @@ public:
                 owner.count_sync_deltas(receiver_base, demux_counters, current,
                                         published_before);
                 demux_counters = current;
+                owner.maybe_sample_diagnostics(*this);
                 if (!pushed) {
                     owner.mark_bridge_terminal(*this, pushed.error() == Error::SLOW_CONSUMER
                                                     ? StreamTerminal::sync_error
@@ -318,6 +361,10 @@ public:
         }
         bridge.demux.reset();
         bridge.demux_counters = bridge.demux.counters();
+#if defined(DTV_USERLAND_DIAGNOSTICS)
+        bridge.last_diagnostic_sample_us =
+            dtv::userland::detail::diagnostic_now_us();
+#endif
         bridge.stop_requested = false;
         // This repository builds with exceptions disabled.  The standard
         // thread constructor follows that existing policy: allocation is
@@ -488,6 +535,9 @@ public:
             session.final_snapshot = TunerStreamFinalSnapshot{};
             session.terminal = StreamTerminal::none;
             session.counters = StreamCounters{};
+#if defined(DTV_USERLAND_DIAGNOSTICS) || defined(PX4_Q3U4_STREAM_TEST_ACCESS)
+            session.diagnostic_wire_tei_packets = 0U;
+#endif
             session.counters.availability.fill(
                 dtv::userland::wire::MeasureState::valid);
             session.continuity_checker.reset();
@@ -689,6 +739,19 @@ public:
         packet_enqueue_observer = observer;
         packet_enqueue_observer_context = context;
     }
+
+    void set_diagnostic_sample_observer(
+        Q3U4StreamDataPlane::DiagnosticSampleObserver observer,
+        void* context) noexcept
+    {
+        diagnostic_sample_observer = observer;
+        diagnostic_sample_observer_context = context;
+    }
+
+    void emit_diagnostic_sample_for_test(std::uint8_t bridge) noexcept
+    {
+        if (bridge < layout_.bridge_count) emit_diagnostic_sample(bridges_[bridge]);
+    }
 #endif
 
     Result<StreamTerminal> terminal(const TunerAttachment& attachment) const noexcept
@@ -760,6 +823,9 @@ public:
         Session& session = sessions_[receiver];
         std::lock_guard<std::mutex> lock(session.mutex);
         if (!session.attached || session.terminal != StreamTerminal::none) return;
+#if defined(DTV_USERLAND_DIAGNOSTICS) || defined(PX4_Q3U4_STREAM_TEST_ACCESS)
+        ++session.diagnostic_wire_tei_packets;
+#endif
         session.continuity_checker.observe_untrusted_packet();
         if (session.stabilizing) {
             ++session.startup_packets;
@@ -770,6 +836,110 @@ public:
         } else {
             ++session.counters.tei_packets;
         }
+    }
+
+#if defined(DTV_USERLAND_DIAGNOSTICS) || defined(PX4_Q3U4_STREAM_TEST_ACCESS)
+    bool make_diagnostic_sample(Bridge& bridge, std::uint8_t offset,
+                                DiagnosticSample& sample) noexcept
+    {
+        const std::size_t receiver = bridge.receiver_base + offset;
+        if (!valid_receiver(receiver)) return false;
+        const Session& session = sessions_[receiver];
+        std::lock_guard<std::mutex> lock(session.mutex);
+        if (!session.attached) return false;
+        sample.bridge = static_cast<std::uint8_t>(bridge_index(receiver));
+        sample.receiver = static_cast<std::uint8_t>(receiver);
+        sample.terminal = session.terminal;
+        sample.ring_count = session.count;
+        sample.ring_capacity = session.capacity;
+        sample.tei_packets = session.stabilizing
+            ? session.startup_faults.tei_packets : session.counters.tei_packets;
+        sample.wire_tei_packets = session.diagnostic_wire_tei_packets;
+        sample.mpeg_tei_packets = sample.tei_packets >= sample.wire_tei_packets
+            ? sample.tei_packets - sample.wire_tei_packets : 0U;
+        sample.packets = session.stabilizing
+            ? session.startup_packets : session.counters.packets;
+        sample.bytes = session.counters.bytes;
+        sample.continuity_errors = session.stabilizing
+            ? session.startup_faults.continuity_errors
+            : session.counters.continuity_errors;
+        sample.queue_drops = session.counters.queue_drops;
+        sample.usb_errors = session.counters.usb_errors;
+        sample.empty_intervals = session.counters.empty_intervals;
+        const auto demux = bridge.demux_counters;
+        sample.demux_invalid_tags = demux.invalid_tag_packets;
+        sample.demux_sync_losses = demux.sync_loss_events;
+        sample.demux_input_bytes = demux.input_bytes_accepted;
+        sample.demux_emitted_packets = demux.emitted_packets;
+        sample.demux_buffered_bytes = demux.buffered_bytes;
+        return true;
+    }
+
+    void emit_diagnostic_sample(Bridge& bridge) noexcept
+    {
+        for (std::size_t offset = 0U; offset < layout_.receivers_per_bridge; ++offset) {
+            DiagnosticSample sample{};
+            if (!make_diagnostic_sample(bridge, static_cast<std::uint8_t>(offset), sample))
+                continue;
+#if defined(PX4_Q3U4_STREAM_TEST_ACCESS)
+            if (diagnostic_sample_observer != nullptr) {
+                Q3U4StreamDataPlane::DiagnosticSampleForTest test_sample{};
+                test_sample.bridge = sample.bridge;
+                test_sample.receiver = sample.receiver;
+                test_sample.attached = true;
+                test_sample.terminal = sample.terminal;
+                test_sample.ring_count = sample.ring_count;
+                test_sample.ring_capacity = sample.ring_capacity;
+                test_sample.packets = sample.packets;
+                test_sample.bytes = sample.bytes;
+                test_sample.tei_packets = sample.tei_packets;
+                test_sample.wire_tei_packets = sample.wire_tei_packets;
+                test_sample.mpeg_tei_packets = sample.mpeg_tei_packets;
+                test_sample.continuity_errors = sample.continuity_errors;
+                test_sample.queue_drops = sample.queue_drops;
+                test_sample.usb_errors = sample.usb_errors;
+                test_sample.empty_intervals = sample.empty_intervals;
+                test_sample.demux_invalid_tags = sample.demux_invalid_tags;
+                test_sample.demux_sync_losses = sample.demux_sync_losses;
+                test_sample.demux_input_bytes = sample.demux_input_bytes;
+                test_sample.demux_emitted_packets = sample.demux_emitted_packets;
+                test_sample.demux_buffered_bytes = sample.demux_buffered_bytes;
+                diagnostic_sample_observer(diagnostic_sample_observer_context, test_sample);
+                continue;
+            }
+#endif
+            dtv::userland::detail::diagnostic_log(
+                "component=q3_stream event=sample bridge=%u receiver=%u terminal=%u ring_count=%zu ring_capacity=%zu packets=%llu bytes=%llu tei_packets=%llu wire_tei_dropped=%llu mpeg_tei=%llu continuity_errors=%llu queue_drops=%llu usb_errors=%llu empty_intervals=%llu demux_invalid_tags=%zu demux_sync_losses=%zu demux_input_bytes=%zu demux_emitted_packets=%zu demux_buffered_bytes=%zu",
+                static_cast<unsigned>(sample.bridge),
+                static_cast<unsigned>(sample.receiver),
+                static_cast<unsigned>(sample.terminal), sample.ring_count,
+                sample.ring_capacity,
+                static_cast<unsigned long long>(sample.packets),
+                static_cast<unsigned long long>(sample.bytes),
+                static_cast<unsigned long long>(sample.tei_packets),
+                static_cast<unsigned long long>(sample.wire_tei_packets),
+                static_cast<unsigned long long>(sample.mpeg_tei_packets),
+                static_cast<unsigned long long>(sample.continuity_errors),
+                static_cast<unsigned long long>(sample.queue_drops),
+                static_cast<unsigned long long>(sample.usb_errors),
+                static_cast<unsigned long long>(sample.empty_intervals),
+                sample.demux_invalid_tags, sample.demux_sync_losses,
+                sample.demux_input_bytes, sample.demux_emitted_packets,
+                sample.demux_buffered_bytes);
+        }
+    }
+#endif
+
+    void maybe_sample_diagnostics(Bridge& bridge) noexcept
+    {
+#if defined(DTV_USERLAND_DIAGNOSTICS)
+        const std::uint64_t now_us = dtv::userland::detail::diagnostic_now_us();
+        if (!diagnostic_sample_due(now_us, bridge.last_diagnostic_sample_us)) return;
+        bridge.last_diagnostic_sample_us = now_us;
+        emit_diagnostic_sample(bridge);
+#else
+        (void)bridge;
+#endif
     }
 
     Result<void> enqueue(std::size_t receiver, ByteView packet) noexcept
@@ -1037,6 +1207,8 @@ public:
     void* read_wait_observer_context = nullptr;
     Q3U4StreamDataPlane::PacketEnqueueObserver packet_enqueue_observer = nullptr;
     void* packet_enqueue_observer_context = nullptr;
+    Q3U4StreamDataPlane::DiagnosticSampleObserver diagnostic_sample_observer = nullptr;
+    void* diagnostic_sample_observer_context = nullptr;
 #endif
 };
 
@@ -1216,6 +1388,24 @@ void Q3U4StreamDataPlane::set_packet_enqueue_observer_for_test(
     PacketEnqueueObserver observer, void* context) noexcept
 {
     if (impl_ != nullptr) impl_->set_packet_enqueue_observer(observer, context);
+}
+
+void Q3U4StreamDataPlane::set_diagnostic_sample_observer_for_test(
+    DiagnosticSampleObserver observer, void* context) noexcept
+{
+    if (impl_ != nullptr) impl_->set_diagnostic_sample_observer(observer, context);
+}
+
+void Q3U4StreamDataPlane::emit_diagnostic_sample_for_test(
+    std::uint8_t bridge) noexcept
+{
+    if (impl_ != nullptr) impl_->emit_diagnostic_sample_for_test(bridge);
+}
+
+bool Q3U4StreamDataPlane::diagnostic_sample_due_for_test(
+    std::uint64_t now_us, std::uint64_t last_sample_us) noexcept
+{
+    return diagnostic_sample_due(now_us, last_sample_us);
 }
 #endif
 
