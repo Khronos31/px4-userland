@@ -174,8 +174,13 @@ int main(int argc, char** argv)
         return px4_ts_exit_status(result.error(), failure_kind);
     }
     if (!flushed) {
-        std::fprintf(stderr, "output: %s\n", std::strerror(output.system_error()));
-        return px4_ts_exit_status(flushed.error(), Px4TsFailureKind::output);
+        const int exit_status = Px4TsBatchedFdOutput::finish_exit_status(
+            flushed.error(), signal.stop_requested());
+        if (exit_status != 0)
+            std::fprintf(stderr, "output: %s\n", std::strerror(output.system_error()));
+        else
+            print_counters("stream", result.value().counters);
+        return exit_status;
     }
     print_counters("stream", result.value().counters);
     return 0;

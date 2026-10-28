@@ -87,6 +87,12 @@ public:
         return flush_buffer(signal);
     }
 
+    static int finish_exit_status(Error error, bool stop_requested) noexcept
+    {
+        if (error == Error::TIMEOUT && stop_requested) return 0;
+        return px4_ts_exit_status(error, Px4TsFailureKind::output);
+    }
+
 private:
     Result<void> fail(int error) noexcept
     {
@@ -102,8 +108,17 @@ private:
         return Result<void>::failure(Error::TIMEOUT);
     }
 
+    bool stopping_at_packet_boundary(const Px4TsSignal& signal,
+                                     std::size_t offset) const noexcept
+    {
+        return packet_atomic_writes_ && offset % kPacketSize == 0U &&
+               signal.stop_requested();
+    }
+
     Result<void> flush_buffer(const Px4TsSignal& signal) noexcept
     {
+        if (buffered_ == 0U) return Result<void>::success();
+        if (stopping_at_packet_boundary(signal, 0U)) return stop();
         std::size_t offset = 0U;
         while (offset < buffered_) {
             const ssize_t written =
@@ -116,24 +131,21 @@ private:
                 written_packets_ += offset / kPacketSize -
                                     previous_offset / kPacketSize;
                 if (offset < buffered_ && signal.stop_requested()) {
-                    if (packet_atomic_writes_ && offset % kPacketSize == 0U)
-                        return stop();
+                    if (stopping_at_packet_boundary(signal, offset)) return stop();
                     return fail(EINTR);
                 }
                 continue;
             }
             if (written < 0 && errno == EINTR) {
                 if (signal.stop_requested()) {
-                    if (packet_atomic_writes_ && offset % kPacketSize == 0U)
-                        return stop();
+                    if (stopping_at_packet_boundary(signal, offset)) return stop();
                     return fail(EINTR);
                 }
                 continue;
             }
             if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
                 if (signal.stop_requested()) {
-                    if (packet_atomic_writes_ && offset % kPacketSize == 0U)
-                        return stop();
+                    if (stopping_at_packet_boundary(signal, offset)) return stop();
                     return fail(EAGAIN);
                 }
                 pollfd descriptor{fd_, POLLOUT, 0};
@@ -142,8 +154,7 @@ private:
                     polled = ::poll(&descriptor, 1U, 100);
                 } while (polled < 0 && errno == EINTR && !signal.stop_requested());
                 if (signal.stop_requested()) {
-                    if (packet_atomic_writes_ && offset % kPacketSize == 0U)
-                        return stop();
+                    if (stopping_at_packet_boundary(signal, offset)) return stop();
                     return fail(EINTR);
                 }
                 if (polled < 0) return fail(errno);
@@ -152,6 +163,9 @@ private:
                     return fail(EIO);
                 continue;
             }
+            if (written < 0 && errno == EPIPE &&
+                stopping_at_packet_boundary(signal, offset))
+                return stop();
             return fail(written < 0 ? errno : EIO);
         }
         buffered_ = 0U;

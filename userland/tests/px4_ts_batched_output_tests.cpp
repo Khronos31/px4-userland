@@ -28,6 +28,29 @@ bool partial_write_done = false;
 TestSignal* stop_after_write_signal = nullptr;
 bool stop_after_write_pipe_full = false;
 std::size_t stop_after_write_fill_packets = 0U;
+volatile std::sig_atomic_t received_stop_signal = 0;
+int signal_to_raise = 0;
+int signal_pipe_read_fd = -1;
+std::size_t signal_pipe_fill_packets = 0U;
+
+enum class SignalPipeMode {
+    fill_after_write,
+    fill_before_write,
+    close_consumer,
+};
+
+SignalPipeMode signal_pipe_mode = SignalPipeMode::fill_after_write;
+bool signal_pipe_filled = false;
+
+void test_stop_handler(int signal_number) noexcept
+{
+    received_stop_signal = signal_number;
+}
+
+class ActualSignal final : public Px4TsSignal {
+public:
+    bool stop_requested() const noexcept override { return received_stop_signal != 0; }
+};
 
 ssize_t partial_write_then_epipe(int fd, const void* bytes,
                                  std::size_t size) noexcept
@@ -62,6 +85,45 @@ ssize_t stop_when_pipe_full(int fd, const void* bytes, std::size_t size) noexcep
                stop_after_write_signal != nullptr) {
         stop_after_write_signal->stopped = true;
     }
+    return written;
+}
+
+void fill_pipe_with_packets(int fd) noexcept
+{
+    std::array<std::uint8_t, Px4TsBatchedFdOutput::kPacketSize> packet{};
+    packet[0U] = 0x47U;
+    for (;;) {
+        const ssize_t filled = ::write(fd, packet.data(), packet.size());
+        if (filled == static_cast<ssize_t>(packet.size())) {
+            ++signal_pipe_fill_packets;
+            continue;
+        }
+        break;
+    }
+    signal_pipe_filled = true;
+}
+
+ssize_t signal_pipe_write(int fd, const void* bytes, std::size_t size) noexcept
+{
+    if (signal_pipe_mode == SignalPipeMode::close_consumer) {
+        if (signal_pipe_read_fd >= 0) {
+            (void)::close(signal_pipe_read_fd);
+            signal_pipe_read_fd = -1;
+            (void)::raise(signal_to_raise);
+        }
+        return ::write(fd, bytes, size);
+    }
+    if (signal_pipe_mode == SignalPipeMode::fill_before_write &&
+        !signal_pipe_filled)
+        fill_pipe_with_packets(fd);
+
+    const ssize_t written = ::write(fd, bytes, size);
+    if (signal_pipe_mode == SignalPipeMode::fill_after_write &&
+        !signal_pipe_filled && written > 0)
+        fill_pipe_with_packets(fd);
+    if (signal_pipe_filled && written < 0 &&
+        (errno == EAGAIN || errno == EWOULDBLOCK))
+        (void)::raise(signal_to_raise);
     return written;
 }
 
@@ -184,6 +246,98 @@ bool test_stop_when_pipe_fills() noexcept
            received.size() % Px4TsBatchedFdOutput::kPacketSize == 0U;
 }
 
+bool test_real_signal_finish_path(int stop_signal, SignalPipeMode mode) noexcept
+{
+    int descriptors[2]{};
+    if (::pipe(descriptors) != 0) return false;
+    received_stop_signal = 0;
+    signal_to_raise = stop_signal;
+    signal_pipe_mode = mode;
+    signal_pipe_read_fd = descriptors[0];
+    signal_pipe_fill_packets = 0U;
+    signal_pipe_filled = false;
+    ActualSignal signal;
+    bool stopped = false;
+    px4::userland::Error observed_error = px4::userland::Error::OK;
+    std::uint64_t written_packets = 0U;
+    {
+        Px4TsBatchedFdOutput output(descriptors[1], true, signal_pipe_write);
+        if (output.ready()) {
+            std::array<std::uint8_t, Px4TsBatchedFdOutput::kPacketSize> packet{};
+            packet[0U] = 0x47U;
+            bool accepted = true;
+            const std::size_t packet_count = mode == SignalPipeMode::fill_after_write
+                ? 2U * Px4TsBatchedFdOutput::kPacketsPerWrite : 12U;
+            for (std::size_t index = 0U; index < packet_count; ++index) {
+                const auto written = output.write(
+                    dtv::userland::ByteView{packet.data(), packet.size()}, signal);
+                if (!written) {
+                    accepted = false;
+                    observed_error = written.error();
+                    break;
+                }
+            }
+            if (accepted) {
+                const auto finished = output.finish(signal);
+                if (!finished) observed_error = finished.error();
+                else observed_error = px4::userland::Error::OK;
+            }
+            stopped = observed_error == px4::userland::Error::TIMEOUT &&
+                signal.stop_requested() &&
+                Px4TsBatchedFdOutput::finish_exit_status(
+                    observed_error, signal.stop_requested()) == 0;
+            written_packets = output.written_packets();
+        }
+    }
+
+    std::vector<std::uint8_t> received;
+    if (signal_pipe_read_fd >= 0) {
+        std::array<std::uint8_t, 4096U> buffer{};
+        for (;;) {
+            const ssize_t count = ::read(signal_pipe_read_fd, buffer.data(), buffer.size());
+            if (count > 0) {
+                received.insert(received.end(), buffer.begin(),
+                                buffer.begin() + static_cast<std::size_t>(count));
+                continue;
+            }
+            if (count < 0 && errno == EINTR) continue;
+            if (count < 0) stopped = false;
+            break;
+        }
+        (void)::close(signal_pipe_read_fd);
+        signal_pipe_read_fd = -1;
+    }
+    if (mode == SignalPipeMode::close_consumer)
+        return stopped && received_stop_signal == stop_signal &&
+               written_packets == 0U;
+    return stopped && received_stop_signal == stop_signal &&
+           received.size() == (written_packets + signal_pipe_fill_packets) *
+                                  Px4TsBatchedFdOutput::kPacketSize &&
+           received.size() % Px4TsBatchedFdOutput::kPacketSize == 0U;
+}
+
+bool test_finish_epipe_without_stop() noexcept
+{
+    int descriptors[2]{};
+    if (::pipe(descriptors) != 0) return false;
+    (void)::close(descriptors[0]);
+    received_stop_signal = 0;
+    ActualSignal signal;
+    Px4TsBatchedFdOutput output(descriptors[1], true);
+    if (!output.ready()) return false;
+    std::array<std::uint8_t, Px4TsBatchedFdOutput::kPacketSize> packet{};
+    packet[0U] = 0x47U;
+    for (std::size_t index = 0U; index < 12U; ++index) {
+        if (!output.write(dtv::userland::ByteView{packet.data(), packet.size()}, signal))
+            return false;
+    }
+    const auto finished = output.finish(signal);
+    return !finished && finished.error() == px4::userland::Error::INTERNAL &&
+           output.system_error() == EPIPE &&
+           Px4TsBatchedFdOutput::finish_exit_status(
+               finished.error(), signal.stop_requested()) == 70;
+}
+
 bool test_epipe() noexcept
 {
     int descriptors[2]{};
@@ -278,6 +432,12 @@ int main()
     if (sigemptyset(&ignore_pipe.sa_mask) != 0 ||
         ::sigaction(SIGPIPE, &ignore_pipe, nullptr) != 0)
         return 1;
+    struct sigaction stop_action {};
+    stop_action.sa_handler = test_stop_handler;
+    if (sigemptyset(&stop_action.sa_mask) != 0 ||
+        ::sigaction(SIGINT, &stop_action, nullptr) != 0 ||
+        ::sigaction(SIGTERM, &stop_action, nullptr) != 0)
+        return 1;
 
     std::string path = "/tmp/px4-ts-batched-output-XXXXXX";
     std::vector<char> template_path(path.begin(), path.end());
@@ -344,6 +504,19 @@ int main()
     if (!test_pipe_output()) return fail("pipe partial-write test failed", -1, path.c_str());
     if (!test_stop_when_pipe_fills())
         return fail("stop split a pipe packet or failed to stop cleanly", -1, path.c_str());
+    for (const int stop_signal : {SIGINT, SIGTERM}) {
+        if (!test_real_signal_finish_path(stop_signal,
+                                          SignalPipeMode::fill_after_write))
+            return fail("signal during batch write did not exit cleanly", -1, path.c_str());
+        if (!test_real_signal_finish_path(stop_signal,
+                                          SignalPipeMode::fill_before_write))
+            return fail("signal during tail finish did not exit cleanly", -1, path.c_str());
+        if (!test_real_signal_finish_path(stop_signal,
+                                          SignalPipeMode::close_consumer))
+            return fail("signal and consumer close did not exit cleanly", -1, path.c_str());
+    }
+    if (!test_finish_epipe_without_stop())
+        return fail("ordinary finish EPIPE was not preserved", -1, path.c_str());
     if (!test_epipe()) return fail("EPIPE propagation test failed", -1, path.c_str());
     if (!test_partial_write_diagnostic())
         return fail("partial-write diagnostic count failed", -1, path.c_str());
