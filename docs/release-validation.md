@@ -423,7 +423,7 @@ TOOL="$WORK/tooling"; mkdir -m 700 -p "$TOOL"
 gh api -H 'Accept: application/vnd.github.raw' "repos/Khronos31/siano-userland/contents/docs/release-validation/ts-check.py?ref=$RUNBOOK_REF" > "$TOOL/ts-check.py"
 if command -v sha256sum >/dev/null 2>&1; then printf '%s  %s\n' "$HELPER_SHA256" "$TOOL/ts-check.py" | sha256sum -c -; else printf '%s  %s\n' "$HELPER_SHA256" "$TOOL/ts-check.py" | shasum -a 256 -c -; fi
 printf '%s\n' "$RUNBOOK_REF $HELPER_SHA256" > "$LOG/ts-helper-version.txt"
-QUALITY_REF='a41e1ff9bd059b1d77441664380a338de683cd9b'; QUALITY_SHA256='69db89cbae511fe849e3eec48524ed8177490002a5c18109acbbeda77a71e57d'
+QUALITY_REF='9d9d998672952e0608728fa35cc94e59eaf1b26e'; QUALITY_SHA256='8414beef6c3735ffa480a907b332a5776d9a7c734dacde9203920e18e4dce190'
 gh api -H 'Accept: application/vnd.github.raw' "repos/Khronos31/siano-userland/contents/docs/release-validation/ts-quality-check.py?ref=$QUALITY_REF" > "$TOOL/ts-quality-check.py"
 if command -v sha256sum >/dev/null 2>&1; then printf '%s  %s\n' "$QUALITY_SHA256" "$TOOL/ts-quality-check.py" | sha256sum -c -; else printf '%s  %s\n' "$QUALITY_SHA256" "$TOOL/ts-quality-check.py" | shasum -a 256 -c -; fi
 printf '%s\n' "$QUALITY_REF $QUALITY_SHA256" > "$LOG/ts-quality-helper-version.txt"
@@ -526,15 +526,37 @@ if ($parserRc -ne 0) { throw "TS parser failed: $parserRc" }
 | `px4-rx7` | receiver 7単独 | `TEI × 200 < packets`（0.5%未満） | 40件未満 |
 
 各環境でpatternごとに一度だけ実行し、複数TSでは全JSONを同じ判定へ渡す。
-表の全profileを各環境で実施する。Windows PowerShellは`python $QualityGate --profile <profile> --environment windows <scan-json...>`、macOSは`python3 "$TOOL/ts-quality-check.py" --profile <profile> --environment macos <scan-json...>`を使い、JSONと終了値を保存する。
+表の全profileを各環境で実施する。入力は`RECEIVER=PATH`形式とし、receiver 0–5同時は6個、receiver 6/7単独は各1個を渡す。Windows PowerShellとmacOSは同じ集合を使い、JSONと終了値を保存する。
 
 ```sh
 PROFILE='px4-rx0-5'; ENVIRONMENT='representative-linux'
-if python3 "$TOOL/ts-quality-check.py" --profile "$PROFILE" --environment "$ENVIRONMENT" "$LOG/rx0.ts-check.json" "$LOG/rx1.ts-check.json" "$LOG/rx2.ts-check.json" "$LOG/rx3.ts-check.json" "$LOG/rx4.ts-check.json" "$LOG/rx5.ts-check.json" > "$LOG/t15-$PROFILE.json"; then T15_RC=0; else T15_RC=$?; fi
+if python3 "$TOOL/ts-quality-check.py" --profile "$PROFILE" --environment "$ENVIRONMENT" "0=$LOG/rx0.ts-check.json" "1=$LOG/rx1.ts-check.json" "2=$LOG/rx2.ts-check.json" "3=$LOG/rx3.ts-check.json" "4=$LOG/rx4.ts-check.json" "5=$LOG/rx5.ts-check.json" > "$LOG/t15-$PROFILE.json"; then T15_RC=0; else T15_RC=$?; fi
 printf '%s\n' "$T15_RC" > "$LOG/t15-$PROFILE.rc"
 ```
 
-- **期待値/終了値:** helper outputの`packets`, `tei`, `continuity_errors`を使用する。CCは採用`tei_null_excluded`定義。境界は元整数で判定し、rateの表示丸めは合否に使わない。0 packet、scan JSON欠落/不正、一つでも不合格のTSがあればT15全体をFAILとする。T15はTEI/CC判定のみで、既存T09 parser exitやsync/framing判定を上書きしない。
+- **Windows PowerShell T15例:** 3 patternを個別に処理する。各TSでT09 helperのJSON・stderr・終了値を保存し、非0でもthrowせず同patternの数値判定へ進む。T09の記録・評価は変更しない。
+
+```powershell
+$Patterns = @(
+    @{ Profile = 'px4-rx0-5'; Receivers = @('0', '1', '2', '3', '4', '5') },
+    @{ Profile = 'px4-rx6'; Receivers = @('6') },
+    @{ Profile = 'px4-rx7'; Receivers = @('7') }
+)
+foreach ($Pattern in $Patterns) {
+    $ScanArgs = @()
+    foreach ($Receiver in $Pattern.Receivers) {
+        $Name = 'rx' + $Receiver; $Ts = Join-Path $LOG ($Name + '.ts'); $Json = Join-Path $LOG ($Name + '.ts-check.json'); $Err = Join-Path $LOG ($Name + '.ts-check.err')
+        & python $Helper $Ts 1> $Json 2> $Err; $ParserRc = $LASTEXITCODE
+        $ParserRc | Set-Content (Join-Path $LOG ($Name + '.ts-check.rc'))
+        $ScanArgs += ($Receiver + '=' + $Json)
+    }
+    $Result = Join-Path $LOG ('t15-' + $Pattern.Profile + '.json'); $ResultErr = Join-Path $LOG ('t15-' + $Pattern.Profile + '.err')
+    & python $QualityGate --profile $Pattern.Profile --environment windows @ScanArgs 1> $Result 2> $ResultErr; $T15Rc = $LASTEXITCODE
+    $T15Rc | Set-Content (Join-Path $LOG ('t15-' + $Pattern.Profile + '.rc'))
+}
+```
+
+- **期待値/終了値:** helper outputの`packets`, `tei`, `continuity_errors`を使用する。CCは採用`tei_null_excluded`定義。境界は元整数で判定し、rateの表示丸めは合否に使わない。0 packet、scan JSON欠落/不正、一つでも不合格のTSがあれば該当profileの数値判定をFAILとする。tool出力の`scope`は`tei_cc_numeric_only`、`capture_conditions_verified_by_tool`はfalse、`t15_overall`は`not_determined_by_tool`とし、数値判定とT15全体を混同しない。各profileのT15全体は版別記録で、receiver集合が揃い、各TSが記録時刻で300秒以上、0–5同時では6本の共通区間が300秒以上、各client exit・T09 rc/JSON・tool出力が記録され、数値toolがPASSの場合に限り「完了・数値PASS」とする。欠落時は未完了、数値FAIL時は「完了・数値FAIL」として人間の逐次判断を待つ。T15はTEI/CC判定のみで、既存T09 parser exitやsync/framing判定を上書きしない。
 - **停止/cleanup:** 自動再取得・自動修復はしない。不合格で停止して人間の逐次判断を待つ。
 - **記録:** profile/pattern、環境、実測capture秒数、candidate/archive/helper ref/hash、TS path/hash、全TSのpacket数/TEI数/TEI率/採用CC、clientとparser終了値、T15 JSON/終了値を版別記録から参照する。人間が不合格を受け入れる場合は理由・判断者・コメント等の参照を別に記録し、測定値・T15 JSONの自動判定を編集しない。
 
