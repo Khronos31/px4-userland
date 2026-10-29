@@ -151,6 +151,13 @@ else()
     set(DTV_USERLAND_BUILD_WINDOWS_WINSCARD OFF)
 endif()
 px4_add_dtv_userland_core()
+file(STRINGS "${dtv_userland_core_SOURCE_DIR}/CMakeLists.txt" DTV_CORE_PROJECT_LINE
+    REGEX "^project\\(dtv_userland_core VERSION ")
+if(NOT DTV_CORE_PROJECT_LINE MATCHES
+        "^project\\(dtv_userland_core VERSION ([0-9]+\\.[0-9]+\\.[0-9]+) LANGUAGES CXX\\)$")
+    message(FATAL_ERROR "Could not read dtv-userland-core project version")
+endif()
+set(DTV_USERLAND_CORE_VERSION "${CMAKE_MATCH_1}")
 
 add_library(px4_userland_core STATIC
     userland/src/card.cpp
@@ -499,6 +506,7 @@ if(WIN32)
             PX4_CORE_TUNER_SERVICE_HEADER="${dtv_userland_core_SOURCE_DIR}/adapters/host_daemon/include/px4/tuner_service.h"
             PX4_CORE_CARD_SERVICE_HEADER="${dtv_userland_core_SOURCE_DIR}/adapters/host_daemon/include/dtv/userland/host_daemon/card_service.h"
             PX4_USERLAND_PRODUCT_VERSION="${PROJECT_VERSION}"
+            DTV_USERLAND_CORE_VERSION="${DTV_USERLAND_CORE_VERSION}"
         )
         target_compile_features(px4d PRIVATE cxx_std_17)
         px4_enable_project_warnings(px4d)
@@ -1109,6 +1117,7 @@ if(TARGET px4_userland_posix_ipc)
             PX4_CORE_TUNER_SERVICE_HEADER="${dtv_userland_core_SOURCE_DIR}/adapters/host_daemon/include/px4/tuner_service.h"
             PX4_CORE_CARD_SERVICE_HEADER="${dtv_userland_core_SOURCE_DIR}/adapters/host_daemon/include/dtv/userland/host_daemon/card_service.h"
             PX4_USERLAND_PRODUCT_VERSION="${PROJECT_VERSION}"
+            DTV_USERLAND_CORE_VERSION="${DTV_USERLAND_CORE_VERSION}"
         )
         target_compile_features(px4d PRIVATE cxx_std_17)
         px4_enable_project_warnings(px4d)

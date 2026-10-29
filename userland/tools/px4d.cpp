@@ -377,6 +377,8 @@ int serve_core(const Px4dArguments& arguments, const std::string& base_serial,
     wire::Producer producer;
     (void)set_wire_text(producer.product, "px4-userland");
     (void)set_wire_text(producer.version, PX4_USERLAND_PRODUCT_VERSION);
+    producer.core_version.present = true;
+    (void)set_wire_text(producer.core_version.value, DTV_USERLAND_CORE_VERSION);
 
     listener::ContextConfig config;
     config.runtime_directory = arguments.runtime_directory;
