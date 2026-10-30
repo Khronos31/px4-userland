@@ -1019,6 +1019,17 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
         px4_userland_core dtv::host_card_t1)
     px4_enable_project_warnings(px4_card_t1_core_tests)
     add_test(NAME px4_card_t1_core_tests COMMAND px4_card_t1_core_tests)
+
+    add_executable(px4_posix_core_path_lease_tests
+        userland/tests/posix_core_path_lease_tests.cpp)
+    target_include_directories(px4_posix_core_path_lease_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/tests)
+    target_compile_features(px4_posix_core_path_lease_tests PRIVATE cxx_std_17)
+    target_link_libraries(px4_posix_core_path_lease_tests PRIVATE
+        dtv::host_runtime dtv::host_listener_context)
+    px4_enable_project_warnings(px4_posix_core_path_lease_tests)
+    add_test(NAME px4_posix_core_path_lease_tests
+             COMMAND px4_posix_core_path_lease_tests)
     add_executable(px4_userland_q3u4_power_order_tests
         userland/tests/q3u4_power_order_tests.cpp)
     target_link_libraries(px4_userland_q3u4_power_order_tests
