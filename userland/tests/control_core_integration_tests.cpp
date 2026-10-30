@@ -496,24 +496,33 @@ FrameReadOutcome read_frame_checked(w::TimedClientTransport& transport,
     error = Error::OK;
     std::array<std::uint8_t, w::kHeaderSize> header_bytes{};
     const auto read_exact = [&transport, &error](std::uint8_t* bytes,
-                                                 std::size_t size) noexcept {
+                                                 std::size_t size,
+                                                 bool header) noexcept {
         std::size_t offset = 0U;
         while (offset < size) {
             const auto read = transport.read_some({bytes + offset, size - offset},
                                                    Timeout{5000U});
             if (!read) {
+                if (header && offset == 0U && read.error() == Error::DISCONNECTED) {
+                    error = Error::DISCONNECTED;
+                    return false;
+                }
                 error = read.error();
                 return false;
             }
             if (read.value() == 0U) {
-                error = Error::DISCONNECTED;
+                if (header && offset == 0U) {
+                    error = Error::DISCONNECTED;
+                    return false;
+                }
+                error = Error::PROTOCOL_ERROR;
                 return false;
             }
             offset += read.value();
         }
         return true;
     };
-    if (!read_exact(header_bytes.data(), header_bytes.size()))
+    if (!read_exact(header_bytes.data(), header_bytes.size(), true))
         return error == Error::DISCONNECTED ? FrameReadOutcome::eof :
                                               FrameReadOutcome::error;
     const auto header = w::decode_header({header_bytes.data(), header_bytes.size()});
@@ -522,9 +531,8 @@ FrameReadOutcome read_frame_checked(w::TimedClientTransport& transport,
         return FrameReadOutcome::error;
     }
     static std::array<std::uint8_t, w::kMaxTsDataPayload> payload{};
-    if (!read_exact(payload.data(), header.value().payload_length))
-        return error == Error::DISCONNECTED ? FrameReadOutcome::eof :
-                                              FrameReadOutcome::error;
+    if (!read_exact(payload.data(), header.value().payload_length, false))
+        return FrameReadOutcome::error;
     frame.header = header.value();
     frame.payload = {payload.data(), header.value().payload_length};
     return FrameReadOutcome::frame;
@@ -534,6 +542,55 @@ bool read_frame(w::TimedClientTransport& transport, w::Frame& frame) noexcept
 {
     Error error = Error::OK;
     return read_frame_checked(transport, frame, error) == FrameReadOutcome::frame;
+}
+
+class ScriptedTransport final : public w::TimedClientTransport {
+public:
+    explicit ScriptedTransport(ByteView input) noexcept
+    {
+        size_ = std::min(input.size, bytes_.size());
+        std::memcpy(bytes_.data(), input.data, size_);
+    }
+    Result<void> write_all(ByteView, Timeout) noexcept override
+    {
+        return Result<void>::success();
+    }
+    Result<std::size_t> read_some(MutableByteView output, Timeout) noexcept override
+    {
+        if (offset_ == size_) return Result<std::size_t>::success(0U);
+        const std::size_t count = std::min(output.size, size_ - offset_);
+        std::memcpy(output.data, bytes_.data() + offset_, count);
+        offset_ += count;
+        return Result<std::size_t>::success(count);
+    }
+    std::uint64_t monotonic_ms() noexcept override { return 0U; }
+    void close() noexcept override {}
+private:
+    std::array<std::uint8_t, 32U> bytes_{};
+    std::size_t size_ = 0U;
+    std::size_t offset_ = 0U;
+};
+
+bool test_frame_read_boundary_classification()
+{
+    w::Frame frame{};
+    Error error = Error::OK;
+
+    const std::array<std::uint8_t, 3U> partial_header{};
+    ScriptedTransport header_transport(ByteView{partial_header.data(), partial_header.size()});
+    CHECK(read_frame_checked(header_transport, frame, error) == FrameReadOutcome::error);
+    CHECK(error == Error::PROTOCOL_ERROR);
+
+    std::array<std::uint8_t, w::kHeaderSize + 1U> partial_payload{};
+    const auto header = w::encode_header(
+        {w::Kind::event, w::kOpcodeTsData, 0U, 4U},
+        {partial_payload.data(), w::kHeaderSize});
+    CHECK(header);
+    ScriptedTransport payload_transport(
+        ByteView{partial_payload.data(), partial_payload.size()});
+    CHECK(read_frame_checked(payload_transport, frame, error) == FrameReadOutcome::error);
+    CHECK(error == Error::PROTOCOL_ERROR);
+    return true;
 }
 
 template <typename Request>
@@ -1337,6 +1394,9 @@ bool test_fragmented_and_duplicate_attach()
         // frame proves the second frame was accepted and must fail the test.
         CHECK(frame.header.kind == w::Kind::event &&
               frame.header.opcode == w::kOpcodeTsDataEvent);
+        const auto ts = w::decode_ts_data(frame.payload);
+        CHECK(ts && ts.value().stream_id == recording.session.stream_id &&
+              ts.value().packets.size != 0U);
     }
     CHECK(disconnected);
     data->close();
@@ -1407,6 +1467,7 @@ int main()
            test_blocked_operations_and_lanes() &&
            test_attach_failure_and_isolation() &&
            test_hup_before_attach_completion() &&
+           test_frame_read_boundary_classification() &&
            test_header_split_write_attach() &&
            test_fragmented_and_duplicate_attach() &&
            test_no_hello_and_malformed_disconnect() ? 0 : 1;
