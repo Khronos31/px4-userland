@@ -59,7 +59,7 @@
 
 上記5機種の`DeviceProfile.supports_lnb_15v`は`false`です。他の列挙対象機種は仕様上`true`ですが、
 実機未検証の機種について給電能力を実測済みと示すものではありません。対応機種でも既定は0Vであり、
-15Vの要求にはdaemonの`--allow-lnb-power`と受信時の`--lnb-voltage 15`の両方が必要です。
+LNB給電の要求にはdaemonの`--allow-lnb-power`と`px4ctl lnb-on`が必要です。TS選局は電圧要求を指定しません。
 
 ### 動作環境
 
@@ -402,7 +402,7 @@ px4-ts [--device serial:...|usb:...] [--instance TOKEN] [--receiver ID] --channe
 - その他のオプション:
   - `-o/--output PATH`: 出力先ファイルパスを指定します（`-` で標準出力、既定値: `-`）。
   - `--tune-timeout-ms N`: チューニング待機時間（ミリ秒、範囲: 100〜30000、既定値: 10000）。
-  - `--lnb-voltage 0|15`: LNB 出力電圧の要求（既定値: 0）。15V 対応機種では `px4d --allow-lnb-power` との併用が必要です。PX-M1UR と DTV02-1T1S-U / DTV02A-1T1S-U は 0V での ISDB-S 受信のみが仕様上の対象で、後者2機種は実機未検証です。
+  - LNB電圧はTS選局引数では指定できません。旧 `--lnb-voltage 0|15` は通常の引数エラーになります。独立給電はdaemonの `--allow-lnb-power` と `px4ctl lnb-on/off` で制御します。
   - `--runtime-dir PATH`: `px4d` と共有するランタイムルートディレクトリ（省略時は `$XDG_RUNTIME_DIR`）。
 
 旧 `--frequency-khz` / `--duration-seconds` / `--stream-id` は受け付けません。`--freq` は Hz、`--time` は秒、`--tsid` はTSIDを指定します。
@@ -483,7 +483,7 @@ PX-Q3U4 内蔵の IC カードリーダーは `px4d` が管理します。本ソ
 
 > [!CAUTION]
 > **LNB 15V 給電の安全に関する注意**
-> 衛星アンテナ設備への LNB 15V 給電は、配線や他の給電機器（ブースターやテレビなど）との競合を確認した上で行ってください。LNB 給電に対応する機種でも、誤給電を防ぐため、`px4ctl lnb-on`にはdaemon起動時の`--allow-lnb-power`が必要です。受信時は、daemon起動時の`--allow-lnb-power`と`px4-ts --lnb-voltage 15`の双方を明示した場合に限り15 Vを要求できます。
+> 衛星アンテナ設備への LNB 15V 給電は、配線や他の給電機器（ブースターやテレビなど）との競合を確認した上で行ってください。LNB 給電に対応する機種でも、誤給電を防ぐため、`px4ctl lnb-on`にはdaemon起動時の`--allow-lnb-power`が必要です。TS選局はLNB電圧要求を送りません。
 > PX-M1UR と DTV02-1T1S-U / DTV02A-1T1S-U の LNB 15V 給電はサポート対象外です。M1UR の実機開放端測定では、両オプションを指定しても 0V のままでした。DTV02系は未実測ですが、参照 `px4_drv` のLNB setterが無効です。candidate `2f555ff` はこれらT/S兼用機種の15V要求をopt-inの有無によらずGPIO書込み前に拒否します。公開済みv0.1.7でこれらの機種に15V要求を試した場合、修正版へ移行する前にUSBを物理的に抜き差しし、以前の給電状態を持ち越さないでください。給電が必要な設備では外部給電を別途用意してください。
 
 > [!NOTE]
