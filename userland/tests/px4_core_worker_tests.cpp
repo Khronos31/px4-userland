@@ -3,6 +3,7 @@
 #include "dtv/userland/host_runtime/control_socket.h"
 #include "px4/ipc.h"
 #include "px4/tuner_service.h"
+#include "../tools/px4d_receiver_records.h"
 #include <dtv/userland/host_daemon/card_service.h>
 
 #include <array>
@@ -180,7 +181,7 @@ w::ListResponse make_list()
     list.enclosure.present = true;
     list.enclosure.value.id = 0U;
     list.enclosure.value.identity.serial_state = w::IdentitySerialState::absent;
-    const auto records = ipc::receiver_records(8U, true);
+    const auto records = px4_product::receiver_records(8U);
     if (records) {
         list.receivers.present = true;
         list.receivers.value.count = 8U;
@@ -334,11 +335,30 @@ bool test_product_listener_worker_lanes()
     std::unique_ptr<w::TimedClientTransport> receiver0;
     w::StatusSnapshot receiver0_snapshot{};
     bool receiver0_result = false;
+    bool receiver0_after_release = false;
+    std::atomic<bool> released{false};
+    std::atomic<bool> receiver0_done{false};
     bool passed = open_client(runtime_directory, receiver0, receiver0_snapshot);
+    if (passed) {
+        const auto& receivers = receiver0_snapshot.list.receivers;
+        passed = receivers.present && receivers.value.count == 8U;
+        if (passed) {
+            const auto& receiver_0 = receivers.value.items[0U];
+            const auto& receiver_4 = receivers.value.items[4U];
+            passed = receiver_0.id == 0U && receiver_0.binding.present &&
+                receiver_0.binding.value.function_id == 1U &&
+                receiver_0.binding.value.local_id == 0U && receiver_0.systems.mask == 2U &&
+                receiver_4.id == 4U && receiver_4.binding.present &&
+                receiver_4.binding.value.function_id == 2U &&
+                receiver_4.binding.value.local_id == 0U && receiver_4.systems.mask == 2U;
+        }
+    }
     std::thread blocked;
     if (passed) {
         blocked = std::thread([&] {
             receiver0_result = acquire(*receiver0, receiver0_snapshot, 0U);
+            receiver0_after_release = released.load(std::memory_order_acquire);
+            receiver0_done.store(true, std::memory_order_release);
         });
         passed = family_ptr->tuner_.wait_opened(0U);
     }
@@ -355,10 +375,12 @@ bool test_product_listener_worker_lanes()
     if (passed) passed = card_status(*card, card_snapshot);
     if (passed) passed =
         family_ptr->card_.detections.load(std::memory_order_relaxed) != 0U;
+    if (passed) passed = !receiver0_done.load(std::memory_order_acquire);
 
+    released.store(true, std::memory_order_release);
     family_ptr->tuner_.release_receiver0();
     if (blocked.joinable()) blocked.join();
-    passed = passed && receiver0_result;
+    passed = passed && receiver0_result && receiver0_after_release;
 
     if (receiver0) receiver0->close();
     if (receiver4) receiver4->close();
