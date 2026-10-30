@@ -989,6 +989,24 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
         set_tests_properties(px4_ifd_core_tests PROPERTIES TIMEOUT 20)
     endif()
 
+    if(UNIX)
+        add_executable(px4_core_worker_tests userland/tests/px4_core_worker_tests.cpp)
+        target_include_directories(px4_core_worker_tests BEFORE PRIVATE
+            ${dtv_userland_core_SOURCE_DIR}/adapters/host_daemon/include
+            ${dtv_userland_core_SOURCE_DIR}/adapters/host_runtime/include
+            ${dtv_userland_core_SOURCE_DIR}/adapters/host_listener_context/include
+            ${dtv_userland_core_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+        )
+        target_compile_features(px4_core_worker_tests PRIVATE cxx_std_17)
+        target_link_libraries(px4_core_worker_tests PRIVATE
+            px4_userland_core
+            dtv::host_listener_context
+        )
+        px4_enable_project_warnings(px4_core_worker_tests)
+        add_test(NAME px4_core_worker_tests COMMAND px4_core_worker_tests)
+    endif()
+
     add_test(NAME px4_userland_tests COMMAND px4_userland_tests)
     add_executable(px4_userland_single_receiver_stream_tests
         userland/tests/single_receiver_stream_tests.cpp
