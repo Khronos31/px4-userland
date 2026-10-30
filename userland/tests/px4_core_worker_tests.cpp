@@ -394,9 +394,84 @@ bool test_product_listener_worker_lanes()
     return passed && !error;
 }
 
+bool test_product_listener_close_waits_for_worker()
+{
+    const auto root = std::filesystem::path("/tmp") /
+        ("px4-worker-close-" + std::to_string(static_cast<unsigned long>(::getpid())));
+    const std::string runtime_directory = root.string();
+    std::error_code error;
+    std::filesystem::create_directories(root, error);
+    CHECK(!error);
+    CHECK(::chmod(root.c_str(), 0700) == 0);
+
+    Family* family_ptr = new Family;
+    std::unique_ptr<EnclosureFamily> family(family_ptr);
+    const w::ListResponse list = make_list();
+    ContextConfig config;
+    config.runtime_directory = runtime_directory;
+    config.product = "px4-userland";
+    config.instance = "worker-test";
+    config.server.epoch = list.epoch;
+    config.server.producer = list.producer;
+    config.server.features = w::kFeatureCardService;
+    config.canonical_list = list;
+    config.context.epoch = list.epoch;
+    config.context.instance.present = true;
+    config.context.instance.value = text<64U>("worker-test");
+    config.stream_engine_epoch = 0x505834574f524bULL;
+    config.stream_arm_budget_ms = 5000U;
+    auto assembled = EnclosureContext::assemble(std::move(family),
+        std::unique_ptr<Nonce>(new Nonce), config);
+    CHECK(assembled);
+    CHECK(assembled.value()->reserve_namespace());
+    CHECK(assembled.value()->publish());
+    auto context = std::move(assembled.value());
+    std::atomic<bool> serving{true};
+    std::thread server([&] {
+        while (serving.load(std::memory_order_acquire))
+            (void)context->poll_once(Timeout{20U});
+    });
+
+    std::unique_ptr<w::TimedClientTransport> client;
+    w::StatusSnapshot snapshot{};
+    std::atomic<bool> request_done{false};
+    bool passed = open_client(runtime_directory, client, snapshot);
+    if (!passed) std::fprintf(stderr, "close-wait client setup failed\n");
+    std::thread request;
+    if (passed) {
+        request = std::thread([&] {
+            (void)acquire(*client, snapshot, 0U);
+            request_done.store(true, std::memory_order_release);
+        });
+        passed = family_ptr->tuner_.wait_opened(0U);
+        if (!passed) std::fprintf(stderr, "close-wait worker did not enter backend\n");
+    }
+
+    if (passed) {
+        const auto pending = context->close(Timeout{100U});
+        passed = pending && pending.value() == CloseState::pending;
+        if (!passed) std::fprintf(stderr, "close-wait first close did not report pending\n");
+    }
+    family_ptr->tuner_.release_receiver0();
+    if (request.joinable()) request.join();
+    const auto closed = context->close(Timeout{5000U});
+    if (!closed || closed.value() != CloseState::quiesced)
+        std::fprintf(stderr, "close-wait final close failed\n");
+    serving.store(false, std::memory_order_release);
+    server.join();
+    passed = passed && closed && closed.value() == CloseState::quiesced &&
+        request_done.load(std::memory_order_acquire);
+    if (!request_done.load(std::memory_order_acquire))
+        std::fprintf(stderr, "close-wait client request did not finish\n");
+    context.reset();
+    std::filesystem::remove_all(root, error);
+    return passed && !error;
+}
+
 }  // namespace
 
 int main()
 {
-    return test_product_listener_worker_lanes() ? 0 : 1;
+    return test_product_listener_worker_lanes() &&
+        test_product_listener_close_waits_for_worker() ? 0 : 1;
 }
