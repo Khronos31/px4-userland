@@ -8,7 +8,6 @@
 
 namespace px4::userland {
 
-#if defined(PX4_USERLAND_CORE_DAEMON_API)
 inline TunerStrictProfile px4_strict_profile(ipc::System system,
                                              bool supports_lnb_15v) noexcept
 {
@@ -46,7 +45,6 @@ inline TunerHzProgramming px4_programming(std::uint32_t frequency_khz) noexcept
     programming.programmed_hz = static_cast<std::uint64_t>(frequency_khz) * 1000U;
     return programming;
 }
-#endif
 
 }  // namespace px4::userland
 

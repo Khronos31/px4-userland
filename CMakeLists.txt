@@ -180,7 +180,6 @@ add_library(px4_userland_core STATIC
     userland/src/single_receiver_frontend.cpp
     userland/src/q3u4_card_backend.cpp
     userland/src/q3u4_tuner_backend.cpp
-    userland/src/tuner_service.cpp
     userland/src/q3u4_power.cpp
     userland/src/q3u4_lnb_power.cpp
     userland/src/tagged_ts_demux.cpp
@@ -208,7 +207,7 @@ target_include_directories(px4_userland_core
 )
 
 target_compile_features(px4_userland_core PUBLIC cxx_std_17)
-target_link_libraries(px4_userland_core PUBLIC Threads::Threads dtv::core)
+target_link_libraries(px4_userland_core PUBLIC Threads::Threads dtv::core dtv::host_tuner)
 
 function(px4_enable_project_warnings target)
     target_compile_options(${target} PRIVATE
@@ -341,7 +340,6 @@ if(PX4_ENABLE_LIBUSB)
         "$<$<CXX_COMPILER_ID:MSVC>:/FI${CMAKE_CURRENT_SOURCE_DIR}/userland/tools/px4d_core_api.h>"
     )
     target_compile_definitions(px4_userland_host_backends PRIVATE
-        PX4_CORE_TUNER_SERVICE_HEADER="${dtv_userland_core_SOURCE_DIR}/adapters/host_daemon/include/px4/tuner_service.h"
         PX4_CORE_CARD_SERVICE_HEADER="${dtv_userland_core_SOURCE_DIR}/adapters/host_daemon/include/dtv/userland/host_daemon/card_service.h"
     )
     target_link_libraries(px4_userland_host_backends PRIVATE px4_userland_device_core)
@@ -502,7 +500,6 @@ if(WIN32)
             "$<$<CXX_COMPILER_ID:MSVC>:/FI${CMAKE_CURRENT_SOURCE_DIR}/userland/tools/px4d_core_api.h>"
         )
         target_compile_definitions(px4d PRIVATE
-            PX4_CORE_TUNER_SERVICE_HEADER="${dtv_userland_core_SOURCE_DIR}/adapters/host_daemon/include/px4/tuner_service.h"
             PX4_CORE_CARD_SERVICE_HEADER="${dtv_userland_core_SOURCE_DIR}/adapters/host_daemon/include/dtv/userland/host_daemon/card_service.h"
             PX4_USERLAND_PRODUCT_VERSION="${PROJECT_VERSION}"
             DTV_USERLAND_CORE_VERSION="${DTV_USERLAND_CORE_VERSION}"
@@ -1113,7 +1110,6 @@ if(TARGET px4_userland_posix_ipc)
             "$<$<CXX_COMPILER_ID:MSVC>:/FI${CMAKE_CURRENT_SOURCE_DIR}/userland/tools/px4d_core_api.h>"
         )
         target_compile_definitions(px4d PRIVATE
-            PX4_CORE_TUNER_SERVICE_HEADER="${dtv_userland_core_SOURCE_DIR}/adapters/host_daemon/include/px4/tuner_service.h"
             PX4_CORE_CARD_SERVICE_HEADER="${dtv_userland_core_SOURCE_DIR}/adapters/host_daemon/include/dtv/userland/host_daemon/card_service.h"
             PX4_USERLAND_PRODUCT_VERSION="${PROJECT_VERSION}"
             DTV_USERLAND_CORE_VERSION="${DTV_USERLAND_CORE_VERSION}"

@@ -34,7 +34,6 @@ Result<void> Mlt5PeTunerBackend::tune_satellite(std::uint8_t receiver,
     return frontend_.tune(receiver, Cxd2856erSystem::isdb_s, frequency_khz);
 }
 
-#if defined(PX4_USERLAND_CORE_DAEMON_API)
 Result<TunerHzProgramming> Mlt5PeTunerBackend::tune_terrestrial_hz(
     std::uint8_t receiver, std::uint64_t frequency_hz,
     std::uint32_t timeout_ms) noexcept
@@ -67,7 +66,6 @@ TunerStrictProfile Mlt5PeTunerBackend::strict_profile(
     if (!receiver_supports(receiver, system)) return {};
     return px4_strict_profile(system, device_profile(model_).supports_lnb_15v);
 }
-#endif
 
 Result<bool> Mlt5PeTunerBackend::is_locked(std::uint8_t receiver, ipc::System system) noexcept
 {
@@ -140,7 +138,6 @@ Result<void> Mlt5PeTunerBackend::rollback_tune_power(std::uint8_t receiver) noex
     return lnb_power_.rollback_tune(receiver);
 }
 
-#if defined(PX4_USERLAND_CORE_DAEMON_API)
 Result<void> Mlt5PeTunerBackend::set_independent_lnb_power(bool enabled) noexcept
 {
     return lnb_power_.set_independent_power(enabled);
@@ -154,7 +151,6 @@ Mlt5PeTunerBackend::independent_lnb_power_state() noexcept
     if (state.physical_state == Q3U4LnbPhysicalState::off) return {true, false};
     return {};
 }
-#endif
 
 void Mlt5PeTunerBackend::mark_receiver_disconnected(std::uint8_t receiver) noexcept
 {

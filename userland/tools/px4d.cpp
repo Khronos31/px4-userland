@@ -621,7 +621,6 @@ public:
     {
         return inner_.rollback_tune_power(receiver);
     }
-#if defined(PX4_USERLAND_CORE_DAEMON_API)
     Result<void> set_independent_lnb_power(bool enabled) noexcept override
     {
         return inner_.set_independent_lnb_power(enabled);
@@ -630,7 +629,6 @@ public:
     {
         return inner_.independent_lnb_power_state();
     }
-#endif
     void mark_receiver_disconnected(std::uint8_t receiver) noexcept override
     {
         inner_.mark_receiver_disconnected(receiver);
