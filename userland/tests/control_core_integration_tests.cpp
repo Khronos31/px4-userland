@@ -791,7 +791,8 @@ bool test_list_card_flow_and_shutdown()
 
 
 bool send_attach(w::TimedClientTransport& transport,
-                 const w::RecordingSession& session, bool split)
+                 const w::RecordingSession& session, bool split,
+                 bool split_header = false)
 {
     w::AttachRequest attach{};
     attach.epoch = session.epoch;
@@ -808,7 +809,8 @@ bool send_attach(w::TimedClientTransport& transport,
     std::memcpy(frame.data() + w::kHeaderSize, payload.data(), size.value());
     const std::size_t total = w::kHeaderSize + size.value();
     if (!split) return transport.write_all({frame.data(), total}, Timeout{5000U}).has_value();
-    const std::size_t first = w::kHeaderSize + size.value() / 2U;
+    const std::size_t first = split_header ? w::kHeaderSize - 1U :
+                                              w::kHeaderSize + size.value() / 2U;
     return transport.write_all({frame.data(), first}, Timeout{5000U}) &&
            transport.write_all({frame.data() + first, total - first}, Timeout{5000U});
 }
@@ -820,6 +822,33 @@ bool write_attach(host::EndpointConfig endpoint, const w::RecordingSession& sess
     if (!connection) return false;
     data = std::move(connection.value());
     return send_attach(*data, session, split);
+}
+
+bool write_attach_header_split(host::EndpointConfig endpoint,
+                               const w::RecordingSession& session,
+                               std::unique_ptr<w::TimedClientTransport>& data)
+{
+    auto connection = host::connect_endpoint(endpoint, Timeout{5000U});
+    if (!connection) return false;
+    data = std::move(connection.value());
+    w::AttachRequest attach{};
+    attach.epoch = session.epoch;
+    attach.lease_id = session.lease_id;
+    attach.stream_id = session.stream_id;
+    attach.attach_token = session.attach_token;
+    std::array<std::uint8_t, 128U> payload{};
+    const auto size = w::encode_attach_request(attach, {payload.data(), payload.size()});
+    if (!size) return false;
+    std::array<std::uint8_t, w::kHeaderSize + 128U> frame{};
+    if (!w::encode_header({w::Kind::request, w::kOpcodeAttachStream, 1U,
+                           static_cast<std::uint32_t>(size.value())},
+                          {frame.data(), w::kHeaderSize})) return false;
+    std::memcpy(frame.data() + w::kHeaderSize, payload.data(), size.value());
+    const std::size_t total = w::kHeaderSize + size.value();
+    const std::size_t first = w::kHeaderSize - 1U;
+    if (!data->write_all({frame.data(), first}, Timeout{5000U})) return false;
+    std::this_thread::sleep_for(std::chrono::milliseconds(20U));
+    return data->write_all({frame.data() + first, total - first}, Timeout{5000U}).has_value();
 }
 
 bool attach_data(host::EndpointConfig endpoint, const w::RecordingSession& session,
@@ -1215,6 +1244,33 @@ bool test_hup_before_attach_completion()
     return true;
 }
 
+bool test_header_split_attach()
+{
+    Fixture fixture;
+    CHECK(fixture.start("00001205000970"));
+    auto control = host::connect_control(fixture.control_endpoint(), Timeout{5000U});
+    CHECK(control);
+    const auto options = recording_options(2U, w::System::isdb_t);
+    auto recording = w::begin_recording(*control.value(), options, Timeout{10000U});
+    CHECK(recording);
+
+    std::unique_ptr<w::TimedClientTransport> data;
+    CHECK(write_attach_header_split(fixture.stream_endpoint(), recording.session, data));
+    w::Frame response{};
+    CHECK(read_frame(*data, response));
+    CHECK(response.header.kind == w::Kind::response &&
+          response.header.opcode == w::kOpcodeAttachStream);
+
+    data->close();
+    data.reset();
+    (void)w::stop_recording(*control.value(), recording.session, Timeout{5000U});
+    control.value()->close();
+    control.value().reset();
+    fixture.stop();
+    CHECK(fixture.poll_ok());
+    return true;
+}
+
 bool test_fragmented_and_duplicate_attach()
 {
     Fixture fixture;
@@ -1232,6 +1288,29 @@ bool test_fragmented_and_duplicate_attach()
     CHECK(response.header.kind == w::Kind::response &&
           response.header.opcode == w::kOpcodeAttachStream);
 
+    // The attached data connection accepts no second inbound frame. The
+    // one-use token is rejected even on the connection that already attached.
+    CHECK(send_attach(*data, recording.session, false));
+    std::array<std::uint8_t, 4096U> closed_buffer{};
+    bool disconnected = false;
+    for (std::size_t attempt = 0U; attempt < 200U && !disconnected; ++attempt) {
+        const auto read = data->read_some(
+            MutableByteView{closed_buffer.data(), closed_buffer.size()}, Timeout{2000U});
+        if (!read) {
+            if (read.error() != Error::DISCONNECTED) {
+                std::fprintf(stderr, "second-attach close error=%u\n",
+                             static_cast<unsigned>(read.error()));
+                return false;
+            }
+            disconnected = true;
+        } else if (read.value() == 0U) {
+            disconnected = true;
+        }
+    }
+    CHECK(disconnected);
+    data->close();
+    data.reset();
+
     // Reusing the same one-use attach token must not create a second session.
     auto duplicate = host::connect_endpoint(fixture.stream_endpoint(), Timeout{5000U});
     CHECK(duplicate);
@@ -1243,8 +1322,6 @@ bool test_fragmented_and_duplicate_attach()
     CHECK(duplicate_error &&
           duplicate_error.value().error.code == static_cast<std::uint32_t>(Error::NOT_FOUND));
     duplicate.value()->close();
-    data->close();
-    data.reset();
 
     (void)w::stop_recording(*control.value(), recording.session, Timeout{5000U});
     control.value()->close();
@@ -1299,6 +1376,7 @@ int main()
            test_blocked_operations_and_lanes() &&
            test_attach_failure_and_isolation() &&
            test_hup_before_attach_completion() &&
+           test_header_split_attach() &&
            test_fragmented_and_duplicate_attach() &&
            test_no_hello_and_malformed_disconnect() ? 0 : 1;
 }
