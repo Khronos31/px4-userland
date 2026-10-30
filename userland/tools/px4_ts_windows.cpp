@@ -3,6 +3,7 @@
 #include <dtv/host_ts/px4_ts_core.h>
 #include <dtv/host_ts/px4_ts_windows_output.h>
 #include "px4/identity.h"
+#include "px4_ts_profile.h"
 #include "px4_windows_args.h"
 
 #if defined(_WIN32)
@@ -134,7 +135,8 @@ void print_counters(const char* label, const ipc::CountersPayload& counters) noe
 int main(int argc, char** argv)
 {
     static const TsClientProfile profile{
-        "px4-ts", "px4-userland", dtv::userland::identity::Product::px4, true, false,
+        "px4-ts", "px4-userland", dtv::userland::identity::Product::px4,
+        kPx4TsSerialSelectorSupported, kPx4TsPreserveInstanceCase,
         &matches_px4_serial_identity};
     const std::vector<std::string> owned =
         px4::userland::cli::windows_argv_utf8(argc, argv);
