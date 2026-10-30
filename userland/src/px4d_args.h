@@ -47,6 +47,8 @@ struct Px4dArguments final {
 Px4dArguments parse_px4d_arguments(int argc,
                                    const char* const* argv) noexcept;
 Px4dOpenMode px4d_open_mode(const Px4dArguments& arguments) noexcept;
+const std::string& px4d_selected_instance(const Px4dArguments& arguments,
+                                          const std::string& base_serial) noexcept;
 bool valid_px4d_base_serial(std::string_view value) noexcept;
 
 }  // namespace px4::userland

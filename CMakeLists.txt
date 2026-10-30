@@ -938,11 +938,12 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
         target_link_libraries(px4_ifd_tests PRIVATE
             px4_ifdhandler
             px4_userland_pcsc_ifd_core
+            dtv::host_listener_context
         )
         target_compile_definitions(px4_ifd_tests PRIVATE PX4_CORE_IFD=1)
-        if(TARGET px4_userland_posix_workers)
-            target_link_libraries(px4_ifd_tests PRIVATE px4_userland_posix_workers)
-        endif()
+        # PX4_CORE_IFD=1 exercises the Core listener path; the legacy
+        # control-server fixture and its product worker archive are not linked
+        # here. The old target and source remain for other tests.
         px4_enable_project_warnings(px4_ifd_tests)
         add_test(NAME px4_ifd_tests COMMAND px4_ifd_tests)
         add_executable(px4_ifd_presence_abi_tests
