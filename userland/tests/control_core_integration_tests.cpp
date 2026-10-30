@@ -347,7 +347,7 @@ public:
     Result<void> set_power(bool on) noexcept override
     {
         power_calls.push_back(on);
-        powered = on;
+        powered.store(on);
         return Result<void>::success();
     }
     Result<void> initialize_uart() noexcept override
@@ -361,7 +361,7 @@ public:
     }
     std::vector<bool> power_calls;
     std::size_t uart_calls = 0U;
-    bool powered = false;
+    std::atomic<bool> powered{false};
     std::atomic<bool> present{true};
 };
 
@@ -958,7 +958,9 @@ bool test_card_wire_ownership_and_generation()
                        &w::encode_begin_transaction_request));
     ++first_session.next_request_id;
     CHECK(read_frame(*first.value(), frame));
-    CHECK(frame.header.opcode == w::kOpcodeBeginTransaction);
+    CHECK(frame.header.kind == w::Kind::response &&
+          frame.header.opcode == w::kOpcodeBeginTransaction &&
+          static_cast<bool>(w::decode_begin_transaction_response(frame.payload)));
     const auto owner_disconnect = w::card_disconnect(
         *first.value(), first_session, w::Disposition::leave, Timeout{5000U});
     CHECK(owner_disconnect);
@@ -969,7 +971,8 @@ bool test_card_wire_ownership_and_generation()
                        &w::encode_begin_transaction_request));
     ++second_session.next_request_id;
     CHECK(read_frame(*second.value(), frame));
-    CHECK(frame.header.opcode == w::kOpcodeBeginTransaction &&
+    CHECK(frame.header.kind == w::Kind::response &&
+          frame.header.opcode == w::kOpcodeBeginTransaction &&
           static_cast<bool>(w::decode_begin_transaction_response(frame.payload)));
     end.key = second_key;
     CHECK(write_record(*second.value(), w::kOpcodeEndTransaction,
@@ -1014,9 +1017,16 @@ bool test_card_wire_ownership_and_generation()
     first.value()->close();
     second.value()->close();
     third.value()->close();
+
+    bool powered_off = false;
+    for (std::size_t attempt = 0U; attempt < 1000U && !powered_off; ++attempt) {
+        powered_off = !fixture.family().card_.powered.load();
+        if (!powered_off) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    CHECK(powered_off);
+
     fixture.stop();
     CHECK(fixture.poll_ok());
-    CHECK(!fixture.family().card_.powered);
     return true;
 }
 
