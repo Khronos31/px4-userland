@@ -45,7 +45,7 @@ Arguments valid_satellite_arguments()
 {
     return {"px4-ts-probe", "--base", "BASE", "--firmware", "firmware.bin", "--device", "1",
             "--receiver", "0", "--frequency-khz", "1049480", "--slot", "3",
-            "--symbol-rate", "28860", "--rolloff", "4", "--lnb-voltage", "0",
+            "--symbol-rate", "28860", "--rolloff", "4",
             "--seconds", "5", "--output", "satellite.ts", "--tune-satellite"};
 }
 
@@ -112,7 +112,7 @@ bool test_arguments()
     TS_PROBE_CHECK(satellite.valid && satellite.tune_satellite && !satellite.tune_terrestrial);
     TS_PROBE_CHECK(satellite.device == 1U && satellite.receiver == 0U && satellite.slot == 3U);
     TS_PROBE_CHECK(satellite.frequency_khz == 1049480U && satellite.symbol_rate == 28860U &&
-                   satellite.rolloff == 4U && satellite.lnb_voltage == 0U);
+                   satellite.rolloff == 4U);
 
     const Arguments help{"px4-ts-probe", "--help"};
     TS_PROBE_CHECK(parse(help).valid && parse(help).help);
@@ -219,8 +219,8 @@ bool test_arguments()
         TS_PROBE_CHECK(!parse(boundary).valid);
     }
 
-    const std::array<std::string, 4U> satellite_options{
-        "--slot", "--symbol-rate", "--rolloff", "--lnb-voltage"};
+    const std::array<std::string, 3U> satellite_options{
+        "--slot", "--symbol-rate", "--rolloff"};
     for (const std::string& option : satellite_options) {
         Arguments missing = valid_satellite_arguments();
         for (std::size_t index = 0U; index < missing.size(); ++index) {
@@ -238,6 +238,11 @@ bool test_arguments()
                              option == "--rolloff" ? "4" : "0");
         TS_PROBE_CHECK(!parse(duplicate).valid);
     }
+    for (const char* voltage : {"0", "15"}) {
+        Arguments removed = valid_satellite_arguments();
+        removed.insert(removed.end(), {"--lnb-voltage", voltage});
+        TS_PROBE_CHECK(!parse(removed).valid);
+    }
     for (const std::uint32_t slot : {12U, 255U}) {
         Arguments invalid_slot = valid_satellite_arguments();
         invalid_slot[12] = std::to_string(slot);
@@ -253,9 +258,6 @@ bool test_arguments()
         invalid_rolloff[16] = std::to_string(rolloff);
         TS_PROBE_CHECK(!parse(invalid_rolloff).valid);
     }
-    Arguments invalid_lnb = valid_satellite_arguments();
-    invalid_lnb[18] = "15";
-    TS_PROBE_CHECK(!parse(invalid_lnb).valid);
     Arguments terrestrial_satellite_option = valid_arguments();
     terrestrial_satellite_option.insert(terrestrial_satellite_option.end(),
                                         {"--slot", "3"});

@@ -91,7 +91,7 @@ void usage() noexcept
                 "   or: px4-ts-probe {--base BASE | --fd FD --fd FD [--base BASE]} "
                 "--firmware PATH --device 1 "
                 "--receiver 0 --frequency-khz F --slot N --symbol-rate 28860 "
-                "--rolloff 4 --lnb-voltage 0 --seconds N --output PATH "
+                "--rolloff 4 --seconds N --output PATH "
                 "--tune-satellite\n");
 }
 
