@@ -1026,7 +1026,7 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
         ${CMAKE_CURRENT_SOURCE_DIR}/userland/tests)
     target_compile_features(px4_posix_core_path_lease_tests PRIVATE cxx_std_17)
     target_link_libraries(px4_posix_core_path_lease_tests PRIVATE
-        dtv::host_runtime dtv::host_listener_context)
+        dtv::host_runtime)
     px4_enable_project_warnings(px4_posix_core_path_lease_tests)
     add_test(NAME px4_posix_core_path_lease_tests
              COMMAND px4_posix_core_path_lease_tests)
