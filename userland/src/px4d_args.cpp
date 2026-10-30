@@ -204,4 +204,10 @@ Px4dOpenMode px4d_open_mode(const Px4dArguments& arguments) noexcept
                                                  : Px4dOpenMode::native;
 }
 
+const std::string& px4d_selected_instance(const Px4dArguments& arguments,
+                                          const std::string& base_serial) noexcept
+{
+    return arguments.instance.empty() ? base_serial : arguments.instance;
+}
+
 }  // namespace px4::userland

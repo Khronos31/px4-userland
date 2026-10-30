@@ -360,7 +360,7 @@ int serve_core(const Px4dArguments& arguments, const std::string& base_serial,
     listener::ContextConfig config;
     config.runtime_directory = arguments.runtime_directory;
     config.product = "px4-userland";
-    config.instance = arguments.instance.empty() ? base_serial : arguments.instance;
+    config.instance = px4d_selected_instance(arguments, base_serial);
     config.access = arguments.group ? host::EndpointAccess::shared_group
                                     : host::EndpointAccess::private_user;
     config.server.epoch = epoch;

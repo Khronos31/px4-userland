@@ -3,6 +3,8 @@
 #include "px4/control_server.h"
 #include "px4/pcsc_ifd_adapter.h"
 #include "px4/tuner_service.h"
+#include "dtv/userland/host_listener_context/enclosure_context.h"
+#include "dtv/userland/wire.h"
 #include "test_temp_directory.h"
 
 extern "C" {
@@ -818,6 +820,252 @@ bool test_exported_abi_over_real_ipc()
 }
 #endif
 
+#if defined(PX4_CORE_IFD)
+namespace core_ifd {
+
+namespace hlc = dtv::userland::host_listener_context;
+namespace hr = dtv::userland::host_runtime;
+namespace w = dtv::userland::wire;
+
+template <std::size_t N>
+w::WString<N> text(const char* value)
+{
+    w::WString<N> result;
+    while (value[result.length] != '\0') {
+        result.bytes[result.length] = value[result.length];
+        ++result.length;
+    }
+    return result;
+}
+
+w::ListResponse make_list()
+{
+    w::ListResponse list;
+    list.epoch[0] = 1U;
+    list.producer.product = text<32U>("px4-userland");
+    list.producer.version = text<64U>("1");
+    list.topology.state = w::TopologyState::complete;
+    list.topology.expected_function_count.present = true;
+    list.topology.expected_function_count.value = 1U;
+    list.functions.count = 1U;
+    auto& function = list.functions.items[0U];
+    function.id = 1U;
+    function.vid = 0x1234U;
+    function.pid = 0x5678U;
+    function.mode = w::Mode::runtime;
+    function.serial_state = w::SerialState::absent;
+    function.identification_reason = w::IdentificationReason::descriptor_unreadable;
+    function.present = true;
+    list.enclosure.present = true;
+    list.enclosure.value.id = 0U;
+    list.enclosure.value.identity.serial_state = w::IdentitySerialState::absent;
+    list.receivers.present = true;
+    list.receivers.value.count = 1U;
+    auto& receiver = list.receivers.value.items[0U];
+    receiver.id = 0U;
+    receiver.systems.mask = 1U;
+    receiver.binding.present = true;
+    receiver.binding.value.function_id = 1U;
+    receiver.binding.value.local_id = 0U;
+    list.readers.present = true;
+    list.readers.value.count = 1U;
+    list.readers.value.items[0U].id = 0U;
+    return list;
+}
+
+hlc::ContextConfig make_config(const std::string& root, const std::string& instance)
+{
+    hlc::ContextConfig value;
+    value.runtime_directory = root;
+    value.product = "px4-userland";
+    value.instance = instance;
+    value.access = hr::EndpointAccess::private_user;
+    value.canonical_list = make_list();
+    value.server.epoch = value.canonical_list.epoch;
+    value.server.producer = value.canonical_list.producer;
+    value.server.features = w::kFeatureStateEvent | w::kFeatureCardService;
+    value.context.epoch = value.server.epoch;
+    value.context.state = w::ContextState::ready;
+    value.context.instance.present = true;
+    value.context.instance.value.length = instance.size();
+    std::memcpy(value.context.instance.value.bytes.data(), instance.data(),
+                instance.size());
+    value.stream_engine_epoch = 42U;
+    value.stream_arm_budget_ms = 5000U;
+    return value;
+}
+
+class Family final : public hr::EnclosureFamily {
+public:
+    Family(Backend& card, Session& session, NoopTunerBackend& tuner,
+           NoopTunerTime& time) noexcept
+        : card_(card), session_(session), tuner_(tuner), time_(time)
+    {
+    }
+    px4::userland::TunerServiceBackend& tuner_backend() noexcept override { return tuner_; }
+    px4::userland::CardServiceBackend& card_backend() noexcept override { return card_; }
+    px4::userland::CardProtocolSession& card_protocol() noexcept override { return session_; }
+    px4::userland::TunerServiceTime& time() noexcept override { return time_; }
+    px4::userland::TunerStreamControl* stream_control() noexcept override { return nullptr; }
+private:
+    Backend& card_;
+    Session& session_;
+    NoopTunerBackend& tuner_;
+    NoopTunerTime& time_;
+};
+
+class ServerRunner final {
+public:
+    explicit ServerRunner(hlc::EnclosureContext& context) noexcept : context_(context)
+    {
+        thread_ = std::thread([this]() {
+            while (!stop_.load()) {
+                if (!context_.poll_once(Timeout{10U})) {
+                    healthy_.store(false);
+                    return;
+                }
+            }
+        });
+    }
+    ~ServerRunner() noexcept { stop_and_join(); }
+    void stop_and_join() noexcept
+    {
+        stop_.store(true);
+        if (thread_.joinable()) thread_.join();
+    }
+    bool healthy() const noexcept { return healthy_.load(); }
+private:
+    hlc::EnclosureContext& context_;
+    std::atomic<bool> stop_{false};
+    std::atomic<bool> healthy_{true};
+    std::thread thread_;
+};
+
+bool test_exported_abi_over_core_listener()
+{
+    TempRuntime runtime;
+    CHECK(runtime.valid());
+    constexpr const char* serial = "00001205000960";
+    Backend backend;
+    Session session;
+    session.bind(backend);
+    NoopTunerBackend tuner_backend;
+    NoopTunerTime tuner_time;
+    auto family = std::unique_ptr<hr::EnclosureFamily>(
+        new Family(backend, session, tuner_backend, tuner_time));
+    auto assembled = hlc::EnclosureContext::assemble(
+        std::move(family), std::unique_ptr<hr::TunerNonceSource>(new NoopTunerNonce()),
+        make_config(runtime.path(), serial));
+    CHECK(assembled);
+    auto context = std::move(assembled.value());
+    CHECK(context->reserve_namespace());
+    CHECK(context->publish());
+    ServerRunner runner(*context);
+
+    std::string device_name = "px4-userland:runtime=" + runtime.path() +
+                              ":device=" + serial + ":access=user";
+    CHECK(IFDHCreateChannel(0U, 0U) == IFD_NOT_SUPPORTED);
+    CHECK(IFDHCreateChannelByName(1U, device_name.data()) == IFD_NO_SUCH_DEVICE);
+    CHECK(IFDHCreateChannelByName(0U, device_name.data()) == IFD_SUCCESS);
+    CHECK(IFDHICCPresence(0U) == IFD_ICC_PRESENT);
+
+    std::array<UCHAR, MAX_ATR_SIZE> atr{};
+    DWORD atr_length = static_cast<DWORD>(atr.size());
+    CHECK(IFDHPowerICC(0U, IFD_POWER_UP, atr.data(), &atr_length) == IFD_SUCCESS);
+    CHECK(atr_length == 2U && atr[0] == 0x3bU);
+    CHECK(IFDHSetProtocolParameters(0U, SCARD_PROTOCOL_T1, 0U, 0U, 0U, 0U) ==
+          IFD_SUCCESS);
+
+    atr.fill(0U);
+    atr_length = 0U;
+    CHECK(IFDHPowerICC(0U, IFD_RESET, atr.data(), &atr_length) == IFD_SUCCESS);
+    CHECK(atr_length == 2U && atr[0] == 0x3bU && atr[1] == 0x00U);
+
+    DWORD queried_length = 0U;
+    CHECK(IFDHGetCapabilities(0U, TAG_IFD_ATR, &queried_length, nullptr) ==
+          IFD_ERROR_INSUFFICIENT_BUFFER);
+    CHECK(queried_length == 2U);
+    std::array<UCHAR, MAX_ATR_SIZE> queried_atr{};
+    queried_length = static_cast<DWORD>(queried_atr.size());
+    CHECK(IFDHGetCapabilities(0U, TAG_IFD_ATR, &queried_length,
+                             queried_atr.data()) == IFD_SUCCESS);
+    CHECK(queried_length == 2U && queried_atr[0] == 0x3bU);
+
+    std::array<UCHAR, 5U> apdu{0x90U, 0x30U, 0x00U, 0x00U, 0x00U};
+    std::array<UCHAR, 16U> response{};
+    DWORD response_length = static_cast<DWORD>(response.size());
+    SCARD_IO_HEADER receive_pci{};
+    const std::array<DWORD, 2U> invalid_transmit_protocols{
+        0U, SCARD_PROTOCOL_T1};
+    for (const DWORD protocol : invalid_transmit_protocols) {
+        response_length = static_cast<DWORD>(response.size());
+        const SCARD_IO_HEADER invalid_pci{protocol, sizeof(SCARD_IO_HEADER)};
+        CHECK(IFDHTransmitToICC(0U, invalid_pci, apdu.data(),
+                                static_cast<DWORD>(apdu.size()), response.data(),
+                                &response_length, &receive_pci) ==
+              IFD_PROTOCOL_NOT_SUPPORTED);
+        CHECK(response_length == 0U);
+    }
+    const SCARD_IO_HEADER send_pci{kIfdTransmitProtocolT1,
+                                   sizeof(SCARD_IO_HEADER)};
+    response_length = static_cast<DWORD>(response.size());
+    CHECK(IFDHTransmitToICC(0U, send_pci, apdu.data(),
+                            static_cast<DWORD>(apdu.size()), response.data(),
+                            &response_length, &receive_pci) == IFD_SUCCESS);
+    CHECK(response_length == 2U && response[0] == 0x90U &&
+          response[1] == 0x00U &&
+          receive_pci.Protocol == kIfdTransmitProtocolT1);
+
+    atr_length = static_cast<DWORD>(atr.size());
+    CHECK(IFDHPowerICC(0U, IFD_RESET, atr.data(), &atr_length) == IFD_SUCCESS);
+    backend.present.store(false);
+    CHECK(IFDHICCPresence(0U) == IFD_ICC_NOT_PRESENT);
+    response_length = static_cast<DWORD>(response.size());
+    CHECK(IFDHTransmitToICC(0U, send_pci, apdu.data(),
+                            static_cast<DWORD>(apdu.size()), response.data(),
+                            &response_length, &receive_pci) == IFD_ICC_NOT_PRESENT);
+    CHECK(response_length == 0U);
+    backend.present.store(true);
+    CHECK(IFDHICCPresence(0U) == IFD_ICC_PRESENT);
+    // Core CardService invalidates the old card handle across removal. The
+    // IFD close may therefore report no-such-device; it still invalidates the
+    // channel, after which a fresh channel rebinds the reinserted card.
+    const RESPONSECODE close_after_removal = IFDHCloseChannel(0U);
+    CHECK(close_after_removal == IFD_SUCCESS ||
+          close_after_removal == IFD_NO_SUCH_DEVICE);
+    CHECK(IFDHCreateChannelByName(0U, device_name.data()) == IFD_SUCCESS);
+    atr_length = static_cast<DWORD>(atr.size());
+    CHECK(IFDHPowerICC(0U, IFD_RESET, atr.data(), &atr_length) == IFD_SUCCESS);
+
+    atr.fill(0xffU);
+    atr_length = static_cast<DWORD>(atr.size());
+    CHECK(IFDHPowerICC(0U, IFD_POWER_DOWN, atr.data(), &atr_length) == IFD_SUCCESS);
+    CHECK(atr_length == 0U);
+    for (const UCHAR value : atr) CHECK(value == 0U);
+    CHECK(IFDHICCPresence(0U) == IFD_ICC_PRESENT);
+    atr_length = static_cast<DWORD>(atr.size());
+    CHECK(IFDHPowerICC(0U, IFD_POWER_UP, atr.data(), &atr_length) == IFD_SUCCESS);
+
+    DWORD returned = 99U;
+    CHECK(IFDHControl(0U, 0U, nullptr, 0U, nullptr, 0U, &returned) ==
+          IFD_NOT_SUPPORTED);
+    CHECK(returned == 0U);
+    CHECK(IFDHICCPresence(1U) == IFD_NO_SUCH_DEVICE);
+    CHECK(IFDHCloseChannel(0U) == IFD_SUCCESS);
+    CHECK(IFDHCreateChannelByName(0U, device_name.data()) == IFD_SUCCESS);
+
+    runner.stop_and_join();
+    CHECK(runner.healthy());
+    const auto closed = context->close(Timeout{5000U});
+    CHECK(closed && closed.value() == hlc::CloseState::quiesced);
+    CHECK(IFDHICCPresence(0U) == IFD_COMMUNICATION_ERROR);
+    CHECK(IFDHCloseChannel(0U) == IFD_SUCCESS);
+    return true;
+}
+
+}  // namespace core_ifd
+#endif
+
 }  // namespace
 
 int main()
@@ -827,7 +1075,9 @@ int main()
         !test_adapter_state_and_recovery() ||
         !test_adapter_lazy_reconnect() ||
         !test_adapter_timeout_and_buffer_errors()
-#if !defined(PX4_CORE_IFD)
+#if defined(PX4_CORE_IFD)
+        || !core_ifd::test_exported_abi_over_core_listener()
+#else
         || !test_exported_abi_over_real_ipc()
 #endif
         ) {

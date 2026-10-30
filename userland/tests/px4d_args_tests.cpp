@@ -57,6 +57,8 @@ bool test_valid_modes()
     PX4D_CHECK(!native.usb_selector && native.usb_path_count == 0U &&
                native.instance.empty());
     PX4D_CHECK(px4d_open_mode(native) == Px4dOpenMode::native);
+    const std::string base_serial = "00001205000960";
+    PX4D_CHECK(px4d_selected_instance(native, base_serial) == base_serial);
 
     const Px4dArguments descriptors = parse(fd_arguments());
     PX4D_CHECK(descriptors.valid && descriptors.device.empty());
@@ -85,6 +87,7 @@ bool test_valid_modes()
                selected_result.usb_paths[0U] == "1-2.3" &&
                selected_result.usb_paths[1U] == "2-42" &&
                selected_result.instance == "q3u4.left");
+    PX4D_CHECK(px4d_selected_instance(selected_result, base_serial) == "q3u4.left");
 
     const Px4dArguments single_path = parse(
         {"px4d", "--device", "usb:1-2.3", "--firmware", "firmware.bin",
