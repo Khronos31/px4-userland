@@ -448,7 +448,7 @@ bool test_product_listener_close_waits_for_worker()
     }
 
     if (passed) {
-        const auto pending = context->close(Timeout{0U});
+        const auto pending = context->close(Timeout{100U});
         passed = pending && pending.value() == CloseState::pending;
         if (!passed) std::fprintf(stderr, "close-wait first close did not report pending\n");
     }
