@@ -42,7 +42,6 @@ Result<void> Q3U4FrontendTunerBackend::tune_satellite(
                                                   timeout_ms);
 }
 
-#if defined(PX4_USERLAND_CORE_DAEMON_API)
 Result<TunerHzProgramming> Q3U4FrontendTunerBackend::tune_terrestrial_hz(
     std::uint8_t receiver, std::uint64_t frequency_hz,
     std::uint32_t timeout_ms) noexcept
@@ -75,7 +74,6 @@ TunerStrictProfile Q3U4FrontendTunerBackend::strict_profile(
     if (!receiver_supports(receiver, system)) return {};
     return px4_strict_profile(system, true);
 }
-#endif
 
 Result<bool> Q3U4FrontendTunerBackend::is_locked(
     std::uint8_t receiver, ipc::System system) noexcept
@@ -147,7 +145,6 @@ Result<void> Q3U4FrontendTunerBackend::rollback_tune_power(
                                   : Result<void>::success();
 }
 
-#if defined(PX4_USERLAND_CORE_DAEMON_API)
 Result<void> Q3U4FrontendTunerBackend::set_independent_lnb_power(
     bool enabled) noexcept
 {
@@ -168,7 +165,6 @@ Q3U4FrontendTunerBackend::independent_lnb_power_state() noexcept
     }
     return {};
 }
-#endif
 
 void Q3U4FrontendTunerBackend::mark_receiver_disconnected(
     std::uint8_t receiver) noexcept

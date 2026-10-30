@@ -139,7 +139,6 @@ Result<void> SingleReceiverFrontend::tune_satellite(std::uint8_t r,std::uint32_t
     x=tc_s_.set_agc_s(true);if(!x)return x; satellite_=true; return Result<void>::success();
 }
 
-#if defined(PX4_USERLAND_CORE_DAEMON_API)
 Result<TunerHzProgramming> SingleReceiverFrontend::tune_terrestrial_hz(
     std::uint8_t receiver, std::uint64_t frequency_hz,
     std::uint32_t timeout_ms) noexcept
@@ -172,7 +171,6 @@ TunerStrictProfile SingleReceiverFrontend::strict_profile(
     if (!receiver_supports(receiver, system)) return {};
     return px4_strict_profile(system, device_profile(model_).supports_lnb_15v);
 }
-#endif
 
 Result<bool> SingleReceiverFrontend::is_locked(std::uint8_t r,ipc::System s) noexcept
 { if(r)return Result<bool>::failure(Error::INVALID_ARGUMENT); return s==ipc::System::ISDB_T?tc_t_.is_signal_locked_t():tc_s_.is_signal_locked_s(); }
