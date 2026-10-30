@@ -662,13 +662,13 @@ public:
         return Result<std::size_t>::success(2U);
     }
     bool initialized() const noexcept override { return initialized_; }
-    const CardAtr& atr() const noexcept override { return atr_; }
+    const CardAtrBytes& atr() const noexcept override { return atr_; }
     void invalidate() noexcept override { initialized_ = false; }
     void bind(Backend& backend) noexcept { backend_ = &backend; }
 private:
     bool present() const noexcept { return backend_ != nullptr && backend_->present.load(); }
     Backend* backend_ = nullptr;
-    CardAtr atr_{};
+    CardAtrBytes atr_{};
     bool initialized_ = false;
 };
 

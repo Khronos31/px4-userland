@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-2.0-only
-#include "px4d_core_api.h"
 
 #include "px4/card.h"
 #include "px4/card_service.h"

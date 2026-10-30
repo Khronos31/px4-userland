@@ -20,9 +20,9 @@
 
 namespace px4::userland {
 
-#ifndef DTV_USERLAND_HOST_DAEMON_CARD_SERVICE_H
-inline constexpr std::size_t kCardAtrMaxLength = 33U;
-#endif
+// Product T=1 ATR storage. Core's CardAtrBytes is a separate 33-byte view;
+// the two types meet only at the explicit Px4CardProtocolAdapter boundary.
+inline constexpr std::size_t kPx4CardAtrMaxLength = 33U;
 
 enum class CardEdc : std::uint8_t {
     lrc = 0,
@@ -30,7 +30,7 @@ enum class CardEdc : std::uint8_t {
 };
 
 struct CardAtr final {
-    std::array<std::uint8_t, kCardAtrMaxLength> bytes{};
+    std::array<std::uint8_t, kPx4CardAtrMaxLength> bytes{};
     std::size_t length = 0U;
     It930xCardBaudRate baud_rate = It930xCardBaudRate::baud_9600;
     std::uint8_t ifsc = 32U;

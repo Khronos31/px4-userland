@@ -125,7 +125,7 @@ struct ControlWorkerCompletion final {
     CardServiceStatus card_status{};
     CardPresenceChange card_presence{};
     CardServiceConnectResult card_connect{};
-    CardAtr atr{};
+    CardAtrBytes atr{};
     std::array<std::uint8_t, kMaxCardPayload> card_response{};
     std::size_t card_response_size = 0U;
 };

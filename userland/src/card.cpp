@@ -159,7 +159,7 @@ Result<CardAtr> parse_card_atr(ByteView bytes) noexcept
     if ((bytes.size != 0U && bytes.data == nullptr)) {
         return Result<CardAtr>::failure(Error::INVALID_ARGUMENT);
     }
-    if (bytes.size > kCardAtrMaxLength) {
+    if (bytes.size > kPx4CardAtrMaxLength) {
         return Result<CardAtr>::failure(Error::PROTOCOL_ERROR);
     }
     if (bytes.size < 2U) {
@@ -257,7 +257,7 @@ Result<CardAtr> parse_card_atr(ByteView bytes) noexcept
 
     const std::size_t expected_length =
         offset + historical_length + (has_non_t0_protocol ? 1U : 0U);
-    if (expected_length > kCardAtrMaxLength) {
+    if (expected_length > kPx4CardAtrMaxLength) {
         return Result<CardAtr>::failure(Error::PROTOCOL_ERROR);
     }
     if (bytes.size < expected_length) {
