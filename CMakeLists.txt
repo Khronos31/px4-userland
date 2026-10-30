@@ -160,7 +160,7 @@ endif()
 set(DTV_USERLAND_CORE_VERSION "${CMAKE_MATCH_1}")
 
 add_library(px4_userland_core STATIC
-    userland/src/card.cpp
+    userland/src/card_hardware.cpp
     userland/src/firmware.cpp
     userland/src/identity.cpp
     userland/src/ipc.cpp
@@ -222,7 +222,7 @@ endfunction()
 px4_enable_project_warnings(px4_userland_core)
 
 add_library(px4_userland_device_core STATIC
-    userland/src/card.cpp
+    userland/src/card_hardware.cpp
     userland/src/firmware.cpp
     userland/src/identity.cpp
     userland/src/it930x.cpp
@@ -478,6 +478,7 @@ if(WIN32)
             px4_userland_host_libusb_transport
             dtv::host_facade
             dtv::host_listener_context
+            dtv::host_card_t1
             dtv::identity
             dtv::json
             shell32
@@ -527,6 +528,7 @@ if(WIN32)
         add_executable(px4_windows_tests
             userland/tests/test_main.cpp
             userland/tests/card_tests.cpp
+            userland/src/card.cpp
             userland/tests/card_service_tests.cpp
             userland/tests/frontend_tests.cpp
             userland/tests/it930x_card_tests.cpp
@@ -838,6 +840,7 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
 
     add_executable(px4_userland_tests
         userland/tests/card_tests.cpp
+        userland/src/card.cpp
         userland/tests/card_service_tests.cpp
         userland/tests/test_main.cpp
         userland/tests/frontend_tests.cpp
@@ -1002,6 +1005,20 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
     px4_enable_project_warnings(px4_userland_tuner_service_settle_tests)
     add_test(NAME px4_userland_tuner_service_settle_tests
              COMMAND px4_userland_tuner_service_settle_tests)
+
+    add_executable(px4_card_t1_core_tests
+        userland/tests/card_tests.cpp
+        userland/tests/card_t1_core_tests_main.cpp)
+    target_compile_definitions(px4_card_t1_core_tests PRIVATE
+        PX4_CARD_TESTS_CORE_T1=1)
+    target_include_directories(px4_card_t1_core_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/tests)
+    target_compile_features(px4_card_t1_core_tests PRIVATE cxx_std_17)
+    target_link_libraries(px4_card_t1_core_tests PRIVATE
+        px4_userland_core dtv::host_card_t1)
+    px4_enable_project_warnings(px4_card_t1_core_tests)
+    add_test(NAME px4_card_t1_core_tests COMMAND px4_card_t1_core_tests)
     add_executable(px4_userland_q3u4_power_order_tests
         userland/tests/q3u4_power_order_tests.cpp)
     target_link_libraries(px4_userland_q3u4_power_order_tests
@@ -1083,6 +1100,7 @@ if(TARGET px4_userland_posix_ipc)
             px4_userland_host_backends
             px4_userland_host_libusb_transport
             dtv::host_listener_context
+            dtv::host_card_t1
             dtv::json
         )
         target_include_directories(px4d PRIVATE
@@ -1152,7 +1170,8 @@ if(PX4_BUILD_TOOLS)
         userland/tools/card_probe.cpp
         userland/src/frontend_probe_support.cpp
     )
-    target_link_libraries(px4-card-probe PRIVATE px4_userland_libusb_transport)
+    target_link_libraries(px4-card-probe PRIVATE
+        px4_userland_libusb_transport dtv::host_card_t1)
     target_include_directories(px4-card-probe PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
         ${CMAKE_CURRENT_SOURCE_DIR}/userland/src

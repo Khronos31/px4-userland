@@ -2,6 +2,7 @@
 
 #include "px4/card.h"
 #include "px4/card_service.h"
+#include "px4/card_t1_adapter.h"
 #include "px4/firmware.h"
 #include "px4/it930x.h"
 #include "px4/libusb_transport.h"
@@ -197,30 +198,6 @@ void on_stdin_eof(void*) noexcept
     px4::userland::px4d::request_stop();
 }
 #endif
-
-class Px4CardProtocolAdapter final : public CardProtocolSession {
-public:
-    explicit Px4CardProtocolAdapter(CardSession& session) noexcept : session_(session) {}
-    Result<void> initialize() noexcept override { return session_.initialize(); }
-    Result<std::size_t> transmit(ByteView apdu,
-                                 MutableByteView response) noexcept override
-    {
-        return session_.transmit(apdu, response);
-    }
-    bool initialized() const noexcept override { return session_.initialized(); }
-    const CardAtrBytes& atr() const noexcept override
-    {
-        const CardAtr& source = session_.atr();
-        atr_.length = source.length;
-        std::copy(source.bytes.begin(), source.bytes.end(), atr_.bytes.begin());
-        return atr_;
-    }
-    void invalidate() noexcept override { session_.invalidate(); }
-
-private:
-    CardSession& session_;
-    mutable CardAtrBytes atr_{};
-};
 
 class Px4EnclosureFamily final : public dtv::userland::host_runtime::EnclosureFamily {
 public:
@@ -499,8 +476,10 @@ int run_q3u4(const Px4dArguments& arguments, Q3U4Runtime& runtime,
                                     dev2_power, time, &dev1_purger, &dev2_purger);
     Q3U4CardBackend backend(dev1, enclosure);
     It930xCardHardware card_hardware(dev1);
-    CardSession card_session(card_hardware, time);
-    Px4CardProtocolAdapter protocol(card_session);
+    CardT1HardwareAdapter card_hardware_adapter(card_hardware);
+    CardT1TimeAdapter card_time_adapter(time);
+    CardT1Session card_session(card_hardware_adapter, card_time_adapter);
+    CardT1ProtocolSession protocol(card_session);
     It930xLnbPower dev1_lnb(dev1);
     It930xLnbPower dev2_lnb(dev2);
     Q3U4LnbPowerCoordinator lnb_power(
@@ -658,8 +637,10 @@ int run_w3u4(const Px4dArguments& arguments, Q3U4Runtime& runtime,
                                     time, &purger, nullptr);
     Q3U4CardBackend backend(device, enclosure);
     It930xCardHardware card_hardware(device);
-    CardSession card_session(card_hardware, time);
-    Px4CardProtocolAdapter protocol(card_session);
+    CardT1HardwareAdapter card_hardware_adapter(card_hardware);
+    CardT1TimeAdapter card_time_adapter(time);
+    CardT1Session card_session(card_hardware_adapter, card_time_adapter);
+    CardT1ProtocolSession protocol(card_session);
     It930xLnbPower lnb(device);
     Q3U4LnbPowerCoordinator lnb_power(
         lnb, lnb,
@@ -695,8 +676,10 @@ int run_mlt5pe(const Px4dArguments& arguments, Q3U4Runtime& runtime,
                            runtime.model());
     Mlt5PeCardBackend backend(device, frontend);
     It930xCardHardware card_hardware(device);
-    CardSession card_session(card_hardware, time);
-    Px4CardProtocolAdapter protocol(card_session);
+    CardT1HardwareAdapter card_hardware_adapter(card_hardware);
+    CardT1TimeAdapter card_time_adapter(time);
+    CardT1Session card_session(card_hardware_adapter, card_time_adapter);
+    CardT1ProtocolSession protocol(card_session);
     It930xLnbPower lnb(device);
     Mlt5PeLnbPowerCoordinator lnb_power(
         lnb, arguments.allow_lnb_power && device_profile(runtime.model()).supports_lnb_15v);
@@ -727,8 +710,10 @@ int run_single_receiver(const Px4dArguments& arguments, Q3U4Runtime& runtime,
     SingleReceiverFrontend frontend(bridge, device, power, time, runtime.model(),
                                     arguments.allow_lnb_power);
     It930xCardHardware card_hardware(device);
-    CardSession card_session(card_hardware, time);
-    Px4CardProtocolAdapter protocol(card_session);
+    CardT1HardwareAdapter card_hardware_adapter(card_hardware);
+    CardT1TimeAdapter card_time_adapter(time);
+    CardT1Session card_session(card_hardware_adapter, card_time_adapter);
+    CardT1ProtocolSession protocol(card_session);
     const auto stream = Q3U4StreamDataPlane::create_single_receiver(runtime.dev1(), runtime.model());
     if (!stream) {
         std::fprintf(stderr, "stream data plane: %s\n", error_string(stream.error()));
