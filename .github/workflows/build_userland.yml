@@ -16,6 +16,10 @@ on:
       - VERSION
       - .github/workflows/**
   push:
+    branches:
+      - main
+    tags:
+      - 'v*'
     paths:
       - CMakeLists.txt
       - cmake/dtv-userland-core.revision
