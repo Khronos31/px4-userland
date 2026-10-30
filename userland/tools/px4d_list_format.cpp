@@ -2,6 +2,7 @@
 #include "px4d_list_format.h"
 
 #include "px4/ipc.h"
+#include "px4d_receiver_records.h"
 
 #include <dtv/userland/discovery_json.h>
 
@@ -192,7 +193,8 @@ std::string format_device_list(const GroupingResult& grouping)
             }
         }
         out.push_back('\n');
-        const auto records = ipc::receiver_records(profile.receiver_count, profile.dual_system);
+        const auto records = px4_product::receiver_records(profile.receiver_count,
+                                                            profile.dual_system);
         if (records) {
             for (std::size_t i = 0U; i < profile.receiver_count; ++i) {
                 append_receiver_text(out, records.value()[i], profile);
@@ -275,7 +277,8 @@ Result<std::string> format_device_list_json(const GroupingResult& grouping,
             enclosure.candidates = inventory.candidates.data();
             continue;
         }
-        const auto records = ipc::receiver_records(profile.receiver_count, profile.dual_system);
+        const auto records = px4_product::receiver_records(profile.receiver_count,
+                                                            profile.dual_system);
         if (!records) return Result<std::string>::failure(records.error());
         for (std::size_t slot = 0U; slot < profile.bridge_count; ++slot) {
             if (!group.devices[slot]) continue;

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "px4d_list_format.h"
+#include "px4d_receiver_records.h"
 
 #include <cstdio>
 #include <initializer_list>
@@ -63,6 +64,54 @@ bool test_enclosures_carry_the_px4ctl_list_receiver_table()
         "receiver=3 device=1 local=3 system=ISDB-T/S lnb_15v_supported=true\n"
         "receiver=4 device=1 local=4 system=ISDB-T/S lnb_15v_supported=true\n";
     CHECK(tools::format_device_list(grouping) == expected);
+    return true;
+}
+
+bool test_px4_receiver_table_preserves_product_mapping()
+{
+    using namespace px4::userland;
+
+    const auto single = px4_product::receiver_records(1U);
+    CHECK(single && single.value()[0U].global_id == 0U &&
+          single.value()[0U].dev_id == 1U && single.value()[0U].local_id == 0U &&
+          single.value()[0U].system == ipc::System::ISDB_T);
+
+    const auto single_dual = px4_product::receiver_records(1U, true);
+    CHECK(single_dual && single_dual.value()[0U].system == ipc::System::ISDB_T_OR_S);
+    const auto dual_four = px4_product::receiver_records(4U, true);
+    CHECK(dual_four && dual_four.value()[3U].system == ipc::System::ISDB_T_OR_S);
+
+    for (const std::uint8_t count : {3U, 5U}) {
+        const auto records = px4_product::receiver_records(count);
+        CHECK(records);
+        for (std::uint8_t index = 0U; index < count; ++index) {
+            CHECK(records.value()[index].global_id == index &&
+                  records.value()[index].dev_id == 1U &&
+                  records.value()[index].local_id == index &&
+                  records.value()[index].system == ipc::System::ISDB_T_OR_S);
+        }
+    }
+
+    const auto four = px4_product::receiver_records(4U);
+    CHECK(four && four.value()[0U].system == ipc::System::ISDB_S &&
+          four.value()[1U].system == ipc::System::ISDB_S &&
+          four.value()[2U].system == ipc::System::ISDB_T &&
+          four.value()[3U].system == ipc::System::ISDB_T);
+    const auto eight = px4_product::receiver_records(8U);
+    CHECK(eight);
+    for (std::uint8_t index = 0U; index < 8U; ++index) {
+        const auto local = static_cast<std::uint8_t>(index % 4U);
+        CHECK(eight.value()[index].global_id == index &&
+              eight.value()[index].dev_id == static_cast<std::uint8_t>(index / 4U) + 1U &&
+              eight.value()[index].local_id == local &&
+              eight.value()[index].system ==
+                  (local < 2U ? ipc::System::ISDB_S : ipc::System::ISDB_T));
+    }
+
+    CHECK(!px4_product::receiver_records(0U) &&
+          !px4_product::receiver_records(2U) &&
+          !px4_product::receiver_records(6U) &&
+          !px4_product::receiver_records(9U));
     return true;
 }
 
@@ -298,6 +347,7 @@ bool test_models_are_a_static_name_and_usb_id_table()
 bool run_px4d_list_format_tests()
 {
     return test_enclosures_carry_the_px4ctl_list_receiver_table() &&
+           test_px4_receiver_table_preserves_product_mapping() &&
            test_incomplete_enclosure_keeps_its_status() &&
            test_rejected_devices_of_supported_models_only() &&
            test_nothing_connected_prints_nothing() &&

@@ -31,6 +31,7 @@
 #include "px4d_args.h"
 #include "px4d_list_format.h"
 #include "px4d_listener_error.h"
+#include "px4d_receiver_records.h"
 #include "px4d_signals.h"
 
 #include <dtv/userland/host_listener_context/enclosure_context.h>
@@ -329,7 +330,7 @@ dtv::userland::wire::ListResponse make_canonical_list(
         }
     }
 
-    const auto records = ipc::receiver_records(profile.receiver_count, dual_system);
+    const auto records = px4_product::receiver_records(profile.receiver_count, dual_system);
     if (records) {
         list.receivers.present = true;
         list.receivers.value.count = profile.receiver_count;
