@@ -230,7 +230,7 @@ bool exchange_record(w::TimedClientTransport& transport, std::uint16_t opcode,
                      Result<std::size_t> (*encode)(const Record&, MutableByteView) noexcept,
                      std::vector<std::uint8_t>& response)
 {
-    std::array<std::uint8_t, w::kMaxFrameSize> bytes{};
+    std::vector<std::uint8_t> bytes(w::kMaxFrameSize);
     const auto size = w::encode_record_frame(w::Kind::request, opcode, request_id,
         request, encode, {bytes.data(), bytes.size()});
     if (!size || !transport.write_all({bytes.data(), size.value()}, Timeout{5000U}))
