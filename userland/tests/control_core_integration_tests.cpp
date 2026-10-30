@@ -287,6 +287,13 @@ public:
         final_.terminal = static_cast<std::uint8_t>(final_terminal_);
         return Result<void>::success();
     }
+    void configure_terminal(TunerStreamTerminal terminal,
+                            TunerStreamCounters counters) noexcept
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        final_terminal_ = terminal;
+        counters_ = counters;
+    }
     Result<TunerStreamCounters> stats(const TunerAttachment& attachment) const noexcept override
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -1120,6 +1127,117 @@ bool attach_data(host::EndpointConfig endpoint, const w::RecordingSession& sessi
     return attached && attached.value().stream_id == session.stream_id;
 }
 
+bool run_terminal_case(const char* serial, TunerStreamTerminal terminal,
+                       w::StreamEndReason expected_reason,
+                       const TunerStreamCounters& counters)
+{
+    Fixture fixture;
+    CHECK(fixture.start(serial));
+    auto control = host::connect_control(fixture.control_endpoint(), Timeout{5000U});
+    CHECK(control);
+    w::RecordingOptions options{};
+    options.receiver_id = 2U;
+    options.tune.epoch = w::Uuid{};
+    options.tune.system = w::System::isdb_t;
+    options.tune.frequency_hz = 500000000U;
+    options.tune.timeout_ms = 1000U;
+    const auto recording = w::begin_recording(*control.value(), options, Timeout{10000U});
+    CHECK(recording);
+    auto session = recording.session;
+    std::unique_ptr<w::TimedClientTransport> data;
+    CHECK(attach_data(fixture.stream_endpoint(), session, data));
+    w::Frame frame{};
+    CHECK(read_frame(*data, frame));
+    CHECK(frame.header.kind == w::Kind::event &&
+          frame.header.opcode == w::kOpcodeTsDataEvent);
+
+    fixture.family().stream_.configure_terminal(terminal, counters);
+    const auto stopped = w::stop_recording(*control.value(), session, Timeout{5000U});
+    CHECK(stopped && stopped.response.final.id == session.stream_id);
+    CHECK(read_frame(*data, frame));
+    CHECK(frame.header.kind == w::Kind::event &&
+          frame.header.opcode == w::kOpcodeStreamEndEvent);
+    const auto ended = w::decode_stream_end_event(frame.payload);
+    CHECK(ended && ended.value().final.id == session.stream_id &&
+          ended.value().final.reason == expected_reason);
+    CHECK(ended.value().final.statistics.entries.count == 8U);
+
+    const auto check_counter = [&ended](std::uint8_t id, std::uint64_t value,
+                                         w::MeasureState state) {
+        for (std::size_t index = 0U;
+             index < ended.value().final.statistics.entries.count; ++index) {
+            const auto& entry = ended.value().final.statistics.entries.items[index];
+            if (entry.id != id) continue;
+            const std::uint64_t expected =
+                state == w::MeasureState::valid ? value : 0U;
+            return entry.counter.measurement.value == expected &&
+                   entry.counter.measurement.state == state;
+        }
+        return false;
+    };
+    CHECK(check_counter(w::kCounterIdTransmittedPackets, counters.packets,
+                        counters.availability[0U]));
+    CHECK(check_counter(w::kCounterIdQueueDroppedPackets, counters.queue_drops,
+                        counters.availability[5U]));
+    CHECK(check_counter(w::kCounterIdStreamBytes, counters.bytes,
+                        counters.availability[1U]));
+    CHECK(check_counter(w::kCounterIdSyncErrors, counters.sync_errors,
+                        counters.availability[2U]));
+    CHECK(check_counter(w::kCounterIdTeiPackets, counters.tei_packets,
+                        counters.availability[3U]));
+    CHECK(check_counter(w::kCounterIdContinuityErrors, counters.continuity_errors,
+                        counters.availability[4U]));
+    CHECK(check_counter(w::kCounterIdStreamUsbErrors, counters.usb_errors,
+                        counters.availability[6U]));
+    CHECK(check_counter(w::kCounterIdEmptyIntervals, counters.empty_intervals,
+                        counters.availability[7U]));
+
+    data->close();
+    data.reset();
+    CHECK(w::release_recording(*control.value(), session, Timeout{5000U}));
+    control.value()->close();
+    fixture.stop();
+    CHECK(fixture.poll_ok());
+    return true;
+}
+
+bool test_terminal_reasons_and_statistics()
+{
+    TunerStreamCounters slow{};
+    slow.packets = 11U;
+    slow.bytes = 22U;
+    slow.sync_errors = 33U;
+    slow.tei_packets = 44U;
+    slow.continuity_errors = 55U;
+    slow.queue_drops = 66U;
+    slow.usb_errors = 77U;
+    slow.empty_intervals = 88U;
+    slow.availability = {
+        w::MeasureState::valid, w::MeasureState::unknown,
+        w::MeasureState::valid, w::MeasureState::unsupported,
+        w::MeasureState::valid, w::MeasureState::valid,
+        w::MeasureState::valid, w::MeasureState::valid};
+    TunerStreamCounters usb{};
+    usb.packets = 101U;
+    usb.bytes = 202U;
+    usb.sync_errors = 303U;
+    usb.tei_packets = 404U;
+    usb.continuity_errors = 505U;
+    usb.queue_drops = 606U;
+    usb.usb_errors = 707U;
+    usb.empty_intervals = 808U;
+    usb.availability = {
+        w::MeasureState::valid, w::MeasureState::valid,
+        w::MeasureState::unknown, w::MeasureState::valid,
+        w::MeasureState::valid, w::MeasureState::unsupported,
+        w::MeasureState::valid, w::MeasureState::valid};
+
+    return run_terminal_case("00001205000972", TunerStreamTerminal::slow_consumer,
+                             w::StreamEndReason::slow_consumer, slow) &&
+           run_terminal_case("00001205000973", TunerStreamTerminal::usb_error,
+                             w::StreamEndReason::backend_error, usb);
+}
+
 bool test_tuner_flow_and_stream_end()
 {
     Fixture fixture;
@@ -1293,6 +1411,19 @@ bool begin_and_release(host::EndpointConfig endpoint, std::uint16_t receiver,
     control.value()->close();
     return stopped && released;
 }
+
+class StartCaptureBarrierGuard final {
+public:
+    explicit StartCaptureBarrierGuard(std::atomic<bool>& flag) noexcept : flag_(flag) {}
+    ~StartCaptureBarrierGuard() noexcept
+    {
+        if (active_) flag_.store(false);
+    }
+    void dismiss() noexcept { active_ = false; }
+private:
+    std::atomic<bool>& flag_;
+    bool active_ = true;
+};
 
 class BlockedOperationGuard final {
 public:
@@ -1489,6 +1620,7 @@ bool test_hup_before_attach_completion()
     Fixture fixture;
     CHECK(fixture.start("00001205000968"));
     fixture.family().tuner_.block_start_capture.store(true);
+    StartCaptureBarrierGuard barrier_guard(fixture.family().tuner_.block_start_capture);
     auto control = host::connect_control(fixture.control_endpoint(), Timeout{5000U});
     CHECK(control);
     const auto options = recording_options(2U, w::System::isdb_t);
@@ -1501,8 +1633,10 @@ bool test_hup_before_attach_completion()
     data.reset();
     fixture.family().tuner_.block_start_capture.store(false);
     // The control service must not wedge on the abandoned attach. Other
-    // receivers and a fresh connection continue to work.
+    // receivers and a fresh connection continue to work. Cleanup completion
+    // and original-lease RELEASE are tracked separately in issue #137.
     CHECK(begin_and_release(fixture.control_endpoint(), 3U, w::System::isdb_t));
+    barrier_guard.dismiss();
     control.value()->close();
     control.value().reset();
     fixture.stop();
@@ -1649,6 +1783,7 @@ int main()
 {
     return test_list_card_flow_and_shutdown() &&
            test_card_wire_ownership_and_generation() &&
+           test_terminal_reasons_and_statistics() &&
            test_tuner_flow_and_stream_end() &&
            test_blocked_operations_and_lanes() &&
            test_attach_failure_and_isolation() &&
