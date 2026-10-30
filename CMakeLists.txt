@@ -1036,6 +1036,17 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
     px4_enable_project_warnings(px4_posix_core_path_lease_tests)
     add_test(NAME px4_posix_core_path_lease_tests
              COMMAND px4_posix_core_path_lease_tests)
+    add_executable(px4_control_core_integration_tests
+        userland/tests/control_core_integration_tests.cpp)
+    target_include_directories(px4_control_core_integration_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/tools)
+    target_compile_features(px4_control_core_integration_tests PRIVATE cxx_std_17)
+    target_link_libraries(px4_control_core_integration_tests PRIVATE
+        px4_userland_core dtv::host_listener_context dtv::host_runtime)
+    px4_enable_project_warnings(px4_control_core_integration_tests)
+    add_test(NAME px4_control_core_integration_tests
+             COMMAND px4_control_core_integration_tests)
     add_executable(px4_userland_q3u4_power_order_tests
         userland/tests/q3u4_power_order_tests.cpp)
     target_link_libraries(px4_userland_q3u4_power_order_tests
