@@ -488,28 +488,52 @@ w::ListResponse make_px4_list(const w::Uuid& epoch,
     return list;
 }
 
-bool read_frame(w::TimedClientTransport& transport, w::Frame& frame) noexcept
+enum class FrameReadOutcome : std::uint8_t { frame, eof, error };
+
+FrameReadOutcome read_frame_checked(w::TimedClientTransport& transport,
+                                    w::Frame& frame, Error& error) noexcept
 {
+    error = Error::OK;
     std::array<std::uint8_t, w::kHeaderSize> header_bytes{};
-    const auto read_exact = [&transport](std::uint8_t* bytes,
-                                          std::size_t size) noexcept {
+    const auto read_exact = [&transport, &error](std::uint8_t* bytes,
+                                                 std::size_t size) noexcept {
         std::size_t offset = 0U;
         while (offset < size) {
             const auto read = transport.read_some({bytes + offset, size - offset},
                                                    Timeout{5000U});
-            if (!read || read.value() == 0U) return false;
+            if (!read) {
+                error = read.error();
+                return false;
+            }
+            if (read.value() == 0U) {
+                error = Error::DISCONNECTED;
+                return false;
+            }
             offset += read.value();
         }
         return true;
     };
-    if (!read_exact(header_bytes.data(), header_bytes.size())) return false;
+    if (!read_exact(header_bytes.data(), header_bytes.size()))
+        return error == Error::DISCONNECTED ? FrameReadOutcome::eof :
+                                              FrameReadOutcome::error;
     const auto header = w::decode_header({header_bytes.data(), header_bytes.size()});
-    if (!header || header.value().payload_length > w::kMaxTsDataPayload) return false;
+    if (!header || header.value().payload_length > w::kMaxTsDataPayload) {
+        error = Error::PROTOCOL_ERROR;
+        return FrameReadOutcome::error;
+    }
     static std::array<std::uint8_t, w::kMaxTsDataPayload> payload{};
-    if (!read_exact(payload.data(), header.value().payload_length)) return false;
+    if (!read_exact(payload.data(), header.value().payload_length))
+        return error == Error::DISCONNECTED ? FrameReadOutcome::eof :
+                                              FrameReadOutcome::error;
     frame.header = header.value();
     frame.payload = {payload.data(), header.value().payload_length};
-    return true;
+    return FrameReadOutcome::frame;
+}
+
+bool read_frame(w::TimedClientTransport& transport, w::Frame& frame) noexcept
+{
+    Error error = Error::OK;
+    return read_frame_checked(transport, frame, error) == FrameReadOutcome::frame;
 }
 
 template <typename Request>
@@ -1244,7 +1268,10 @@ bool test_hup_before_attach_completion()
     return true;
 }
 
-bool test_header_split_attach()
+// This covers two writes split at header-1, but does not observe the
+// listener receiving the first partial header. That old-case observation
+// remains partial/unreached; see issue #132.
+bool test_header_split_write_attach()
 {
     Fixture fixture;
     CHECK(fixture.start("00001205000970"));
@@ -1291,21 +1318,25 @@ bool test_fragmented_and_duplicate_attach()
     // The attached data connection accepts no second inbound frame. The
     // one-use token is rejected even on the connection that already attached.
     CHECK(send_attach(*data, recording.session, false));
-    std::array<std::uint8_t, 4096U> closed_buffer{};
     bool disconnected = false;
     for (std::size_t attempt = 0U; attempt < 200U && !disconnected; ++attempt) {
-        const auto read = data->read_some(
-            MutableByteView{closed_buffer.data(), closed_buffer.size()}, Timeout{2000U});
-        if (!read) {
-            if (read.error() != Error::DISCONNECTED) {
-                std::fprintf(stderr, "second-attach close error=%u\n",
-                             static_cast<unsigned>(read.error()));
-                return false;
-            }
+        w::Frame frame{};
+        Error error = Error::OK;
+        const auto outcome = read_frame_checked(*data, frame, error);
+        if (outcome == FrameReadOutcome::eof) {
             disconnected = true;
-        } else if (read.value() == 0U) {
-            disconnected = true;
+            break;
         }
+        if (outcome == FrameReadOutcome::error) {
+            std::fprintf(stderr, "second-attach read error=%u\n",
+                         static_cast<unsigned>(error));
+            return false;
+        }
+        // Only the already-started stream's TS_DATA events may precede the
+        // close. An ATTACH success response, error response, or any other
+        // frame proves the second frame was accepted and must fail the test.
+        CHECK(frame.header.kind == w::Kind::event &&
+              frame.header.opcode == w::kOpcodeTsDataEvent);
     }
     CHECK(disconnected);
     data->close();
@@ -1376,7 +1407,7 @@ int main()
            test_blocked_operations_and_lanes() &&
            test_attach_failure_and_isolation() &&
            test_hup_before_attach_completion() &&
-           test_header_split_attach() &&
+           test_header_split_write_attach() &&
            test_fragmented_and_duplicate_attach() &&
            test_no_hello_and_malformed_disconnect() ? 0 : 1;
 }
