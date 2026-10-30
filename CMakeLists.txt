@@ -227,7 +227,6 @@ add_library(px4_userland_device_core STATIC
     userland/src/card.cpp
     userland/src/firmware.cpp
     userland/src/identity.cpp
-    userland/src/ipc.cpp
     userland/src/it930x.cpp
     userland/src/it930x_protocol.cpp
     userland/src/bridge_i2c.cpp
