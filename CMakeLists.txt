@@ -910,9 +910,14 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
     endif()
 
     add_executable(px4-ts-product-cli-tests
-        userland/tests/px4_ts_product_cli_tests.cpp)
+        userland/tests/px4_ts_product_cli_tests.cpp
+        userland/src/px4d_args.cpp)
+    target_include_directories(px4-ts-product-cli-tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/tools)
     target_link_libraries(px4-ts-product-cli-tests PRIVATE
-        dtv::host_ts dtv::tuning)
+        dtv::host_ts dtv::tuning px4_userland_core)
     target_compile_features(px4-ts-product-cli-tests PRIVATE cxx_std_17)
     px4_enable_project_warnings(px4-ts-product-cli-tests)
     add_test(NAME px4-ts-product-cli-tests COMMAND px4-ts-product-cli-tests)

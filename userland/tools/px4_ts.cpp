@@ -2,6 +2,7 @@
 #include <dtv/host_ts/px4_ts_core.h>
 #include "px4/identity.h"
 #include "px4_ts_batched_output.h"
+#include "px4_ts_profile.h"
 
 #include <cerrno>
 #include <chrono>
@@ -113,7 +114,8 @@ void print_counters(const char* label, const ipc::CountersPayload& counters) noe
 int main(int argc, char** argv)
 {
     static const TsClientProfile profile{
-        "px4-ts", "px4-userland", dtv::userland::identity::Product::px4, true, false,
+        "px4-ts", "px4-userland", dtv::userland::identity::Product::px4,
+        kPx4TsSerialSelectorSupported, kPx4TsPreserveInstanceCase,
         &matches_px4_serial_identity};
     const Px4TsArguments arguments =
         parse_px4_ts_product_arguments(argc, const_cast<const char* const*>(argv), profile);
