@@ -464,7 +464,7 @@ bool test_adapter_state_and_recovery()
     CHECK(adapter.power(0U, IfdPowerAction::reset,
                         MutableByteView{atr.data(), atr.size()}, atr_length) ==
           IfdResult::success);
-    CHECK(state.resets == 1U);
+    CHECK(state.card_connects == 3U && state.resets == 0U);
 
     atr_length = atr.size();
     CHECK(adapter.power(0U, IfdPowerAction::power_down,
@@ -472,7 +472,7 @@ bool test_adapter_state_and_recovery()
           IfdResult::success);
     CHECK(atr_length == 0U && state.disconnects == 1U);
     CHECK(adapter.close_channel(0U) == IfdResult::success);
-    CHECK(state.closes == 2U);
+    CHECK(state.closes == 3U);
 
     state.status_error = Error::OK;
     CHECK(adapter.create_channel_by_name(0U, name) == IfdResult::success);
@@ -497,7 +497,7 @@ bool test_adapter_state_and_recovery()
     CHECK(adapter.presence(0U) == IfdResult::communication_error);
     state.factory_connect_error = Error::UNSUPPORTED;
     CHECK(adapter.presence(0U) == IfdResult::communication_error);
-    CHECK(state.factory_connects == 11U && state.closes == 8U);
+    CHECK(state.factory_connects == 12U && state.closes == 9U);
     return true;
 }
 
@@ -659,6 +659,7 @@ public:
         if (!initialized_ || apdu.size == 0U || response.size < 2U) {
             return Result<std::size_t>::failure(Error::INVALID_ARGUMENT);
         }
+        ++transmits;
         response.data[0] = 0x90U;
         response.data[1] = 0x00U;
         return Result<std::size_t>::success(2U);
@@ -667,6 +668,7 @@ public:
     const CardAtrBytes& atr() const noexcept override { return atr_; }
     void invalidate() noexcept override { initialized_ = false; }
     void bind(Backend& backend) noexcept { backend_ = &backend; }
+    std::atomic<std::size_t> transmits{0U};
 private:
     bool present() const noexcept { return backend_ != nullptr && backend_->present.load(); }
     Backend* backend_ = nullptr;
@@ -1016,6 +1018,7 @@ bool test_exported_abi_over_core_listener()
           response[1] == 0x00U &&
           receive_pci.Protocol == kIfdTransmitProtocolT1);
 
+    const std::size_t transmits_before_removal = session.transmits.load();
     atr_length = static_cast<DWORD>(atr.size());
     CHECK(IFDHPowerICC(0U, IFD_RESET, atr.data(), &atr_length) == IFD_SUCCESS);
     backend.present.store(false);
@@ -1024,18 +1027,44 @@ bool test_exported_abi_over_core_listener()
     CHECK(IFDHTransmitToICC(0U, send_pci, apdu.data(),
                             static_cast<DWORD>(apdu.size()), response.data(),
                             &response_length, &receive_pci) == IFD_ICC_NOT_PRESENT);
-    CHECK(response_length == 0U);
+    CHECK(response_length == 0U &&
+          session.transmits.load() == transmits_before_removal);
+
+    const hr::EndpointConfig endpoint{runtime.path(), "px4-userland", serial,
+                                      hr::EndpointAccess::private_user};
+    auto exclusive_transport = hr::connect_control(endpoint, Timeout{5000U});
+    CHECK(exclusive_transport);
+    w::CardClientOptions exclusive_options{};
+    exclusive_options.reader_id = 0U;
+    exclusive_options.share = w::Share::exclusive;
+    const std::string_view product = "px4-userland";
+    exclusive_options.expected_product = ByteView{
+        reinterpret_cast<const std::uint8_t*>(product.data()), product.size()};
+    exclusive_options.expected_instance = ByteView{
+        reinterpret_cast<const std::uint8_t*>(serial), std::strlen(serial)};
+    const auto exclusive = w::begin_card(*exclusive_transport.value(),
+                                         exclusive_options, Timeout{5000U});
+    CHECK(!exclusive && exclusive.error != dtv::userland::Error::BUSY);
+
     backend.present.store(true);
     CHECK(IFDHICCPresence(0U) == IFD_ICC_PRESENT);
-    // Core CardService invalidates the old card handle across removal. The
-    // IFD close may therefore report no-such-device; it still invalidates the
-    // channel, after which a fresh channel rebinds the reinserted card.
-    const RESPONSECODE close_after_removal = IFDHCloseChannel(0U);
-    CHECK(close_after_removal == IFD_SUCCESS ||
-          close_after_removal == IFD_NO_SUCH_DEVICE);
-    CHECK(IFDHCreateChannelByName(0U, device_name.data()) == IFD_SUCCESS);
+    response_length = static_cast<DWORD>(response.size());
+    CHECK(IFDHTransmitToICC(0U, send_pci, apdu.data(),
+                            static_cast<DWORD>(apdu.size()), response.data(),
+                            &response_length, &receive_pci) == IFD_ICC_NOT_PRESENT);
+    CHECK(response_length == 0U &&
+          session.transmits.load() == transmits_before_removal);
     atr_length = static_cast<DWORD>(atr.size());
     CHECK(IFDHPowerICC(0U, IFD_RESET, atr.data(), &atr_length) == IFD_SUCCESS);
+    CHECK(atr_length == 2U && atr[0] == 0x3bU && atr[1] == 0x00U);
+    response_length = static_cast<DWORD>(response.size());
+    CHECK(IFDHTransmitToICC(0U, send_pci, apdu.data(),
+                            static_cast<DWORD>(apdu.size()), response.data(),
+                            &response_length, &receive_pci) == IFD_SUCCESS);
+    CHECK(response_length == 2U && session.transmits.load() ==
+          transmits_before_removal + 1U);
+    CHECK(IFDHCloseChannel(0U) == IFD_SUCCESS);
+    CHECK(IFDHCreateChannelByName(0U, device_name.data()) == IFD_SUCCESS);
 
     atr.fill(0xffU);
     atr_length = static_cast<DWORD>(atr.size());
