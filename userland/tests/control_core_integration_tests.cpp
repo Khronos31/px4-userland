@@ -347,7 +347,7 @@ public:
     Result<void> set_power(bool on) noexcept override
     {
         power_calls.push_back(on);
-        powered = on;
+        powered.store(on);
         return Result<void>::success();
     }
     Result<void> initialize_uart() noexcept override
@@ -361,7 +361,7 @@ public:
     }
     std::vector<bool> power_calls;
     std::size_t uart_calls = 0U;
-    bool powered = false;
+    std::atomic<bool> powered{false};
     std::atomic<bool> present{true};
 };
 
@@ -871,6 +871,165 @@ bool test_list_card_flow_and_shutdown()
 }
 
 
+bool test_card_wire_ownership_and_generation()
+{
+    Fixture fixture;
+    CHECK(fixture.start("00001205000971"));
+    auto first = host::connect_control(fixture.control_endpoint(), Timeout{5000U});
+    auto second = host::connect_control(fixture.control_endpoint(), Timeout{5000U});
+    auto third = host::connect_control(fixture.control_endpoint(), Timeout{5000U});
+    CHECK(first && second && third);
+
+    w::CardClientOptions options;
+    options.reader_id = 0U;
+    const auto first_open = w::begin_card(*first.value(), options, Timeout{5000U});
+    const auto second_open = w::begin_card(*second.value(), options, Timeout{5000U});
+    CHECK(first_open && second_open);
+    auto first_session = first_open.session;
+    auto second_session = second_open.session;
+    CHECK(first_session.card_handle != second_session.card_handle);
+
+    const auto initial = w::card_status(*first.value(), first_session, Timeout{5000U});
+    CHECK(initial && initial.response.present);
+    CHECK(initial.response.current_generation == first_session.bound_generation);
+
+    w::CardHandleKey first_key{};
+    first_key.epoch = first_session.epoch;
+    first_key.reader_id = first_session.reader_id;
+    first_key.bound_generation = first_session.bound_generation;
+    first_key.card_handle = first_session.card_handle;
+    w::CardHandleKey second_key = first_key;
+    second_key.card_handle = second_session.card_handle;
+
+    w::BeginTransactionRequest begin{};
+    begin.key = first_key;
+    CHECK(write_record(*first.value(), w::kOpcodeBeginTransaction,
+                       first_session.next_request_id, begin,
+                       &w::encode_begin_transaction_request));
+    ++first_session.next_request_id;
+    w::Frame frame{};
+    CHECK(read_frame(*first.value(), frame));
+    CHECK(frame.header.opcode == w::kOpcodeBeginTransaction &&
+          static_cast<bool>(w::decode_begin_transaction_response(frame.payload)));
+
+    const std::array<std::uint8_t, 2U> apdu{{0x00U, 0x84U}};
+    w::CardTransmitRequest competing{};
+    competing.key = second_key;
+    competing.command.length = static_cast<std::uint32_t>(apdu.size());
+    std::memcpy(competing.command.bytes.data(), apdu.data(), apdu.size());
+    CHECK(write_record(*second.value(), w::kOpcodeCardTransmit,
+                       second_session.next_request_id, competing,
+                       &w::encode_card_transmit_request));
+    ++second_session.next_request_id;
+    CHECK(read_frame(*second.value(), frame));
+    CHECK(frame.header.kind == w::Kind::error_response);
+    const auto competing_error = w::decode_error_response(frame.payload);
+    CHECK(competing_error &&
+          competing_error.value().error.code == static_cast<std::uint32_t>(Error::BUSY));
+
+    w::EndTransactionRequest end{};
+    end.key = first_key;
+    end.disposition = w::Disposition::leave;
+    CHECK(write_record(*first.value(), w::kOpcodeEndTransaction,
+                       first_session.next_request_id, end,
+                       &w::encode_end_transaction_request));
+    ++first_session.next_request_id;
+    CHECK(read_frame(*first.value(), frame));
+    CHECK(frame.header.opcode == w::kOpcodeEndTransaction && frame.payload.size == 0U);
+
+    w::CardReconnectRequest upgrade{};
+    upgrade.key = second_key;
+    upgrade.share = w::Share::exclusive;
+    upgrade.preferred_protocols = 1U;
+    CHECK(write_record(*second.value(), w::kOpcodeCardReconnect,
+                       second_session.next_request_id, upgrade,
+                       &w::encode_card_reconnect_request));
+    ++second_session.next_request_id;
+    CHECK(read_frame(*second.value(), frame));
+    CHECK(frame.header.kind == w::Kind::error_response);
+    const auto upgrade_error = w::decode_error_response(frame.payload);
+    CHECK(upgrade_error &&
+          upgrade_error.value().error.code == static_cast<std::uint32_t>(Error::BUSY));
+
+    // The transaction owner disconnects; its transaction must be released.
+    begin.key = first_key;
+    CHECK(write_record(*first.value(), w::kOpcodeBeginTransaction,
+                       first_session.next_request_id, begin,
+                       &w::encode_begin_transaction_request));
+    ++first_session.next_request_id;
+    CHECK(read_frame(*first.value(), frame));
+    CHECK(frame.header.kind == w::Kind::response &&
+          frame.header.opcode == w::kOpcodeBeginTransaction &&
+          static_cast<bool>(w::decode_begin_transaction_response(frame.payload)));
+    const auto owner_disconnect = w::card_disconnect(
+        *first.value(), first_session, w::Disposition::leave, Timeout{5000U});
+    CHECK(owner_disconnect);
+
+    begin.key = second_key;
+    CHECK(write_record(*second.value(), w::kOpcodeBeginTransaction,
+                       second_session.next_request_id, begin,
+                       &w::encode_begin_transaction_request));
+    ++second_session.next_request_id;
+    CHECK(read_frame(*second.value(), frame));
+    CHECK(frame.header.kind == w::Kind::response &&
+          frame.header.opcode == w::kOpcodeBeginTransaction &&
+          static_cast<bool>(w::decode_begin_transaction_response(frame.payload)));
+    end.key = second_key;
+    CHECK(write_record(*second.value(), w::kOpcodeEndTransaction,
+                       second_session.next_request_id, end,
+                       &w::encode_end_transaction_request));
+    ++second_session.next_request_id;
+    CHECK(read_frame(*second.value(), frame));
+    CHECK(frame.header.opcode == w::kOpcodeEndTransaction);
+
+    // An observed removal/reinsert changes the generation; the old handle is
+    // stale and a fresh connect succeeds.
+    fixture.family().card_.present.store(false);
+    const auto removed = w::card_status(*second.value(), second_session, Timeout{5000U});
+    CHECK(removed && !removed.response.present);
+    CHECK(removed.response.current_generation != second_session.bound_generation);
+    fixture.family().card_.present.store(true);
+    const auto reinserted = w::card_status(*second.value(), second_session, Timeout{5000U});
+    CHECK(reinserted && reinserted.response.present);
+
+    competing.key = second_key;
+    CHECK(write_record(*second.value(), w::kOpcodeCardTransmit,
+                       second_session.next_request_id, competing,
+                       &w::encode_card_transmit_request));
+    ++second_session.next_request_id;
+    CHECK(read_frame(*second.value(), frame));
+    CHECK(frame.header.kind == w::Kind::error_response);
+    const auto stale_error = w::decode_error_response(frame.payload);
+    CHECK(stale_error &&
+          (stale_error.value().error.code ==
+               static_cast<std::uint32_t>(Error::CARD_REMOVED) ||
+           stale_error.value().error.code ==
+               static_cast<std::uint32_t>(Error::NOT_FOUND)));
+
+    const auto fresh = w::begin_card(*third.value(), options, Timeout{5000U});
+    CHECK(fresh);
+    auto fresh_session = fresh.session;
+    CHECK(fresh_session.bound_generation == reinserted.response.current_generation);
+    const auto fresh_disconnect = w::card_disconnect(
+        *third.value(), fresh_session, w::Disposition::leave, Timeout{5000U});
+    CHECK(fresh_disconnect);
+
+    first.value()->close();
+    second.value()->close();
+    third.value()->close();
+
+    bool powered_off = false;
+    for (std::size_t attempt = 0U; attempt < 1000U && !powered_off; ++attempt) {
+        powered_off = !fixture.family().card_.powered.load();
+        if (!powered_off) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    CHECK(powered_off);
+
+    fixture.stop();
+    CHECK(fixture.poll_ok());
+    return true;
+}
+
 bool send_attach(w::TimedClientTransport& transport,
                  const w::RecordingSession& session, bool split,
                  bool split_header = false)
@@ -1185,8 +1344,34 @@ bool test_blocked_operations_and_lanes()
     auto status_control = host::connect_control(fixture.control_endpoint(),
                                                 Timeout{5000U});
     CHECK(status_control);
-    CHECK(w::fetch_status(*status_control.value(), Timeout{5000U}));
+    const auto lane_status = w::fetch_status(*status_control.value(), Timeout{5000U});
+    CHECK(lane_status);
+    w::ListRequest list_request{};
+    list_request.epoch = lane_status.snapshot.list.epoch;
+    CHECK(write_record(*status_control.value(), w::kOpcodeList, 11U,
+                       list_request, &w::encode_list_request));
+    w::Frame lane_frame{};
+    CHECK(read_frame(*status_control.value(), lane_frame));
+    CHECK(lane_frame.header.opcode == w::kOpcodeList);
+    const auto lane_list = w::decode_list_response(lane_frame.payload);
+    CHECK(lane_list && lane_list.value().receivers.present &&
+          lane_list.value().receivers.value.count == 8U);
     status_control.value()->close();
+
+    auto card_control = host::connect_control(fixture.control_endpoint(),
+                                              Timeout{5000U});
+    CHECK(card_control);
+    w::CardClientOptions card_options;
+    card_options.reader_id = 0U;
+    const auto card_open = w::begin_card(*card_control.value(), card_options,
+                                         Timeout{5000U});
+    CHECK(card_open);
+    auto card_session = card_open.session;
+    const auto card_close = w::card_disconnect(
+        *card_control.value(), card_session, w::Disposition::leave, Timeout{5000U});
+    CHECK(card_close);
+    card_control.value()->close();
+    CHECK(!acquire_done.load());
 
     blocked_control.value()->close();
     fixture.family().tuner_.block_acquire.store(false);
@@ -1463,6 +1648,7 @@ bool test_no_hello_and_malformed_disconnect()
 int main()
 {
     return test_list_card_flow_and_shutdown() &&
+           test_card_wire_ownership_and_generation() &&
            test_tuner_flow_and_stream_end() &&
            test_blocked_operations_and_lanes() &&
            test_attach_failure_and_isolation() &&
