@@ -24,6 +24,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <pthread.h>
@@ -951,6 +952,41 @@ bool test_tuner_flow_and_stream_end()
 }
 
 
+class LargeStackThread final {
+public:
+    ~LargeStackThread() noexcept { join(); }
+    bool start(std::function<void()> work)
+    {
+        work_ = std::move(work);
+        pthread_attr_t attributes;
+        if (pthread_attr_init(&attributes) != 0) return false;
+        const bool stack_ok =
+            pthread_attr_setstacksize(&attributes, 8U * 1024U * 1024U) == 0;
+        const bool started = stack_ok &&
+            pthread_create(&thread_, &attributes, &LargeStackThread::entry, this) == 0;
+        pthread_attr_destroy(&attributes);
+        started_ = started;
+        return started;
+    }
+    void join() noexcept
+    {
+        if (started_) {
+            pthread_join(thread_, nullptr);
+            started_ = false;
+        }
+    }
+
+private:
+    static void* entry(void* value)
+    {
+        static_cast<LargeStackThread*>(value)->work_();
+        return nullptr;
+    }
+    std::function<void()> work_;
+    pthread_t thread_{};
+    bool started_ = false;
+};
+
 bool wait_flag(const std::atomic<bool>& flag)
 {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
@@ -1000,12 +1036,13 @@ bool test_blocked_operations_and_lanes()
     fixture.family().tuner_.block_acquire.store(true);
     std::atomic<bool> acquire_done{false};
     bool acquire_ok = false;
-    std::thread acquire_thread([&] {
+    LargeStackThread acquire_thread;
+    CHECK(acquire_thread.start([&] {
         const auto options = recording_options(0U, w::System::isdb_s);
         acquire_ok = static_cast<bool>(w::begin_recording(
             *blocked_control.value(), options, Timeout{10000U}));
         acquire_done.store(true);
-    });
+    }));
     CHECK(wait_flag(fixture.family().tuner_.acquire_entered));
 
     // A second receiver lane must stay usable while receiver 0 blocks.
@@ -1038,12 +1075,13 @@ bool test_blocked_operations_and_lanes()
     fixture.family().tuner_.block_tune.store(true);
     std::atomic<bool> tune_done{false};
     bool tune_ok = false;
-    std::thread tune_thread([&] {
+    LargeStackThread tune_thread;
+    CHECK(tune_thread.start([&] {
         const auto options = recording_options(0U, w::System::isdb_s);
         tune_ok = static_cast<bool>(w::begin_recording(
             *tune_control.value(), options, Timeout{10000U}));
         tune_done.store(true);
-    });
+    }));
     CHECK(wait_flag(fixture.family().tuner_.tune_entered));
     tune_control.value()->close();
     fixture.family().tuner_.block_tune.store(false);
