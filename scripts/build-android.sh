@@ -8,12 +8,15 @@ abi=aarch64
 output=
 evidence=
 libusb_source_input=
+core_source=${DTV_USERLAND_CORE_SOURCE_DIR:-}
 
 usage()
 {
     printf '%s\n' \
         "usage: $0 --abi aarch64|arm64-v8a|armv7a|armeabi-v7a|x86_64 --output DIR" \
-        "          [--evidence DIR] [--libusb-source DIR]"
+        "          [--evidence DIR] [--libusb-source DIR]" \
+        "          environment: PX4_ANDROID_BUILD_JOBS=N (positive integer; default: detected CPUs)" \
+        "          DTV_USERLAND_CORE_SOURCE_DIR=DIR (explicit source; CMake validates and reports unpinned)"
 }
 
 while [ "$#" -gt 0 ]; do
@@ -55,6 +58,16 @@ done
     printf '%s\n' '--evidence requires the pinned libusb download, not --libusb-source' >&2
     exit 2
 }
+[ -z "$evidence" ] || [ -z "$core_source" ] || {
+    printf '%s\n' '--evidence cannot use an unpinned DTV_USERLAND_CORE_SOURCE_DIR override' >&2
+    exit 2
+}
+if [ -n "$core_source" ]; then
+    case "$core_source" in
+    /*) ;;
+    *) core_source=$(pwd -P)/$core_source ;;
+    esac
+fi
 case "$abi" in
 arm64-v8a|aarch64)
     abi=arm64-v8a
@@ -83,6 +96,24 @@ x86_64)
     ;;
 esac
 
+if [ "${PX4_ANDROID_BUILD_JOBS+x}" = x ]; then
+    jobs=$PX4_ANDROID_BUILD_JOBS
+    case "$jobs" in
+    ''|*[!0-9]*)
+        printf '%s\n' 'PX4_ANDROID_BUILD_JOBS must be a positive integer' >&2
+        exit 2
+        ;;
+    esac
+    case "$jobs" in
+    *[1-9]*) ;;
+    *)
+        printf '%s\n' 'PX4_ANDROID_BUILD_JOBS must be a positive integer' >&2
+        exit 2
+        ;;
+    esac
+else
+    jobs=
+fi
 ndk=${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}
 [ -n "$ndk" ] && [ -d "$ndk" ] || {
     printf '%s\n' 'ANDROID_NDK_HOME must point to NDK r26 or newer' >&2
@@ -225,7 +256,9 @@ else
     tar -xjf "$archive" -C "$work"
 fi
 
-jobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '%s' 2)
+if [ -z "$jobs" ]; then
+    jobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '%s' 2)
+fi
 env -i \
     PATH="$host_path" \
     TMPDIR="$work/tmp" \
@@ -265,6 +298,10 @@ if find "$prefix/lib" -maxdepth 1 -type f \( -name '*.so' -o -name '*.dylib' \) 
 fi
 
 ndk_cmake=$ndk/build/cmake/android.toolchain.cmake
+set --
+if [ -n "$core_source" ]; then
+    set -- "-DDTV_USERLAND_CORE_SOURCE_DIR=$core_source"
+fi
 env -i \
     PATH=/usr/bin:/bin \
     TMPDIR="$work/tmp" \
@@ -287,7 +324,8 @@ env -i \
         -DPX4_BUILD_ANDROID_LINKCHECK=ON \
         -DPX4_ANDROID_LINK_MAP_DIR="$link_map_dir" \
         -DPX4_LIBUSB_INCLUDE_DIR="$prefix/include/libusb-1.0" \
-        -DPX4_LIBUSB_LIBRARY="$prefix/lib/libusb-1.0.a"
+        -DPX4_LIBUSB_LIBRARY="$prefix/lib/libusb-1.0.a" \
+        "$@"
 env -i \
     PATH="$host_path" \
     TMPDIR="$work/tmp" \
