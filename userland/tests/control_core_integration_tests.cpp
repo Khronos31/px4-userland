@@ -1025,6 +1025,29 @@ bool begin_and_release(host::EndpointConfig endpoint, std::uint16_t receiver,
     return stopped && released;
 }
 
+class BlockedOperationGuard final {
+public:
+    BlockedOperationGuard(std::atomic<bool>& blocked, LargeStackThread& thread,
+                          Fixture& fixture) noexcept
+        : blocked_(blocked), thread_(thread), fixture_(fixture)
+    {
+    }
+    ~BlockedOperationGuard() noexcept
+    {
+        if (!active_) return;
+        blocked_.store(false);
+        thread_.join();
+        fixture_.stop();
+    }
+    void dismiss() noexcept { active_ = false; }
+
+private:
+    std::atomic<bool>& blocked_;
+    LargeStackThread& thread_;
+    Fixture& fixture_;
+    bool active_ = true;
+};
+
 bool test_blocked_operations_and_lanes()
 {
     Fixture fixture;
@@ -1037,6 +1060,8 @@ bool test_blocked_operations_and_lanes()
     std::atomic<bool> acquire_done{false};
     bool acquire_ok = false;
     LargeStackThread acquire_thread;
+    BlockedOperationGuard acquire_guard(fixture.family().tuner_.block_acquire,
+                                        acquire_thread, fixture);
     CHECK(acquire_thread.start([&] {
         const auto options = recording_options(0U, w::System::isdb_s);
         acquire_ok = static_cast<bool>(w::begin_recording(
@@ -1056,6 +1081,7 @@ bool test_blocked_operations_and_lanes()
     blocked_control.value()->close();
     fixture.family().tuner_.block_acquire.store(false);
     acquire_thread.join();
+    acquire_guard.dismiss();
     CHECK(acquire_done.load() && !acquire_ok);
     blocked_control.value().reset();
 
@@ -1076,6 +1102,8 @@ bool test_blocked_operations_and_lanes()
     std::atomic<bool> tune_done{false};
     bool tune_ok = false;
     LargeStackThread tune_thread;
+    BlockedOperationGuard tune_guard(fixture.family().tuner_.block_tune,
+                                     tune_thread, fixture);
     CHECK(tune_thread.start([&] {
         const auto options = recording_options(0U, w::System::isdb_s);
         tune_ok = static_cast<bool>(w::begin_recording(
@@ -1086,6 +1114,7 @@ bool test_blocked_operations_and_lanes()
     tune_control.value()->close();
     fixture.family().tuner_.block_tune.store(false);
     tune_thread.join();
+    tune_guard.dismiss();
     CHECK(tune_done.load() && !tune_ok);
     tune_control.value().reset();
 
