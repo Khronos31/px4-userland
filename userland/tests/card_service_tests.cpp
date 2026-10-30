@@ -100,7 +100,7 @@ public:
     }
 
     bool initialized() const noexcept override { return initialized_; }
-    const CardAtr& atr() const noexcept override { return atr_; }
+    const CardAtrBytes& atr() const noexcept override { return atr_; }
     void invalidate() noexcept override
     {
         ++invalidate_calls;
@@ -114,7 +114,7 @@ public:
     std::size_t invalidate_calls = 0U;
 
 private:
-    CardAtr atr_{};
+    CardAtrBytes atr_{};
     bool initialized_ = false;
 };
 

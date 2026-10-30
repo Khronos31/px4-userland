@@ -43,11 +43,11 @@ public:
         return Result<std::size_t>::failure(Error::UNSUPPORTED);
     }
     bool initialized() const noexcept override { return false; }
-    const CardAtr& atr() const noexcept override { return atr_; }
+    const CardAtrBytes& atr() const noexcept override { return atr_; }
     void invalidate() noexcept override {}
 
 private:
-    CardAtr atr_{};
+    CardAtrBytes atr_{};
 };
 
 class Nonce final : public TunerNonceSource {

@@ -161,7 +161,6 @@ set(DTV_USERLAND_CORE_VERSION "${CMAKE_MATCH_1}")
 
 add_library(px4_userland_core STATIC
     userland/src/card.cpp
-    userland/src/card_service.cpp
     userland/src/firmware.cpp
     userland/src/identity.cpp
     userland/src/ipc.cpp
@@ -207,7 +206,7 @@ target_include_directories(px4_userland_core
 )
 
 target_compile_features(px4_userland_core PUBLIC cxx_std_17)
-target_link_libraries(px4_userland_core PUBLIC Threads::Threads dtv::core dtv::host_tuner)
+target_link_libraries(px4_userland_core PUBLIC Threads::Threads dtv::core dtv::host_tuner dtv::host_workers)
 
 function(px4_enable_project_warnings target)
     target_compile_options(${target} PRIVATE
@@ -335,13 +334,6 @@ if(PX4_ENABLE_LIBUSB)
         ${CMAKE_CURRENT_SOURCE_DIR}/userland/tools
     )
     target_compile_features(px4_userland_host_backends PRIVATE cxx_std_17)
-    target_compile_options(px4_userland_host_backends PRIVATE
-        "$<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-include${CMAKE_CURRENT_SOURCE_DIR}/userland/tools/px4d_core_api.h>"
-        "$<$<CXX_COMPILER_ID:MSVC>:/FI${CMAKE_CURRENT_SOURCE_DIR}/userland/tools/px4d_core_api.h>"
-    )
-    target_compile_definitions(px4_userland_host_backends PRIVATE
-        PX4_CORE_CARD_SERVICE_HEADER="${dtv_userland_core_SOURCE_DIR}/adapters/host_daemon/include/dtv/userland/host_daemon/card_service.h"
-    )
     target_link_libraries(px4_userland_host_backends PRIVATE px4_userland_device_core)
     px4_enable_project_warnings(px4_userland_host_backends)
 endif()
@@ -495,12 +487,7 @@ if(WIN32)
             ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
             ${CMAKE_CURRENT_SOURCE_DIR}/userland/tools
         )
-        target_compile_options(px4d PRIVATE
-            "$<$<CXX_COMPILER_ID:GNU,Clang>:-include${CMAKE_CURRENT_SOURCE_DIR}/userland/tools/px4d_core_api.h>"
-            "$<$<CXX_COMPILER_ID:MSVC>:/FI${CMAKE_CURRENT_SOURCE_DIR}/userland/tools/px4d_core_api.h>"
-        )
         target_compile_definitions(px4d PRIVATE
-            PX4_CORE_CARD_SERVICE_HEADER="${dtv_userland_core_SOURCE_DIR}/adapters/host_daemon/include/dtv/userland/host_daemon/card_service.h"
             PX4_USERLAND_PRODUCT_VERSION="${PROJECT_VERSION}"
             DTV_USERLAND_CORE_VERSION="${DTV_USERLAND_CORE_VERSION}"
         )
@@ -1105,12 +1092,7 @@ if(TARGET px4_userland_posix_ipc)
             ${dtv_userland_core_SOURCE_DIR}/adapters/host_daemon/include
             ${dtv_userland_core_SOURCE_DIR}/include
         )
-        target_compile_options(px4d PRIVATE
-            "$<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-include${CMAKE_CURRENT_SOURCE_DIR}/userland/tools/px4d_core_api.h>"
-            "$<$<CXX_COMPILER_ID:MSVC>:/FI${CMAKE_CURRENT_SOURCE_DIR}/userland/tools/px4d_core_api.h>"
-        )
         target_compile_definitions(px4d PRIVATE
-            PX4_CORE_CARD_SERVICE_HEADER="${dtv_userland_core_SOURCE_DIR}/adapters/host_daemon/include/dtv/userland/host_daemon/card_service.h"
             PX4_USERLAND_PRODUCT_VERSION="${PROJECT_VERSION}"
             DTV_USERLAND_CORE_VERSION="${DTV_USERLAND_CORE_VERSION}"
         )

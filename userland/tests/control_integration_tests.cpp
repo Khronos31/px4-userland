@@ -722,12 +722,12 @@ public:
         return Result<std::size_t>::success(2U);
     }
     bool initialized() const noexcept override { return initialized_; }
-    const CardAtr& atr() const noexcept override { return atr_; }
+    const CardAtrBytes& atr() const noexcept override { return atr_; }
     void invalidate() noexcept override { initialized_ = false; }
     std::size_t initialize_calls = 0U;
     std::size_t transmit_calls = 0U;
 private:
-    CardAtr atr_{};
+    CardAtrBytes atr_{};
     bool initialized_ = false;
 };
 

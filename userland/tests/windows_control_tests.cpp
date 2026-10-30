@@ -80,12 +80,12 @@ public:
         return Result<std::size_t>::success(2U);
     }
     bool initialized() const noexcept override { return initialized_; }
-    const CardAtr& atr() const noexcept override { return atr_; }
+    const CardAtrBytes& atr() const noexcept override { return atr_; }
     void invalidate() noexcept override { initialized_ = false; }
 
 private:
     bool initialized_ = false;
-    CardAtr atr_{};
+    CardAtrBytes atr_{};
 };
 
 template <typename Payload>
