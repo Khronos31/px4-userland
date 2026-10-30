@@ -9,6 +9,7 @@ if "$root/scripts/build-android.sh" --abi unsupported --output "/tmp/px4-userlan
     printf '%s\n' 'build-android.sh accepted an unsupported ABI' >&2
     exit 1
 fi
+sh "$root/scripts/test-android-build-controls.sh"
 "$root/scripts/verify-android-elf.sh" --self-test >/dev/null
 android_block=$(awk '
     $0 == "  android-api-24:" { in_job = 1; next }
