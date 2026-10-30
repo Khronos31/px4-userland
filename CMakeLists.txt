@@ -1005,6 +1005,20 @@ if(PX4_BUILD_TESTS AND NOT WIN32)
     px4_enable_project_warnings(px4_userland_tuner_service_settle_tests)
     add_test(NAME px4_userland_tuner_service_settle_tests
              COMMAND px4_userland_tuner_service_settle_tests)
+
+    add_executable(px4_card_t1_core_tests
+        userland/tests/card_tests.cpp
+        userland/tests/card_t1_core_tests_main.cpp)
+    target_compile_definitions(px4_card_t1_core_tests PRIVATE
+        PX4_CARD_TESTS_CORE_T1=1)
+    target_include_directories(px4_card_t1_core_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/tests)
+    target_compile_features(px4_card_t1_core_tests PRIVATE cxx_std_17)
+    target_link_libraries(px4_card_t1_core_tests PRIVATE
+        px4_userland_core dtv::host_card_t1)
+    px4_enable_project_warnings(px4_card_t1_core_tests)
+    add_test(NAME px4_card_t1_core_tests COMMAND px4_card_t1_core_tests)
     add_executable(px4_userland_q3u4_power_order_tests
         userland/tests/q3u4_power_order_tests.cpp)
     target_link_libraries(px4_userland_q3u4_power_order_tests
@@ -1156,7 +1170,8 @@ if(PX4_BUILD_TOOLS)
         userland/tools/card_probe.cpp
         userland/src/frontend_probe_support.cpp
     )
-    target_link_libraries(px4-card-probe PRIVATE px4_userland_libusb_transport)
+    target_link_libraries(px4-card-probe PRIVATE
+        px4_userland_libusb_transport dtv::host_card_t1)
     target_include_directories(px4-card-probe PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
         ${CMAKE_CURRENT_SOURCE_DIR}/userland/src

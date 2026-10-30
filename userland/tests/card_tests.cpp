@@ -7,6 +7,7 @@
 // Source snapshot maintained by tsukumijima.
 // SPDX-License-Identifier: GPL-2.0-only
 #include "px4/card.h"
+#include "card_t1_test_session.h"
 
 #include <algorithm>
 #include <array>
@@ -386,7 +387,7 @@ public:
 bool test_known_atrs_and_parameters()
 {
     for (const auto* known : {&kBcasAtr1, &kBcasAtr2}) {
-        const auto parsed = parse_card_atr(view(*known));
+        const auto parsed = test_parse_card_atr(view(*known));
         CHECK(parsed);
         CHECK(parsed.value().length == known->size());
         CHECK(parsed.value().baud_rate == It930xCardBaudRate::baud_19200);
@@ -398,7 +399,7 @@ bool test_known_atrs_and_parameters()
 
     constexpr std::array<std::uint8_t, 8U> crc_atr{
         0x3bU, 0x80U, 0x91U, 0x01U, 0x51U, 0x40U, 0x01U, 0x00U};
-    const auto crc = parse_card_atr(view(crc_atr));
+    const auto crc = test_parse_card_atr(view(crc_atr));
     CHECK(crc && crc.value().ifsc == 0x40U && crc.value().edc == CardEdc::crc);
     return true;
 }
@@ -406,28 +407,28 @@ bool test_known_atrs_and_parameters()
 bool test_parse_failures()
 {
     constexpr std::array<std::uint8_t, 3U> partial{0x3bU, 0xf0U, 0x12U};
-    CHECK(!parse_card_atr(view(partial)) &&
-          parse_card_atr(view(partial)).error() == Error::NOT_READY);
+    CHECK(!test_parse_card_atr(view(partial)) &&
+          test_parse_card_atr(view(partial)).error() == Error::NOT_READY);
 
     constexpr std::array<std::uint8_t, 2U> bad_ts{0x00U, 0x00U};
-    CHECK(!parse_card_atr(view(bad_ts)) &&
-          parse_card_atr(view(bad_ts)).error() == Error::PROTOCOL_ERROR);
+    CHECK(!test_parse_card_atr(view(bad_ts)) &&
+          test_parse_card_atr(view(bad_ts)).error() == Error::PROTOCOL_ERROR);
 
     auto bad_tck = kBcasAtr1;
     bad_tck.back() ^= 1U;
-    CHECK(!parse_card_atr(view(bad_tck)) &&
-          parse_card_atr(view(bad_tck)).error() == Error::PROTOCOL_ERROR);
+    CHECK(!test_parse_card_atr(view(bad_tck)) &&
+          test_parse_card_atr(view(bad_tck)).error() == Error::PROTOCOL_ERROR);
 
     std::array<std::uint8_t, 34U> oversized{};
     oversized[0] = 0x3bU;
-    CHECK(!parse_card_atr(view(oversized)) &&
-          parse_card_atr(view(oversized)).error() == Error::PROTOCOL_ERROR);
+    CHECK(!test_parse_card_atr(view(oversized)) &&
+          test_parse_card_atr(view(oversized)).error() == Error::PROTOCOL_ERROR);
 
     auto unsupported = kBcasAtr1;
     unsupported[2] = 0x14U;
     unsupported.back() = 0x9dU;
-    CHECK(!parse_card_atr(view(unsupported)) &&
-          parse_card_atr(view(unsupported)).error() == Error::UNSUPPORTED);
+    CHECK(!test_parse_card_atr(view(unsupported)) &&
+          test_parse_card_atr(view(unsupported)).error() == Error::UNSUPPORTED);
     return true;
 }
 
@@ -437,7 +438,7 @@ bool test_success_waits_for_ready_and_sets_baud()
     hardware.ready_delay_checks = 2U;
     hardware.atr_attempts.push_back({kBcasAtr1.begin(), kBcasAtr1.end()});
     FakeTime time;
-    const auto atr = reset_and_read_card_atr(hardware, time);
+    const auto atr = test_reset_and_read_card_atr(hardware, time);
     CHECK(atr);
     CHECK(hardware.detect_count == 1U);
     CHECK(hardware.reset_count == 1U);
@@ -459,7 +460,7 @@ bool test_malformed_only_retry_policy()
     hardware.atr_attempts.push_back({malformed.begin(), malformed.end()});
     hardware.atr_attempts.push_back({kBcasAtr2.begin(), kBcasAtr2.end()});
     FakeTime time;
-    const auto recovered = reset_and_read_card_atr(hardware, time);
+    const auto recovered = test_reset_and_read_card_atr(hardware, time);
     CHECK(recovered);
     CHECK(hardware.reset_count == 2U);
     CHECK(hardware.baud_set_count == 1U);
@@ -468,7 +469,7 @@ bool test_malformed_only_retry_policy()
     timeout_hardware.never_ready = true;
     timeout_hardware.atr_attempts.push_back({kBcasAtr1.begin(), kBcasAtr1.end()});
     FakeTime timeout_time;
-    const auto timeout = reset_and_read_card_atr(timeout_hardware, timeout_time);
+    const auto timeout = test_reset_and_read_card_atr(timeout_hardware, timeout_time);
     CHECK(!timeout && timeout.error() == Error::TIMEOUT);
     CHECK(timeout_hardware.reset_count == 1U);
     CHECK(timeout_hardware.read_count == 0U);
@@ -478,7 +479,7 @@ bool test_malformed_only_retry_policy()
     usb_hardware.ready_error = Error::USB_IO;
     usb_hardware.atr_attempts.push_back({kBcasAtr1.begin(), kBcasAtr1.end()});
     FakeTime usb_time;
-    const auto usb = reset_and_read_card_atr(usb_hardware, usb_time);
+    const auto usb = test_reset_and_read_card_atr(usb_hardware, usb_time);
     CHECK(!usb && usb.error() == Error::USB_IO);
     CHECK(usb_hardware.reset_count == 1U);
     CHECK(usb_hardware.read_count == 0U);
@@ -491,14 +492,14 @@ bool test_no_card_and_incomplete_timeout()
     MockCardHardware absent;
     absent.present = false;
     FakeTime absent_time;
-    const auto no_card = reset_and_read_card_atr(absent, absent_time);
+    const auto no_card = test_reset_and_read_card_atr(absent, absent_time);
     CHECK(!no_card && no_card.error() == Error::NO_CARD);
     CHECK(absent.reset_count == 0U);
 
     MockCardHardware partial;
     partial.atr_attempts.push_back({0x3bU, 0xf0U, 0x12U});
     FakeTime partial_time;
-    const auto incomplete = reset_and_read_card_atr(partial, partial_time);
+    const auto incomplete = test_reset_and_read_card_atr(partial, partial_time);
     CHECK(!incomplete && incomplete.error() == Error::TIMEOUT);
     CHECK(partial.reset_count == 1U);
     CHECK(partial.read_count == 1U);
@@ -510,7 +511,7 @@ bool test_t1_initialize_and_consecutive_apdus()
 {
     MockCardHardware hardware;
     FakeTime time;
-    CardSession session(hardware, time);
+    CardT1TestSession session(hardware, time);
     CHECK(session.initialize());
     CHECK(session.initialized());
     CHECK(session.atr().length == kBcasAtr1.size());
@@ -537,7 +538,7 @@ bool test_duplicate_response_discard_and_recovery()
     constexpr std::array<std::uint8_t, 5U> apdu{0x90U, 0x30U, 0x00U, 0x00U, 0x00U};
     MockCardHardware hardware;
     FakeTime time;
-    CardSession session(hardware, time);
+    CardT1TestSession session(hardware, time);
     CHECK(session.initialize());
 
     std::array<std::uint8_t, 256U> response{};
@@ -570,7 +571,7 @@ bool test_invalidation_and_reinitialization()
     MockCardHardware initially_absent;
     initially_absent.present = false;
     FakeTime initially_absent_time;
-    CardSession initially_absent_session(initially_absent, initially_absent_time);
+    CardT1TestSession initially_absent_session(initially_absent, initially_absent_time);
     const auto no_card = initially_absent_session.transmit(
         view(apdu), MutableByteView{response.data(), response.size()});
     CHECK(!no_card && no_card.error() == Error::NO_CARD &&
@@ -578,7 +579,7 @@ bool test_invalidation_and_reinitialization()
 
     MockCardHardware hardware;
     FakeTime time;
-    CardSession session(hardware, time);
+    CardT1TestSession session(hardware, time);
     CHECK(session.initialize());
 
     hardware.present = false;
@@ -613,7 +614,7 @@ bool test_wtx_timeout_and_lost_response_recovery()
 
     MockCardHardware wtx_hardware;
     FakeTime wtx_time;
-    CardSession wtx_session(wtx_hardware, wtx_time);
+    CardT1TestSession wtx_session(wtx_hardware, wtx_time);
     CHECK(wtx_session.initialize());
     wtx_hardware.endless_wtx = true;
     wtx_hardware.time_to_advance = &wtx_time;
@@ -630,7 +631,7 @@ bool test_wtx_timeout_and_lost_response_recovery()
 
     MockCardHardware lost_hardware;
     FakeTime lost_time;
-    CardSession lost_session(lost_hardware, lost_time);
+    CardT1TestSession lost_session(lost_hardware, lost_time);
     CHECK(lost_session.initialize());
     lost_hardware.lose_final_response = true;
     const auto recovered = lost_session.transmit(
@@ -647,7 +648,7 @@ bool test_stale_sequence_rejected_then_reinitialized()
     std::array<std::uint8_t, 16U> response{};
     MockCardHardware hardware;
     FakeTime time;
-    CardSession session(hardware, time);
+    CardT1TestSession session(hardware, time);
     CHECK(session.initialize());
     CHECK(session.transmit(view(apdu), MutableByteView{response.data(), response.size()}));
     hardware.queue_stale_response(hardware.response_sequence != 0U ? 0x00U : 0x40U);
@@ -670,7 +671,7 @@ bool test_crc_and_malformed_frames()
     crc_hardware.expected_crc = true;
     crc_hardware.atr_attempts.push_back({crc_atr.begin(), crc_atr.end()});
     FakeTime crc_time;
-    CardSession crc_session(crc_hardware, crc_time);
+    CardT1TestSession crc_session(crc_hardware, crc_time);
     CHECK(crc_session.initialize());
     CHECK((crc_hardware.ifs_values == std::vector<std::uint8_t>{250U}));
     CHECK(crc_session.transmit(view(apdu),
@@ -682,7 +683,7 @@ bool test_crc_and_malformed_frames()
         MockCardHardware malformed;
         malformed.corruption = corruption;
         FakeTime malformed_time;
-        CardSession malformed_session(malformed, malformed_time);
+        CardT1TestSession malformed_session(malformed, malformed_time);
         const auto initialized = malformed_session.initialize();
         CHECK(!initialized && initialized.error() == Error::PROTOCOL_ERROR);
         CHECK(!malformed_session.initialized());
@@ -690,7 +691,7 @@ bool test_crc_and_malformed_frames()
 
     MockCardHardware oversized_lrc;
     FakeTime oversized_lrc_time;
-    CardSession oversized_lrc_session(oversized_lrc, oversized_lrc_time);
+    CardT1TestSession oversized_lrc_session(oversized_lrc, oversized_lrc_time);
     CHECK(oversized_lrc_session.initialize());
     oversized_lrc.corruption = MockCardHardware::Corruption::oversized_length;
     const unsigned int lrc_ready_before = oversized_lrc.ready_checks;
@@ -709,7 +710,7 @@ bool test_crc_and_malformed_frames()
     oversized_crc.expected_crc = true;
     oversized_crc.atr_attempts.push_back({crc_atr.begin(), crc_atr.end()});
     FakeTime oversized_crc_time;
-    CardSession oversized_crc_session(oversized_crc, oversized_crc_time);
+    CardT1TestSession oversized_crc_session(oversized_crc, oversized_crc_time);
     CHECK(oversized_crc_session.initialize());
     oversized_crc.corruption = MockCardHardware::Corruption::oversized_length;
     const unsigned int crc_ready_before = oversized_crc.ready_checks;
@@ -735,7 +736,7 @@ bool test_acas_fallback_bwi_and_uart_limit()
     hardware.atr_attempts.push_back({acas_atr.begin(), acas_atr.end()});
     hardware.drop_first_ifs = true;
     FakeTime time;
-    CardSession session(hardware, time);
+    CardT1TestSession session(hardware, time);
     CHECK(session.initialize());
     CHECK((hardware.written_pcbs == std::vector<std::uint8_t>{0xc1U, 0xc0U, 0xc1U}));
     CHECK((hardware.ifs_values == std::vector<std::uint8_t>{254U, 254U}));
@@ -764,7 +765,7 @@ bool test_response_chaining_capacity_and_invalid_arguments()
     constexpr std::array<std::uint8_t, 5U> apdu{0x90U, 0x30U, 0x00U, 0x00U, 0x00U};
     MockCardHardware hardware;
     FakeTime time;
-    CardSession session(hardware, time);
+    CardT1TestSession session(hardware, time);
     CHECK(session.initialize());
     hardware.response_chain_once = true;
     std::array<std::uint8_t, 16U> response{};

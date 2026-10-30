@@ -2,6 +2,7 @@
 #include "frontend_probe_support.h"
 
 #include "px4/card.h"
+#include "px4/card_t1_adapter.h"
 #include "px4/firmware.h"
 #include "px4/it930x.h"
 #include "px4/libusb_transport.h"
@@ -288,6 +289,31 @@ void print_atr(const CardAtr& atr) noexcept
                 static_cast<unsigned int>(atr.block_timeout_ms));
 }
 
+CardAtr to_product_atr(
+    const dtv::userland::host_card_t1::CardAtr& source) noexcept
+{
+    CardAtr result;
+    result.length = source.length;
+    std::copy(source.bytes.begin(), source.bytes.begin() + source.length,
+              result.bytes.begin());
+    switch (source.baud_rate) {
+    case dtv::userland::host_card_t1::CardBaudRate::baud_9600:
+        result.baud_rate = It930xCardBaudRate::baud_9600;
+        break;
+    case dtv::userland::host_card_t1::CardBaudRate::baud_19200:
+        result.baud_rate = It930xCardBaudRate::baud_19200;
+        break;
+    case dtv::userland::host_card_t1::CardBaudRate::baud_38400:
+        result.baud_rate = It930xCardBaudRate::baud_38400;
+        break;
+    }
+    result.ifsc = source.ifsc;
+    result.edc = source.edc == dtv::userland::host_card_t1::CardEdc::crc
+        ? CardEdc::crc : CardEdc::lrc;
+    result.block_timeout_ms = source.block_timeout_ms;
+    return result;
+}
+
 void print_response(ByteView response) noexcept
 {
     std::printf("response=");
@@ -361,7 +387,11 @@ int main(int argc, char** argv)
                 }
             } else if (arguments.atr) {
                 It930xCardHardware card(dev1);
-                const auto atr = reset_and_read_card_atr(card, delay);
+                CardT1HardwareAdapter hardware_adapter(card);
+                CardT1TimeAdapter time_adapter(delay);
+                const auto atr =
+                    dtv::userland::host_card_t1::reset_and_read_card_atr(
+                        hardware_adapter, time_adapter);
                 if (!atr) {
                     if (atr.error() == Error::NO_CARD) {
                         std::printf("card detected=no\n");
@@ -369,11 +399,13 @@ int main(int argc, char** argv)
                     primary_status = failure("dev1 card ATR", atr.error(), kCardFailure);
                 } else {
                     std::printf("card detected=yes\n");
-                    print_atr(atr.value());
+                    print_atr(to_product_atr(atr.value()));
                 }
             } else {
                 It930xCardHardware card(dev1);
-                CardSession session(card, delay);
+                CardT1HardwareAdapter hardware_adapter(card);
+                CardT1TimeAdapter time_adapter(delay);
+                CardT1Session session(hardware_adapter, time_adapter);
                 const auto initialized = session.initialize();
                 if (!initialized) {
                     if (initialized.error() == Error::NO_CARD) {
@@ -383,7 +415,7 @@ int main(int argc, char** argv)
                                              initialized.error(), kCardFailure);
                 } else {
                     std::printf("card detected=yes\n");
-                    print_atr(session.atr());
+                    print_atr(to_product_atr(session.atr()));
                     std::array<std::uint8_t, 4096U> response{};
                     std::size_t response_length = 0U;
                     for (std::uint32_t iteration = 1U; iteration <= arguments.repeat;
