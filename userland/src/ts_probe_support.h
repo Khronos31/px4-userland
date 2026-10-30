@@ -32,7 +32,6 @@ struct TsProbeArguments final {
     std::uint8_t slot = 0U;
     std::uint32_t symbol_rate = 0U;
     std::uint32_t rolloff = 0U;
-    std::uint32_t lnb_voltage = 0U;
     std::array<int, 2U> file_descriptors{{-1, -1}};
     std::size_t file_descriptor_count = 0U;
     bool tune_terrestrial = false;

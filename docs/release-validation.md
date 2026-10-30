@@ -481,7 +481,7 @@ if ($parserRc -ne 0) { throw "TS parser failed: $parserRc" }
 
 - **適用対象/頻度:** 必要時。給電対応profileだけ実測。
 - **準備:** 対応profile、meter、独立給電の状態を確認。
-- **実操作/利用者への依頼:** profile capability手順で非対応PX-M1URの--lnb-voltage 15拒否exit 3。対応機meter testは指定条件のみ。
+- **実操作/利用者への依頼:** 対応機meter testは指定条件のみ。PX-M1URはdaemonを`--allow-lnb-power`付きで起動し、`px4ctl lnb-on`の拒否を記録する。TSの旧`--lnb-voltage`引数は全機種でusage errorになるため、profile判定には使わない。
 - **期待値/終了値:** 対応はmeter実測、非対応は拒否しGPIO/給電変化なし。
 - **停止/cleanup:** daemon停止、0Vと通常配線復帰。非対応機へ給電しない。
 - **記録:** model/profile、command/exit、meter値/条件、cleanupまたはN/A根拠。
@@ -718,10 +718,10 @@ Q3U4の8 receiver確認は次の8コマンドを同じ端末で個別に実行�
 ```sh
 set -eu
 # Q3U4 8 receiver（受信継続: 0/1/4/5=S、2/3/6/7=T）
-"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 0 --channel BS15_0 --lnb-voltage 0 --time 30 --output "$LOG/r0.ts" > "$LOG/r0.out" 2> "$LOG/r0.err" & R0=$!
-"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 1 --channel BS15_0 --lnb-voltage 0 --time 30 --output "$LOG/r1.ts" > "$LOG/r1.out" 2> "$LOG/r1.err" & R1=$!
-"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 4 --channel BS15_0 --lnb-voltage 0 --time 30 --output "$LOG/r4.ts" > "$LOG/r4.out" 2> "$LOG/r4.err" & R4=$!
-"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 5 --channel BS15_0 --lnb-voltage 0 --time 30 --output "$LOG/r5.ts" > "$LOG/r5.out" 2> "$LOG/r5.err" & R5=$!
+"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 0 --channel BS15_0 --time 30 --output "$LOG/r0.ts" > "$LOG/r0.out" 2> "$LOG/r0.err" & R0=$!
+"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 1 --channel BS15_0 --time 30 --output "$LOG/r1.ts" > "$LOG/r1.out" 2> "$LOG/r1.err" & R1=$!
+"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 4 --channel BS15_0 --time 30 --output "$LOG/r4.ts" > "$LOG/r4.out" 2> "$LOG/r4.err" & R4=$!
+"$D/px4-ts" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 5 --channel BS15_0 --time 30 --output "$LOG/r5.ts" > "$LOG/r5.out" 2> "$LOG/r5.err" & R5=$!
 "$D/px4-ts" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 2 --system isdb-t --freq 527143000 --time 30 --output "$LOG/r2.ts" > "$LOG/r2.out" 2> "$LOG/r2.err" & R2=$!
 "$D/px4-ts" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 3 --system isdb-t --freq 527143000 --time 30 --output "$LOG/r3.ts" > "$LOG/r3.out" 2> "$LOG/r3.err" & R3=$!
 "$D/px4-ts" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" --receiver 6 --system isdb-t --freq 527143000 --time 30 --output "$LOG/r6.ts" > "$LOG/r6.out" 2> "$LOG/r6.err" & R6=$!
@@ -1044,16 +1044,15 @@ v0.26 の識別変更が対象のとき、両機種を同時接続できる環�
 
 `lnb_15v_supported`または15V非対応profileの変更時は、exact candidateでM1URとS1URを同時接続し、上の同一serial確認と同じnative列挙環境で`px4d --list-json`を実行する。M1URのISDB-T/S receiverとS1URのISDB-T receiverがJSON boolean `lnb_15v_supported=false`であることを確認する。Q3U4を同時に列挙した場合は、ISDB-T receiverがfalse、ISDB-S receiverがtrueであることも確認し、falseだけを一律に出す誤りを検出する。JSONでは値が文字列ではなくbooleanであることを確認する。Android Termuxは通常のUSB列挙を保証しないため、このlist確認を要求しない。
 
-PX-M1URのISDB-SはLNB 0Vで受信できるが、15V要求は`--allow-lnb-power`の有無によらず`UNSUPPORTED`（exit 3）で拒否され、LNB用GPIOへ書き込まない。LNB/GPIO動作を変更したcandidateでは、PX-M1URだけを接続し、同じS受信要求をdaemonのopt-inなし・ありの両方で試す。daemon起動には毎回X-STARTのコマンド群を使い、なしのrunは通常のX-START、ありのrunは`--allow-lnb-power`を追加して起動し、各run後にdaemonを停止する。各daemon起動後に、次のコマンドを実行してexit 3を記録する:
+TS CLIはLNB電圧を指定できず、旧`--lnb-voltage 0|15`は通常の引数エラーになる。PX-M1URのprofile capabilityは、`px4d --allow-lnb-power`で起動したdaemonへ`px4ctl lnb-on`を要求して`UNSUPPORTED`（exit 3）となることを確認する。LNB/GPIO動作を変更したcandidateでは、PX-M1URだけを接続し、daemon起動には毎回X-STARTのコマンド群を使って通常停止する。次のコマンドで拒否を記録する:
 
 ```sh
-if "$D/px4-ts" --device "$ID" --instance "$INSTANCE" --receiver 0 --system isdb-s --freq 1318000000 --slot 0 \
-  --runtime-dir "$RT" --lnb-voltage 15 --time 1 --output /dev/null \
+if "$D/px4ctl" --device "$ID" --instance "$INSTANCE" --runtime-dir "$RT" lnb-on \
   > "$LOG/lnb-15v-rejected.out" 2> "$LOG/lnb-15v-rejected.err"; then rc=0; else rc=$?; fi
 echo "$rc" > "$LOG/lnb-15v-rejected.rc"
 ```
 
-opt-inなし・ありの各runでログ名を分ける。15V拒否時に電圧が出ないことの確認はoffline/mock GPIO試験に結び付け、実機で15Vを許可する試験へ置き換えない。S1URはISDB-T専用なので、その15V確認には使わない。変更が列挙表示だけでLNB/GPIO要求経路に触れていない場合、この物理15V拒否試験は追加せず、表示確認だけを行う。
+拒否時の電圧が出ないことはoffline/mock GPIO試験に結び付け、実機で15Vを許可する試験へ置き換えない。S1URはISDB-T専用なので、この確認には使わない。変更が列挙表示だけでLNB/GPIO要求経路に触れていない場合、この物理拒否試験は追加せず、表示確認だけを行う。
 
 ### USB/cardの物理抜差し
 
