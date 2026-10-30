@@ -30,8 +30,7 @@ constexpr const char* kProduct = "px4-userland";
 bool make_root(std::string& output) noexcept
 {
     std::error_code error;
-    const auto base = std::filesystem::temp_directory_path(error);
-    if (error) return false;
+    const std::filesystem::path base("/tmp");
     for (unsigned int attempt = 0U; attempt < 100U; ++attempt) {
         const auto candidate = base /
             ("px4-core-path-" + std::to_string(::getpid()) + "-" +
