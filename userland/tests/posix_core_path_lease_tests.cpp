@@ -2,10 +2,10 @@
 #include "dtv/userland/host_runtime/control_socket.h"
 
 #include <cstdio>
-#include <cstdlib>
 #include <filesystem>
 #include <string>
 #include <sys/stat.h>
+#include <unistd.h>
 #include <utility>
 
 using dtv::userland::Error;
@@ -29,12 +29,26 @@ constexpr const char* kProduct = "px4-userland";
 
 bool make_root(std::string& output) noexcept
 {
-    char pattern[] = "/tmp/px4-core-path-XXXXXX";
-    char* created = ::mkdtemp(pattern);
-    if (created == nullptr) return false;
-    output = created;
-    if (::chmod(output.c_str(), 0700) != 0) return false;
-    return true;
+    std::error_code error;
+    const auto base = std::filesystem::temp_directory_path(error);
+    if (error) return false;
+    for (unsigned int attempt = 0U; attempt < 100U; ++attempt) {
+        const auto candidate = base /
+            ("px4-core-path-" + std::to_string(::getpid()) + "-" +
+             std::to_string(attempt));
+        if (!std::filesystem::create_directory(candidate, error)) {
+            if (error) return false;
+            continue;
+        }
+        output = candidate.string();
+        if (::chmod(output.c_str(), 0700) != 0) {
+            std::error_code ignored;
+            std::filesystem::remove_all(output, ignored);
+            return false;
+        }
+        return true;
+    }
+    return false;
 }
 
 class RootGuard final {
