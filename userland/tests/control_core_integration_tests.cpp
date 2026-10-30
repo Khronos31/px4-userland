@@ -26,6 +26,7 @@
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <pthread.h>
 #include <string>
 #include <sys/stat.h>
 #include <thread>
@@ -566,14 +567,15 @@ public:
         if (!context_->reserve_namespace()) return false;
         if (!context_->publish()) return false;
         serving_.store(true);
-        poller_ = std::thread([this] {
-            while (serving_.load()) {
-                if (!context_->poll_once(Timeout{20U})) {
-                    poll_error_.store(true);
-                    return;
-                }
-            }
-        });
+        pthread_attr_t attributes;
+        if (pthread_attr_init(&attributes) != 0) return false;
+        const bool stack_ok =
+            pthread_attr_setstacksize(&attributes, 8U * 1024U * 1024U) == 0;
+        const bool started = stack_ok &&
+            pthread_create(&poller_, &attributes, &Fixture::poll_entry, this) == 0;
+        pthread_attr_destroy(&attributes);
+        if (!started) return false;
+        poller_started_ = true;
         instance_ = instance;
         return true;
     }
@@ -582,7 +584,10 @@ public:
     {
         if (!context_) return;
         serving_.store(false);
-        if (poller_.joinable()) poller_.join();
+        if (poller_started_) {
+            pthread_join(poller_, nullptr);
+            poller_started_ = false;
+        }
         for (;;) {
             const auto closed = context_->close(Timeout{1000U});
             if (!closed || closed.value() == listener::CloseState::quiesced) break;
@@ -614,10 +619,26 @@ public:
     }
 
 private:
+    static void* poll_entry(void* value)
+    {
+        static_cast<Fixture*>(value)->poll_loop();
+        return nullptr;
+    }
+    void poll_loop()
+    {
+        while (serving_.load()) {
+            if (!context_->poll_once(Timeout{20U})) {
+                poll_error_.store(true);
+                return;
+            }
+        }
+    }
+
     TempRuntime runtime_;
     std::unique_ptr<listener::EnclosureContext> context_;
     Family* family_ = nullptr;
-    std::thread poller_;
+    pthread_t poller_{};
+    bool poller_started_ = false;
     std::atomic<bool> serving_{false};
     std::atomic<bool> shutdown_{false};
     std::atomic<bool> poll_error_{false};
