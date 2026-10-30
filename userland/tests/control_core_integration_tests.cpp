@@ -21,12 +21,15 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <sys/stat.h>
 #include <thread>
+#include <unistd.h>
 
 namespace {
 
@@ -60,21 +63,15 @@ class TempRuntime final {
 public:
     TempRuntime()
     {
-        const auto path = std::filesystem::temp_directory_path() /
-            ("px4-core-control-" + std::to_string(
-                std::chrono::steady_clock::now().time_since_epoch().count()));
-        std::error_code error;
-        if (std::filesystem::create_directory(path, error) || !error) {
-            std::filesystem::permissions(path,
-                std::filesystem::perms::owner_all,
-                std::filesystem::perm_options::replace, error);
-            if (!error) {
-                path_ = path.string();
-            }
-        }
+        // Keep the runtime root short so the AF_UNIX sun_path limit is not
+        // consumed by macOS /var/folders paths.
+        std::string pattern = "/tmp/px4-core-control-XXXXXX";
+        char* made = ::mkdtemp(pattern.data());
+        if (made != nullptr && ::chmod(made, 0700) == 0) path_ = made;
     }
     ~TempRuntime() noexcept
     {
+        if (path_.empty()) return;
         std::error_code error;
         std::filesystem::remove_all(path_, error);
     }
