@@ -678,8 +678,7 @@ bool test_crc_and_malformed_frames()
                                MutableByteView{response.data(), response.size()}));
 
     for (const auto corruption : {MockCardHardware::Corruption::bad_edc,
-                                  MockCardHardware::Corruption::bad_nad,
-                                  MockCardHardware::Corruption::bad_length}) {
+                                  MockCardHardware::Corruption::bad_nad}) {
         MockCardHardware malformed;
         malformed.corruption = corruption;
         FakeTime malformed_time;
@@ -688,6 +687,18 @@ bool test_crc_and_malformed_frames()
         CHECK(!initialized && initialized.error() == Error::PROTOCOL_ERROR);
         CHECK(!malformed_session.initialized());
     }
+
+    MockCardHardware short_length;
+    short_length.corruption = MockCardHardware::Corruption::bad_length;
+    FakeTime short_length_time;
+    CardT1TestSession short_length_session(short_length, short_length_time);
+    const auto short_initialized = short_length_session.initialize();
+#if defined(PX4_CARD_TESTS_CORE_T1)
+    CHECK(!short_initialized && short_initialized.error() == Error::TIMEOUT);
+#else
+    CHECK(!short_initialized && short_initialized.error() == Error::PROTOCOL_ERROR);
+#endif
+    CHECK(!short_length_session.initialized());
 
     MockCardHardware oversized_lrc;
     FakeTime oversized_lrc_time;
