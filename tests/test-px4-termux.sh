@@ -438,6 +438,15 @@ assert_file_absent "$pid_file" 'second-open failure px4d residue'
 assert_file_absent "$endpoint" 'second-open failure endpoint residue'
 
 PATH="$fake_bin:$PATH" sh "$launcher" --help >/dev/null
+: > "$log"
+status=0
+PATH="$fake_bin:$PATH" FAKE_PX4D_LOG="$log" FAKE_PX4D_PID="$pid_file" \
+    FAKE_TERMUX_PID_DIR="$termux_pid_dir" sh "$launcher" -F "$firmware" \
+    2>"$test_root/legacy-option.err" || status=$?
+[ "$status" -eq 2 ] || fail_test "legacy -F exit $status, expected 2"
+grep -F 'unknown argument: -F' "$test_root/legacy-option.err" >/dev/null || \
+    fail_test 'legacy -F did not report an unknown argument'
+[ ! -s "$log" ] || fail_test 'legacy -F started a termux-usb or daemon child'
 # v0.16: one --usb-device is the PX-MLT5PE/DTV02A-5TS-P path.  It opens only
 # that device and passes exactly one --fd.
 : > "$log"

@@ -78,7 +78,7 @@ void usage() noexcept
         "  single-device models.\n"
         "\n"
         "  -h, --help         print this help and exit\n"
-        "  -F, --firmware PATH  load firmware from PATH\n"
+        "  --firmware PATH      load firmware from PATH\n"
         "  -v, --verbose      print debug startup diagnostics to stderr\n"
         "  --allow-lnb-power  permit explicit ISDB-S 15 V requests; default off\n"
 #if defined(_WIN32)

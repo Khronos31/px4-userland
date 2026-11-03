@@ -331,24 +331,23 @@ bool test_short_options_and_verbose()
     }
     Arguments short_firmware = native_arguments();
     short_firmware[3U] = "-F";
-    PX4D_CHECK(parse(short_firmware).valid);
-    PX4D_CHECK(parse(short_firmware).firmware == parse(native_arguments()).firmware);
+    PX4D_CHECK(!parse(short_firmware).valid);
+    PX4D_CHECK(parse(short_firmware).error == "unknown argument");
     for (const char* option : {"-v", "--verbose"}) {
-        Arguments verbose = short_firmware;
+        Arguments verbose = native_arguments();
         verbose.push_back(option);
         const auto parsed = parse(verbose);
         PX4D_CHECK(parsed.valid && parsed.verbose && parsed.firmware == "firmware.bin");
     }
-    short_firmware.insert(short_firmware.end(), {"-v", "--verbose", "-v"});
-    PX4D_CHECK(parse(short_firmware).valid && parse(short_firmware).verbose);
-    for (const char* option : {"-F", "--firmware"}) {
-        PX4D_CHECK(!parse({"px4d", "--device", "serial:00001205000960", option}).valid);
-        PX4D_CHECK(!parse({"px4d", "--device", "serial:00001205000960", option, ""}).valid);
-        PX4D_CHECK(!parse({"px4d", "--device", "serial:00001205000960", option, "--help"}).valid);
-        Arguments duplicate = native_arguments();
-        duplicate.insert(duplicate.end(), {option, "other.bin"});
-        PX4D_CHECK(!parse(duplicate).valid);
-    }
+    Arguments repeated_verbose = native_arguments();
+    repeated_verbose.insert(repeated_verbose.end(), {"-v", "--verbose", "-v"});
+    PX4D_CHECK(parse(repeated_verbose).valid && parse(repeated_verbose).verbose);
+    PX4D_CHECK(!parse({"px4d", "--device", "serial:00001205000960", "--firmware"}).valid);
+    PX4D_CHECK(!parse({"px4d", "--device", "serial:00001205000960", "--firmware", ""}).valid);
+    PX4D_CHECK(!parse({"px4d", "--device", "serial:00001205000960", "--firmware", "--help"}).valid);
+    Arguments duplicate = native_arguments();
+    duplicate.insert(duplicate.end(), {"--firmware", "other.bin"});
+    PX4D_CHECK(!parse(duplicate).valid);
     PX4D_CHECK(!parse(native_arguments()).verbose);
     return true;
 }
