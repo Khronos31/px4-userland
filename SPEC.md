@@ -1560,6 +1560,8 @@ Q3U4を指定された場合は8 receiverのISDB-T/S混在、必要なstatus/APD
 外部要因で説明できない場合は`判定保留`とし、passにしない。profile認定、serial衝突、receiver 7比較等の個別受入条件は
 10.2.6a/10.2.7のまま維持し、毎回必須の短時間artifact matrixの代わりにはしない。
 
+2時間ソークは指定負荷での運転安定性を判定する。基本負荷は機種ごとの地上波1 streamを`/dev/null`へ出力し、別の負荷を指定する場合はその負荷での結果として記録する。指定時間の連続完了、daemonからIPCを経てclientへ届くbyte/packetの観測系列の進行、実daemon/client PID・実行ファイルに紐づくFD/RSS系列、正常終了と所有process・FD・IPCの解放を確認する。PID生存だけを出力進行としない。FD/RSSに新しい定量閾値や観測頻度を設けず、既存の頻度と製品能力を維持する。持続増加が最終観測まで安定せず外部要因で説明できない場合は`判定保留`とする。観測欠測はnull/errorとして記録し、zeroやpassにしない。TEI/CC等の保存TS品質は既存の5分品質試験で別に判定し、2時間ソークの安定性合否へ自動結合しない。長時間品質を検査していない場合、全区間の品質保証を表明しない。
+
 ## 11. Implementation increments
 
 1. Portable build、error、logging、mock transport、CIを作る。
