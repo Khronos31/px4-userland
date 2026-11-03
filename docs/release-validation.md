@@ -1190,7 +1190,8 @@ test後にtemporary `WORK`を削除するのは全証拠を別の保管先へ移
 - 手順: §0.1（`stat -f %z`、`lsof -p`、`ps -o rss=` を用いる）。`darwin-arm64` を使う。
 - 選定: `darwin-arm64`を現行頻度matrixで選択した場合に使用。
 
-#### E04 macOS native PC/SC
+<a id="e04-macos-native-pcsc"></a>
+#### E04 macOS native PC/SC手順
 
 T10のnative consumerはApple PCSC.frameworkを使って今回candidateごとに実施する。reader列挙だけでは合格にせず、接続、ATR、card operationまで確認する。以下のHomebrew `pcsc-lite`手順は任意の隔離alternate stackであり、標準経路の前提ではない。T00で固定した`release-candidate` runから配布archiveとmanifestを取得する。
 
@@ -1498,7 +1499,7 @@ container内のdiscovery JSON、status、TS、daemon/client exit、外側のhost
   `card-apdu 90:30:00:00:00`を10回実行する。対象modelの既定channel planからreceiver/system/frequency/slotを設定し、
   各commandのresponse/exit/start/endとcapture全体のstart/endを保存する。各control childは15秒bounded waitとし、
   nonzero/timeoutならT05をincompleteにして外側のowned client/daemon bounded cleanupへ接続する。
-- preflight（read-only）:
+- 事前確認（read-only）:
   - `$PSVersionTable.PSVersion`、`[System.Environment]::OSVersion`、`chcp`のdefault code page、`$env:LOCALAPPDATA`を記録する。
   - `$env:LOCALAPPDATA`のowner SID・各ACE・protected flagをread-onlyで記録する。明示的な`--runtime-dir`を使う
     本手順では、この既定profileの環境変数やACLを変更しない。worker wakeとendpointの親検証は明示した`$RT`へ
@@ -1509,7 +1510,7 @@ container内のdiscovery JSON、status、TS、daemon/client exit、外側のhost
     （`pnputil /add-driver`・`/delete-driver`等）を行わず、kernel driverやINFを導入しない。
   - PX-S1UD/mirakc等の稼働経路を変更しない。対象Q3U4をclaim中の他daemonがあれば`px4d`が`busy`で失敗することを
     確認する。firmwareは利用者が用意した既存ファイルを`--firmware`で指定するだけで、download・抽出・変換をしない。
-- runtime dir / ACL:
+- runtimeディレクトリ / ACL:
   - 明示した`--runtime-dir`はworker wakeにも渡される（SPEC 7.5）。別の`LOCALAPPDATA`へfallbackしない。
     タスク専用の短いlocal drive絶対pathを`$RT`とし、事前に利用者へACL設定を確認してから、ownerを現在user SID、
     継承を切ったprotected DACLで現在userだけに許可して作る。profile ACL・global env・driverは変更しない。
