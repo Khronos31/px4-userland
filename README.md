@@ -247,7 +247,7 @@ test "$ready" = 1 || { echo 'px4d did not become ready' >&2; exit 1; }
 
 ## CLI 仕様
 
-`px4d`、`px4-ts`、`px4ctl` は、同一ホスト内で同じランタイムルートディレクトリ（`--runtime-dir`、省略時の既定値は `$XDG_RUNTIME_DIR`）とランタイム接続先名を用いてプロセス間通信（IPC）を行います。既定の接続先名は観測されたシリアル番号で、エンドポイントはランタイムルート下の `px4-userland/<SERIAL>/` に作成されます。シリアル衝突時は`px4d --instance TOKEN`とクライアントの`--instance TOKEN`で接続先名を明示できます。group mode endpointへ接続する場合は、3つすべてに `--group` を指定し、共有groupを実効primary groupまたは補助グループ（supplementary group）に含めます。
+`px4d`、`px4-ts`、`px4ctl` は、同一ホスト内で同じランタイムルートディレクトリ（`--runtime-dir`、省略時はCore共通のruntime候補選択）とランタイム接続先名を用いてプロセス間通信（IPC）を行います。既定の接続先名は観測されたシリアル番号で、エンドポイントはランタイムルート下の `px4-userland/<SERIAL>/` に作成されます。シリアル衝突時は`px4d --instance TOKEN`とクライアントの`--instance TOKEN`で接続先名を明示できます。group mode endpointへ接続する場合は、共有groupを実効primary groupまたは補助グループ（supplementary group）に含め、daemonにも `--runtime-dir` と `--group` を指定します。
 
 ### 受信機（Receiver）番号の割り当て
 
@@ -362,7 +362,7 @@ px4d --version
 - `-h/--help`: 他の引数解析より優先して同じヘルプを表示して終了します（exit 0）。`--version`と両方指定した場合はhelpを表示します。
 - `--firmware PATH`: IT930x ファームウェアバイナリのパスを指定します（必須）。
 - `-v/--verbose`: 起動時のfirmware読込・USB open・サービス起動の定型debug診断を標準エラーへ追加します。省略時のログ閾値はinfoです。パス・シリアル・TS/APDU本文は追加診断へ出しません。繰り返し指定は同じverbose有効化とし、help/versionが含まれる場合はmetadataを優先して終了します。`--models`/`--list-json`とは併用できません。
-- `--runtime-dir PATH`: ランタイムルートディレクトリを指定します（省略時は `$XDG_RUNTIME_DIR`）。
+- `--runtime-dir PATH`: ランタイムルートディレクトリを指定します（省略時はPOSIXではCore共通候補、Windowsでは `%LOCALAPPDATA%` を使います）。不正な明示pathから自動候補へ切り替えることはありません。
 - `--allow-lnb-power`: LNB 15V 対応機種で、衛星放送受信時の給電を許可します（安全のための明示的 opt-in）。非対応の5機種は上の一覧を参照してください。
 - `--fd FD [--fd FD]`: Android 環境などで、ホスト側が開いた USB ファイルディスクリプタを直接渡して起動します。PX-Q3U4 は 2 つ、PX-M1UR / PX-S1UR / DTV02A-5TS-P / PX-MLT5PE は 1 つ指定します（この場合 `--device` は任意）。
 - `--list-json`: 接続中の対象筐体をCore共通の`userland.discovery` JSONで出して終了します（単独で指定）。`schema`・`producer`・`scan.complete/issues`を持ち、観測したUSBだけを`enclosures[].devices[]`へ、そのUSBの受信機を`devices[].receivers[]`へ載せます。`model`と`usb`は文字列、番号はnumber、放送方式は`systems:["ISDB-T","ISDB-S"]`等の配列です。共有`readers`と静的`lnb_15v_supported`は筐体直下です。未知inventoryは省略し、既知の0件と区別します。`serial_unique`はスキャン内の一意性で、重複は`false`、観測不足は`null`です。片側USBだけの筐体は、それだけを理由に重複扱いしません。デバイスを所有せず、ファームウェアも稼働中の `px4d` も不要です。場所やserialの不明項目は`null`、筐体に割り当てられない対象USB観測は`ungrouped_usb_devices`へ残します。旧`px4d --list`は廃止し、不正引数（exit 2）とします。`px4ctl list`は引き続き利用できます。
@@ -403,7 +403,7 @@ px4-ts [--device serial:...|usb:...] [--instance TOKEN] --receiver ID --channel 
   - `-o/--output PATH`: 出力先ファイルパスを指定します（`-` で標準出力、既定値: `-`）。
   - `--tune-timeout-ms N`: チューニング待機時間（ミリ秒、範囲: 100〜30000、既定値: 10000）。
   - LNB電圧はTS選局引数では指定できません。旧 `--lnb-voltage 0|15` は通常の引数エラーになります。独立給電はdaemonの `--allow-lnb-power` と `px4ctl lnb-on/off` で制御します。
-  - `--runtime-dir PATH`: `px4d` と共有するランタイムルートディレクトリ（省略時は `$XDG_RUNTIME_DIR`）。
+  - `--runtime-dir PATH`: `px4d` と共有するランタイムルートディレクトリ（省略時はCore共通候補を使います）。
 
 旧 `--frequency-khz` / `--duration-seconds` / `--stream-id` は受け付けません。`--freq` は Hz、`--time` は秒、`--tsid` はTSIDを指定します。
 
