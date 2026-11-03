@@ -99,6 +99,16 @@ bool test_valid_modes()
     Arguments named_fd = fd_arguments();
     named_fd.insert(named_fd.end(), {"--instance", "fd_device-1"});
     PX4D_CHECK(parse(named_fd).valid);
+    Arguments numeric_instance = fd_arguments();
+    numeric_instance.insert(numeric_instance.end(), {"--instance", "123"});
+    const Px4dArguments numeric_instance_result = parse(numeric_instance);
+    PX4D_CHECK(numeric_instance_result.valid &&
+               numeric_instance_result.instance == "123");
+    Arguments lowercase_instance = fd_arguments();
+    lowercase_instance.insert(lowercase_instance.end(), {"--instance", "rooma"});
+    const Px4dArguments lowercase_instance_result = parse(lowercase_instance);
+    PX4D_CHECK(lowercase_instance_result.valid &&
+               lowercase_instance_result.instance == "rooma");
 
     Arguments limits = fd_arguments();
     limits[2U] = "0";
@@ -242,22 +252,38 @@ bool test_device_and_general_rejections()
     bad_instance.insert(bad_instance.end(), {"--instance", "../bad"});
     const Px4dArguments bad_instance_result = parse(bad_instance);
     PX4D_CHECK(!bad_instance_result.valid);
-    PX4D_CHECK(bad_instance_result.error.find("1-80 ASCII letters") !=
+    PX4D_CHECK(bad_instance_result.error.find("1-64 ASCII") !=
                std::string_view::npos);
-    Arguments reserved_instance = native_arguments();
-    reserved_instance.insert(reserved_instance.end(), {"--instance", "999999999999999"});
-    PX4D_CHECK(!parse(reserved_instance).valid);
+    for (const char* invalid : {".", "..", ".a", "RoomA.", "CON", "room/name",
+                                "room:name"}) {
+        Arguments invalid_instance = native_arguments();
+        invalid_instance.insert(invalid_instance.end(), {"--instance", invalid});
+        PX4D_CHECK(!parse(invalid_instance).valid);
+    }
+    const std::string long_instance(65U, 'a');
+    Arguments overlong_instance = native_arguments();
+    overlong_instance.insert(overlong_instance.end(), {"--instance", long_instance});
+    PX4D_CHECK(!parse(overlong_instance).valid);
+    Arguments serial_instance = native_arguments();
+    serial_instance.insert(serial_instance.end(), {"--instance", "999999999999999"});
+    PX4D_CHECK(parse(serial_instance).valid);
     const Arguments same_instance{"px4d", "--device", "usb:1-2",
                                   "--firmware", "firmware.bin", "--instance",
                                   "00001205000960"};
-    PX4D_CHECK(!parse(same_instance).valid);
+    PX4D_CHECK(parse(same_instance).valid);
 
     const Arguments help{"px4d", "--help"};
     const Px4dArguments help_result = parse(help);
     PX4D_CHECK(help_result.valid && help_result.help);
     Arguments combined_help = help;
     combined_help.insert(combined_help.end(), {"--fd", "10", "--fd", "11"});
-    PX4D_CHECK(!parse(combined_help).valid);
+    PX4D_CHECK(parse(combined_help).valid && parse(combined_help).help);
+    PX4D_CHECK(parse({"px4d", "--help", "--unknown"}).help);
+    PX4D_CHECK(parse({"px4d", "--version", "--unknown"}).version);
+    PX4D_CHECK(parse({"px4d", "--version", "--help"}).help);
+    const auto firmware_named_help = parse({"px4d", "--device",
+        "serial:00001205000960", "--firmware", "-h"});
+    PX4D_CHECK(firmware_named_help.valid && firmware_named_help.firmware == "-h");
 
     PX4D_CHECK(!parse_px4d_arguments(0, nullptr).valid);
     const char* const null_program[]{nullptr};
@@ -276,7 +302,7 @@ bool test_list_mode()
     combined.push_back("--list");
     PX4D_CHECK(!parse(combined).valid);
     PX4D_CHECK(!parse({"px4d", "--list", "--list"}).valid);
-    PX4D_CHECK(!parse({"px4d", "--list", "--help"}).valid);
+    PX4D_CHECK(parse({"px4d", "--list", "--help"}).help);
     const Px4dArguments json = parse({"px4d", "--list-json"});
     PX4D_CHECK(json.valid && json.list_json && json.device.empty());
     PX4D_CHECK(!parse({"px4d", "--list", "--list-json"}).valid);
@@ -298,8 +324,8 @@ bool test_models_mode()
     PX4D_CHECK(!parse({"px4d", "--models", "--models"}).valid);
     PX4D_CHECK(!parse({"px4d", "--models", "--list"}).valid);
     PX4D_CHECK(!parse({"px4d", "--list-json", "--models"}).valid);
-    PX4D_CHECK(!parse({"px4d", "--models", "--help"}).valid);
-    PX4D_CHECK(!parse({"px4d", "--help", "--models"}).valid);
+    PX4D_CHECK(parse({"px4d", "--models", "--help"}).help);
+    PX4D_CHECK(parse({"px4d", "--help", "--models"}).help);
     Arguments combined = native_arguments();
     combined.push_back("--models");
     PX4D_CHECK(!parse(combined).valid);
@@ -314,8 +340,12 @@ bool test_version_mode()
     PX4D_CHECK(!parse(native_arguments()).version);
     for (const char* option : {"--version", "--help", "--models", "--list-json",
                                "--device", "--unknown"}) {
-        PX4D_CHECK(!parse({"px4d", "--version", option}).valid);
-        PX4D_CHECK(!parse({"px4d", option, "--version"}).valid);
+        const auto after = parse({"px4d", "--version", option});
+        const auto before = parse({"px4d", option, "--version"});
+        PX4D_CHECK(after.valid && (option == std::string_view("--help")
+            ? after.help : after.version));
+        PX4D_CHECK(before.valid && (option == std::string_view("--help")
+            ? before.help : before.version));
     }
     return true;
 }
@@ -325,14 +355,31 @@ bool test_short_options_and_verbose()
     const auto help = parse({"px4d", "-h"});
     PX4D_CHECK(help.valid && help.help);
     for (const char* option : {"-h", "--help", "--version", "--models", "--list-json"}) {
-        PX4D_CHECK(!parse({"px4d", "-v", option}).valid);
-        PX4D_CHECK(!parse({"px4d", option, "--verbose"}).valid);
-        PX4D_CHECK(!parse({"px4d", "-h", option}).valid);
+        const auto with_version = parse({"px4d", "-v", option});
+        if (option == std::string_view("-h") || option == std::string_view("--help"))
+            PX4D_CHECK(with_version.valid && with_version.help);
+        else if (option == std::string_view("--version"))
+            PX4D_CHECK(with_version.valid && with_version.version);
+        else
+            PX4D_CHECK(!with_version.valid);
+        const auto with_verbose = parse({"px4d", option, "--verbose"});
+        if (option == std::string_view("-h") || option == std::string_view("--help"))
+            PX4D_CHECK(with_verbose.valid && with_verbose.help);
+        else if (option == std::string_view("--version"))
+            PX4D_CHECK(with_verbose.valid && with_verbose.version);
+        else
+            PX4D_CHECK(!with_verbose.valid);
+        PX4D_CHECK(parse({"px4d", "-h", option}).valid &&
+                   parse({"px4d", "-h", option}).help);
     }
     Arguments short_firmware = native_arguments();
     short_firmware[3U] = "-F";
     PX4D_CHECK(!parse(short_firmware).valid);
     PX4D_CHECK(parse(short_firmware).error == "unknown argument");
+    Arguments short_version = native_arguments();
+    short_version.push_back("-V");
+    PX4D_CHECK(!parse(short_version).valid &&
+               parse(short_version).error == "unknown argument");
     for (const char* option : {"-v", "--verbose"}) {
         Arguments verbose = native_arguments();
         verbose.push_back(option);
@@ -344,7 +391,7 @@ bool test_short_options_and_verbose()
     PX4D_CHECK(parse(repeated_verbose).valid && parse(repeated_verbose).verbose);
     PX4D_CHECK(!parse({"px4d", "--device", "serial:00001205000960", "--firmware"}).valid);
     PX4D_CHECK(!parse({"px4d", "--device", "serial:00001205000960", "--firmware", ""}).valid);
-    PX4D_CHECK(!parse({"px4d", "--device", "serial:00001205000960", "--firmware", "--help"}).valid);
+    PX4D_CHECK(parse({"px4d", "--device", "serial:00001205000960", "--firmware", "--help"}).help);
     Arguments duplicate = native_arguments();
     duplicate.insert(duplicate.end(), {"--firmware", "other.bin"});
     PX4D_CHECK(!parse(duplicate).valid);

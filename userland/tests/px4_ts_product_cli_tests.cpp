@@ -52,8 +52,15 @@ int main()
     const auto version = parse({"px4-ts", "--version"});
     ok &= check(version.valid && version.version && version.product_cli && !version.help,
                 "--version is standalone");
-    ok &= check(!parse({"px4-ts", "--version", "--receiver", "0"}).valid,
-                "--version cannot be combined");
+    const auto mixed_version = parse({"px4-ts", "--version", "--receiver"});
+    ok &= check(mixed_version.valid && mixed_version.version,
+                "--version takes precedence over invalid arguments");
+    const auto mixed_metadata = parse({"px4-ts", "--version", "--help"});
+    ok &= check(mixed_metadata.valid && mixed_metadata.help,
+                "--help takes precedence over --version");
+    ok &= check(!parse({"px4-ts", "--device", "serial:00001205000960",
+                        "-c", "T13"}).valid,
+                "receiver must be explicit even for a single-receiver product");
 
     const auto t13 = parse({"px4-ts", "--device", "serial:00001205000960",
                             "--receiver", "0", "-c", "T13"});
@@ -79,13 +86,14 @@ int main()
                          "--receiver", "0", "--frequency-khz", "557142"}).valid,
                 "legacy frequency alias is rejected");
 
-    for (const char* spelling : {"RoomA", "rooma", "ROOMA", "receiver.left"}) {
+    for (const char* spelling : {"RoomA", "rooma", "ROOMA", "receiver.left",
+                                 "00001205000960"}) {
         const auto matched = parse_product({"px4-ts", "--instance", spelling,
                                             "--receiver", "0", "-c", "T13"});
         ok &= check(matched.valid && matched.instance == spelling,
                     "product profile preserves the explicit instance spelling");
     }
-    for (const char* rejected : {".", "..", "room/a", "room:a", "00001205000960"}) {
+    for (const char* rejected : {".", "..", "room/a", "room:a"}) {
         ok &= check(!parse_product({"px4-ts", "--instance", rejected,
                                     "--receiver", "0", "-c", "T13"}).valid,
                     "product profile rejects an invalid instance token");

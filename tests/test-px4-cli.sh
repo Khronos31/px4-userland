@@ -24,13 +24,19 @@ for program in px4d px4-ts px4ctl px4-termux; do
     case "$program" in
         px4d|px4-ts|px4-termux) grep -qi 'unknown argument' "$test_root/$program.err" ;;
     esac
-    for option in --help --version --unknown; do
+    status=0
+    "$@" --version --unknown >"$test_root/$program.version" 2>&1 || status=$?
+    [ "$status" -eq 0 ]
+    grep -F "$name $version" "$test_root/$program.version" >/dev/null
+    status=0
+    "$@" --unknown --version >"$test_root/$program.version" 2>&1 || status=$?
+    [ "$status" -eq 0 ]
+    grep -F "$name $version" "$test_root/$program.version" >/dev/null
+    for arguments in '--version --help' '--help --version' '--help --unknown'; do
         status=0
-        "$@" --version "$option" >/dev/null 2>&1 || status=$?
-        [ "$status" -eq 2 ]
-        status=0
-        "$@" "$option" --version >/dev/null 2>&1 || status=$?
-        [ "$status" -eq 2 ]
+        "$@" $arguments >"$test_root/$program.metadata" 2>&1 || status=$?
+        [ "$status" -eq 0 ]
+        grep -F 'usage:' "$test_root/$program.metadata" >/dev/null
     done
 done
 for option in --list -l; do

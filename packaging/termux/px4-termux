@@ -22,6 +22,48 @@ fail()
     exit 2
 }
 
+has_metadata_option()
+{
+    wanted=$1
+    shift
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --help|-h)
+                [ "$wanted" = help ] && return 0
+                ;;
+            --version)
+                [ "$wanted" = version ] && return 0
+                ;;
+            --firmware|--runtime-dir)
+                if [ "$#" -gt 1 ]; then
+                    case "$2" in --*) ;; *) shift 2; continue ;; esac
+                fi
+                ;;
+            --usb-device|--device|--instance)
+                if [ "$#" -gt 1 ]; then
+                    case "$2" in --*|-h) ;; *) shift 2; continue ;; esac
+                fi
+                ;;
+        esac
+        shift
+    done
+    return 1
+}
+
+show_version()
+{
+    product_version='@PX4_PROJECT_VERSION@'
+    case "$product_version" in
+    @*)
+        source_root=$(CDPATH='' cd -- "$(dirname -- "$script_path")/../.." && pwd -P) ||
+            fail 'cannot resolve source VERSION'
+        IFS= read -r product_version < "$source_root/VERSION" ||
+            fail 'cannot read source VERSION'
+        ;;
+    esac
+    printf 'px4-termux %s\n' "$product_version"
+}
+
 script_path=$0
 case "$script_path" in
     /*) ;;
@@ -85,6 +127,14 @@ valid_fd()
 stage=${PX4_TERMUX_STAGE-0}
 case "$stage" in
 0)
+    if has_metadata_option help "$@"; then
+        usage
+        exit 0
+    fi
+    if has_metadata_option version "$@"; then
+        show_version
+        exit 0
+    fi
     usb_device_count=0
     usb_device_1=
     usb_device_2=
@@ -96,28 +146,12 @@ case "$stage" in
     allow_lnb_power=0
     while [ "$#" -gt 0 ]; do
         case "$1" in
-            --help)
-                [ "$#" -eq 1 ] || fail '--help cannot be combined with other arguments'
+            --help|-h)
                 usage
                 exit 0
                 ;;
             --version)
-                if [ "$#" -ne 1 ] || [ "$usb_device_count" -ne 0 ] ||
-                    [ -n "$firmware$device$instance$runtime_dir" ] ||
-                    [ "$group" -ne 0 ] || [ "$allow_lnb_power" -ne 0 ]; then
-                    fail '--version cannot be combined with other arguments'
-                fi
-                product_version='@PX4_PROJECT_VERSION@'
-                case "$product_version" in
-                @*)
-                    # A source checkout uses VERSION; builds and archives embed it.
-                    source_root=$(CDPATH='' cd -- "$(dirname -- "$script_path")/../.." && pwd -P) ||
-                        fail 'cannot resolve source VERSION'
-                    IFS= read -r product_version < "$source_root/VERSION" ||
-                        fail 'cannot read source VERSION'
-                    ;;
-                esac
-                printf 'px4-termux %s\n' "$product_version"
+                show_version
                 exit 0
                 ;;
             --usb-device)

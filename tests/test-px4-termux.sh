@@ -37,9 +37,20 @@ for option in --version --help --group --allow-lnb-power --unknown; do
         fi
         status=0
         sh "$launcher" "$@" >"$test_root/version.out" 2>"$test_root/version.err" || status=$?
-        [ "$status" -eq 2 ] || fail_test "combined version exited $status: $*"
+        [ "$status" -eq 0 ] || fail_test "metadata with invalid arguments exited $status: $*"
+        if [ "$option" = --help ]; then
+            grep -q '^usage: px4-termux' "$test_root/version.out" ||
+                fail_test 'help did not take precedence over version'
+        else
+            [ "$(cat "$test_root/version.out")" = "px4-termux $version" ] ||
+                fail_test "version did not take precedence over invalid arguments: $*"
+        fi
     done
 done
+status=0
+sh "$launcher" -h --unknown >"$test_root/help.out" 2>"$test_root/help.err" || status=$?
+[ "$status" -eq 0 ] || fail_test "combined help exited $status"
+grep -q '^usage: px4-termux' "$test_root/help.out" || fail_test 'short help was not recognized'
 
 assert_equal()
 {
