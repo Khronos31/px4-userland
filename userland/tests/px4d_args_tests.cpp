@@ -99,6 +99,16 @@ bool test_valid_modes()
     Arguments named_fd = fd_arguments();
     named_fd.insert(named_fd.end(), {"--instance", "fd_device-1"});
     PX4D_CHECK(parse(named_fd).valid);
+    Arguments numeric_instance = fd_arguments();
+    numeric_instance.insert(numeric_instance.end(), {"--instance", "123"});
+    const Px4dArguments numeric_instance_result = parse(numeric_instance);
+    PX4D_CHECK(numeric_instance_result.valid &&
+               numeric_instance_result.instance == "123");
+    Arguments lowercase_instance = fd_arguments();
+    lowercase_instance.insert(lowercase_instance.end(), {"--instance", "rooma"});
+    const Px4dArguments lowercase_instance_result = parse(lowercase_instance);
+    PX4D_CHECK(lowercase_instance_result.valid &&
+               lowercase_instance_result.instance == "rooma");
 
     Arguments limits = fd_arguments();
     limits[2U] = "0";
@@ -242,15 +252,25 @@ bool test_device_and_general_rejections()
     bad_instance.insert(bad_instance.end(), {"--instance", "../bad"});
     const Px4dArguments bad_instance_result = parse(bad_instance);
     PX4D_CHECK(!bad_instance_result.valid);
-    PX4D_CHECK(bad_instance_result.error.find("1-80 ASCII letters") !=
+    PX4D_CHECK(bad_instance_result.error.find("1-64 ASCII") !=
                std::string_view::npos);
-    Arguments reserved_instance = native_arguments();
-    reserved_instance.insert(reserved_instance.end(), {"--instance", "999999999999999"});
-    PX4D_CHECK(!parse(reserved_instance).valid);
+    for (const char* invalid : {".", "..", ".a", "RoomA.", "CON", "room/name",
+                                "room:name"}) {
+        Arguments invalid_instance = native_arguments();
+        invalid_instance.insert(invalid_instance.end(), {"--instance", invalid});
+        PX4D_CHECK(!parse(invalid_instance).valid);
+    }
+    const std::string long_instance(65U, 'a');
+    Arguments overlong_instance = native_arguments();
+    overlong_instance.insert(overlong_instance.end(), {"--instance", long_instance});
+    PX4D_CHECK(!parse(overlong_instance).valid);
+    Arguments serial_instance = native_arguments();
+    serial_instance.insert(serial_instance.end(), {"--instance", "999999999999999"});
+    PX4D_CHECK(parse(serial_instance).valid);
     const Arguments same_instance{"px4d", "--device", "usb:1-2",
                                   "--firmware", "firmware.bin", "--instance",
                                   "00001205000960"};
-    PX4D_CHECK(!parse(same_instance).valid);
+    PX4D_CHECK(parse(same_instance).valid);
 
     const Arguments help{"px4d", "--help"};
     const Px4dArguments help_result = parse(help);

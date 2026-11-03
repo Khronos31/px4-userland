@@ -200,9 +200,8 @@ Px4dArguments parse_px4d_arguments(int argc,
         }
     }
     if (have_instance &&
-        (!valid_runtime_instance(result.instance) || valid_device_instance(result.instance)))
-        return invalid("--instance must be 1-80 ASCII letters, digits, '.', '_' or '-', "
-                       "excluding '.' and '..' and device serials");
+        !dtv::userland::identity::canonicalize_instance(result.instance).has_value())
+        return invalid("--instance must be a 1-64 ASCII connection token");
     if (result.usb_selector && result.file_descriptor_count != 0U)
         return invalid("USB topology selector cannot be used with --fd");
     if (result.usb_selector && !have_instance)

@@ -356,10 +356,10 @@ px4d --version
 
 - `--device serial:SERIAL`: 14桁base serialまたは単一USB機種の15桁USB serialを指定します。同一serialの候補が一意でない場合は任意の筐体を選ばず失敗します。
 - `--device usb:BUS-PORT[,BUS-PORT]`: 現在のUSB topology位置を1個または2個指定します。`BUS-PORT`は`1-7.4.1`のような表記です。Q3U4は1位置から完全で一意なペアを確認できる場合に限り相方を自動解決し、そうでなければ2位置を要求します。位置指定時は`--instance TOKEN`も必須です。抜き差し後の物理個体を保証する識別子ではありません。旧`--usb-path`は受け付けません。
-- `--instance TOKEN`: ランタイムsocketの接続先名をシリアルから分けます。USB位置指定時は必須、FD起動でも指定可能です。同時利用するクライアントにも同じTOKENを指定してください。
+- `--instance TOKEN`: 1〜64文字のASCII接続名です。先頭は英数字、以降は英数字・`_`・`.`・`-`を使えます。末尾`.`、`.`/`..`、Windows予約名は使えません。ランタイムsocketの接続先名をシリアルから分け、USB位置指定時は必須、FD起動でも指定可能です。同時利用するクライアントにも大文字小文字を含め同じTOKENを指定してください。
 
 同じシリアルでシリアル名のデーモンとTOKEN名のデーモンは同時起動できず、後から起動した方が`BUSY`で失敗します。複数台を同時利用する場合は、先に起動したデーモンも停止してそれぞれ異なる`--instance TOKEN`で起動し直してください。`--device serial:SERIAL`クライアントは稼働中のシリアル名ソケットへ接続し、USBを再列挙して接続先を選び直す機能ではありません。
-- `-h/--help`: 同じヘルプを表示して終了します（単独指定、exit 0）。
+- `-h/--help`: 他の引数解析より優先して同じヘルプを表示して終了します（exit 0）。`--version`と両方指定した場合はhelpを表示します。
 - `--firmware PATH`: IT930x ファームウェアバイナリのパスを指定します（必須）。
 - `-v/--verbose`: 起動時のfirmware読込・USB open・サービス起動の定型debug診断を標準エラーへ追加します。省略時のログ閾値はinfoです。パス・シリアル・TS/APDU本文は追加診断へ出しません。繰り返し指定は同じverbose有効化とし、単独のhelp/version/models/list-jsonとは併用できません。
 - `--runtime-dir PATH`: ランタイムルートディレクトリを指定します（省略時は `$XDG_RUNTIME_DIR`）。
@@ -367,7 +367,7 @@ px4d --version
 - `--fd FD [--fd FD]`: Android 環境などで、ホスト側が開いた USB ファイルディスクリプタを直接渡して起動します。PX-Q3U4 は 2 つ、PX-M1UR / PX-S1UR / DTV02A-5TS-P / PX-MLT5PE は 1 つ指定します（この場合 `--device` は任意）。
 - `--list-json`: 接続中の対象筐体をCore共通の`userland.discovery` JSONで出して終了します（単独で指定）。`schema`・`producer`・`scan.complete/issues`を持ち、観測したUSBだけを`enclosures[].devices[]`へ、そのUSBの受信機を`devices[].receivers[]`へ載せます。`model`と`usb`は文字列、番号はnumber、放送方式は`systems:["ISDB-T","ISDB-S"]`等の配列です。共有`readers`と静的`lnb_15v_supported`は筐体直下です。未知inventoryは省略し、既知の0件と区別します。`serial_unique`はスキャン内の一意性で、重複は`false`、観測不足は`null`です。片側USBだけの筐体は、それだけを理由に重複扱いしません。デバイスを所有せず、ファームウェアも稼働中の `px4d` も不要です。場所やserialの不明項目は`null`、筐体に割り当てられない対象USB観測は`ungrouped_usb_devices`へ残します。旧`px4d --list`は廃止し、不正引数（exit 2）とします。`px4ctl list`は引き続き利用できます。
 - `--models`: 対応機種名とVID:PIDの静的テキスト一覧を出します。USBアクセスは行いません。
-- `--version`: `px4d VERSION`を標準出力へ出して終了します。`px4-ts`と`px4-termux`も自身のコマンド名と同じ管理元`VERSION`の版を表示します。既存の`px4ctl`は製品名`px4-userland VERSION`を表示します。単独指定のみ受理し、他引数との併用はexit 2です。機器・firmware・稼働daemon・TermuxのUSB許可は不要です。通常ビルドのランチャーはbuildディレクトリの`px4-termux`、配布版はアーカイブ内のものを使います。
+- `--version`: 他の引数解析より優先し、`px4d VERSION`を標準出力へ出して終了します。`px4-ts`と`px4-termux`も自身のコマンド名と同じ管理元`VERSION`の版を表示します。既存の`px4ctl`は製品名`px4-userland VERSION`を表示します。`--help`と両方指定した場合はhelpを表示します。機器・firmware・稼働daemon・TermuxのUSB許可は不要です。通常ビルドのランチャーはbuildディレクトリの`px4-termux`、配布版はアーカイブ内のものを使います。
 
 同一Linuxホスト内のlocalhost usbipを利用する場合は、VHCI側の2ノードを事前にopenし、`--fd FD --fd FD`で指定する。同一libusbコンテキスト内にexport元の物理機能とimport先のVHCI機能が同一シリアルで現れ、通常列挙では重複スロット（`INVALID_ARGUMENT`）となるためである。なお、LAN経由のusbip構成は未検証である。
 
@@ -376,7 +376,7 @@ px4d --version
 `px4d` に接続し、指定した受信機から MPEG-TS ストリームを受信して標準出力またはファイルへ出力します。
 
 ```sh
-px4-ts [--device serial:...|usb:...] [--instance TOKEN] [--receiver ID] --system isdb-t|isdb-s --freq HZ [--runtime-dir PATH] [--group] [OPTIONS]
+px4-ts [--device serial:...|usb:...] [--instance TOKEN] --receiver ID --system isdb-t|isdb-s --freq HZ [--runtime-dir PATH] [--group] [OPTIONS]
 ```
 
 POSIXでの接続先解決では、`--device` と `--instance` を省略すると、指定した `--runtime-dir` または既定runtime root候補から一意なPX4 daemonを選びます。候補が0件または複数なら失敗します。`--device` だけを指定した場合は一致するdevice identityのdaemonを一意に選び、`--instance` を指定した場合はそのtokenへ接続します。両方を指定すると、そのinstanceへのdevice identity assertionになります。
@@ -384,11 +384,11 @@ POSIXでの接続先解決では、`--device` と `--instance` を省略する�
 `--channel CH` を使うと、チャンネル表記から方式と周波数、ISDB-S の slot を決められます。
 
 ```sh
-px4-ts [--device serial:...|usb:...] [--instance TOKEN] [--receiver ID] --channel CH [--runtime-dir PATH] [--group] [OPTIONS]
+px4-ts [--device serial:...|usb:...] [--instance TOKEN] --receiver ID --channel CH [--runtime-dir PATH] [--group] [OPTIONS]
 ```
 
 - `--device serial:...|usb:...` / `--instance TOKEN`: 上記POSIX接続先解決に使います。位置指定で起動したデーモンに対するidentity assertionには同じTOKENを指定してください。ここに記した省略時選択はPOSIXの動作です。
-- `--receiver ID`: 利用する受信機番号です。省略時はdaemonが公開する受信機が1つの場合にその番号を選び、複数の場合は明示指定が必要です。DTV02A-5TS-P / PX-MLT5PE は 0..4 です。
+- `--receiver ID`: 利用する受信機番号を明示します（必須）。DTV02A-5TS-P / PX-MLT5PE は 0..4 です。
 - `-s/--system isdb-t|isdb-s`: 放送方式（`--freq`使用時に必須）。`--channel`と併用する場合はchannelから決まる方式と一致する値を指定します。
 - `-f/--freq HZ`: 受信周波数（Hz 単位、`--system`と併用）。
 - `-c/--channel CH`: チャンネル表記（後述）から方式と周波数を決めます。`--freq`とは同時指定できません。
