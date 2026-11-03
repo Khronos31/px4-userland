@@ -68,7 +68,8 @@ bool test_valid_modes()
     PX4D_CHECK(px4d_open_mode(descriptors) == Px4dOpenMode::file_descriptors);
 
     Arguments filtered = fd_arguments();
-    filtered.insert(filtered.end(), {"--device", "serial:00001205000960", "--group"});
+    filtered.insert(filtered.end(), {"--device", "serial:00001205000960", "--runtime-dir",
+                                     "/tmp/px4d-group", "--group"});
     const Px4dArguments filtered_result = parse(filtered);
     PX4D_CHECK(filtered_result.valid && filtered_result.group &&
                filtered_result.device == "serial:00001205000960");
@@ -169,6 +170,13 @@ bool test_device_and_general_rejections()
 {
     const Arguments no_device{"px4d", "--firmware", "firmware.bin"};
     PX4D_CHECK(!parse(no_device).valid);
+
+    const Arguments group_without_runtime{"px4d", "--device", "serial:00001205000960",
+                                         "--firmware", "firmware.bin", "--group"};
+    const Px4dArguments group_without_runtime_result = parse(group_without_runtime);
+    PX4D_CHECK(!group_without_runtime_result.valid &&
+               group_without_runtime_result.error.find("--runtime-dir") !=
+                   std::string_view::npos);
 
     Arguments bad_native = native_arguments();
     bad_native[2U] = "serial:0000120500096";
