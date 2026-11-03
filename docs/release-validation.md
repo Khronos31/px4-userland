@@ -451,9 +451,9 @@ helperのversionはrunbook Git commitとSHA-256の組で固定する。candidate
 
 ### T09 TS・counter・終了値判定
 
-- **適用対象/頻度:** 全capture/soak。
+- **適用対象/頻度:** 保存TSを対象とする品質確認。2時間ソークでは自動適用せず、5分品質試験と運転安定性の記録を分ける。
 - **準備:** Python 3.11以上を`python3 --version`で確認し、固定取得した`$TOOL/ts-check.py`（Windowsは`$Helper`）を使う。候補ごとに新規作成した`$LOG`を使う。
-- **実操作/利用者への依頼:** POSIXでは各TSに`python3 $TOOL/ts-check.py "$LOG/<receiver>.ts" > "$LOG/<receiver>.ts-check.json"`を実行する。Windowsは同じhelperを`python $Helper "$LOG\<receiver>.ts"`で実行し、標準出力を`$LOG`へ保存する。全capture/soakの各TSで実行し、候補daemonのdrop/USB counterも記録する。
+- **実操作/利用者への依頼:** POSIXでは品質確認対象の各TSに`python3 $TOOL/ts-check.py "$LOG/<receiver>.ts" > "$LOG/<receiver>.ts-check.json"`を実行する。Windowsは同じhelperを`python $Helper "$LOG\<receiver>.ts"`で実行し、標準出力を`$LOG`へ保存する。候補daemonのdrop/USB counterも記録する。2時間運転安定性runで保存TS品質を確認する場合は、独立した品質結果として記録し、安定性の合否へ自動結合しない。
 - **期待値/終了値:** helperは固定4096 packet chunkでTSを走査し、null PIDはcontinuity判定から除外して`null_packet_count`をJSONへ出す。詳細indexが必要なrunだけ`--null-indices "$LOG/<receiver>.null-indices.txt"`を追加し、zero-based indexを別fileへ1行ずつ出力する。出力先とTSを同じpathにしない。同一PIDの隣接payload duplicate pairはPCR timestamp以外の全byte一致時だけ1組を許容し、duplicate indexをJSONへ記録する。3個目、内容差、非連続再送はcontinuity error。retune境界を確認できるrunはzero-basedの最初の出力packet indexを`--retune-boundary-at`へ渡し、境界後の各PID初回packetだけCC比較を除外する。TEI、sync、framing、invalid adaptationは除外しない。PCR reserved bits/extension違反とinvalid adaptationはfail。全TSが製品SPEC基準を満たし通常取得exit 0。非空file/counter 0だけでpassにしない。
 - **停止/cleanup:** 元TS/hash/logを残してT08 cleanup。
 - **記録:** `python3 --version`、helperのGit SHA/hash、TS hash、helperのJSON/終了値、duplicate/invalid packet index、null packet countと必要時の別index file、sync/TEI/continuity/drop/counter、client exit。
@@ -498,11 +498,11 @@ if ($parserRc -ne 0) { throw "TS parser failed: $parserRc" }
 ### T13 連続受信・頻度
 
 - **適用対象/頻度:** 毎releaseおよび全model初回/major。
-- **準備:** 確定頻度表の対象archive/model/timeをmatrixへ展開する。
+- **準備:** 確定頻度表の対象archive/model/timeをmatrixへ展開する。機種ごとの基本負荷は地上波1 streamを`/dev/null`へ出力する。別の負荷を指定する場合は、その負荷の結果として記録する。
 - **実操作/利用者への依頼:** 毎release代表Linux x86_64 glibc 2h/全archive native short; 初回全model全無料channel 10s、macOS/Windows 30m、他ABI 10m。
-- **期待値/終了値:** 指定連続時間完了かつTS条件合格。追加soakは明示ユーザー決定分のみ。
+- **期待値/終了値:** 2時間ソークは指定負荷での運転安定性を判定する。指定時間を連続完了し、daemonからIPCを経てclientへ届くbyte/packetの観測系列が進行し、実daemon/client PID・実行ファイルに紐づくFD/RSS系列を記録し、client/daemonの正常終了と所有process・FD・IPCの解放を確認する。PID生存だけを出力進行としない。FD/RSSの定量閾値は設けず、最終観測まで安定しない持続増加は判定保留とする。観測欠測はnull/errorとして記録し、zeroやpassにしない。TEI/CC等のTS品質は5分品質試験で判定し、2時間ソークへ自動結合しない。追加soakは明示ユーザー決定分のみ。この運転安定性判定は2時間ソークに適用し、他の既存時間条件・採否は変更しない。
 - **停止/cleanup:** T08通常stopと全resource cleanup。
-- **記録:** model/OS/ABI/archive、時間、TS/counter、FD/RSS、未実施理由。
+- **記録:** model/OS/ABI/archive、指定負荷と時間、観測間のbyte/packet進行、実PID/executableごとのFD/RSS系列、終了値と所有resource/IPC cleanup、欠測/未実施理由を記録する。品質結果は別欄に保持する。Windowsのhandle countはFDの代替とせず、FD未取得はnull/errorとする。
 
 ### T14 失敗・リリース判定
 
@@ -702,13 +702,15 @@ case "$RECEIVER:$CAPTURE_SECONDS" in *[!0-9:]*|:*) echo 'receiver/duration must 
 echo 0 > "$LOG/t27.rc"
 ```
 
-代表機の必須2時間runは同じactive candidate daemonの下で、短時間smokeと別に次を実行する。初回/majorのmacOS・WindowsではCAPTURE_SECONDS=1800、他OS/ABIでは600を設定する。
+代表機の必須2時間runは同じactive candidate daemonの下で、短時間smokeと別に次を実行する。初回/majorのmacOS・WindowsではCAPTURE_SECONDS=1800、他OS/ABIでは600を設定する。7200秒はTSを破棄し、1800秒/600秒ではTSを代表soakファイルへ保存して既存の品質検査に利用できる。
 
 ```sh
 CAPTURE_SECONDS='7200'
 require_value CAPTURE_SECONDS "$CAPTURE_SECONDS"
+CAPTURE_OUTPUT="$LOG/representative-soak.ts"
+if [ "$CAPTURE_SECONDS" = 7200 ]; then CAPTURE_OUTPUT=/dev/null; fi
 "$D/px4-ts" --device "$ID" --instance "$INSTANCE" --receiver "$RECEIVER" --channel T27 \
-  --runtime-dir "$RT" --output "$LOG/representative-soak.ts" --time "$CAPTURE_SECONDS" \
+  --runtime-dir "$RT" --output "$CAPTURE_OUTPUT" --time "$CAPTURE_SECONDS" \
   > "$LOG/representative-soak.out" 2> "$LOG/representative-soak.err" || { rc=$?; echo "$rc" > "$LOG/representative-soak.rc"; exit "$rc"; }
 echo 0 > "$LOG/representative-soak.rc"
 ```
@@ -1029,8 +1031,8 @@ Linux musl aarch64はE15 Fedora aarch64上のAlpine arm64 Docker containerでcan
 ユーザーが追加soakを選んだときの実行方法は次の通り。
 
 - 10分/30分: 指定OSで指定profileの連続受信を行い、該当するstatus/card/retune/stop-reopenなどの挙動を記録する。
-- 2時間: 指定OSで、選択されたprofileに応じた負荷、反復status/APDU、retune/stop-reopen、FD数・RSSの経時傾向、cleanupを確認する。Q3U4では§0.1の8 receiver T/S混在を使う。
-- いずれもshell終了値だけで合否を決めない。TS/counterはSPECの受入条件を使う。FD/RSSは数値固定の合否閾値を設定せず、非安定な持続増加は`判定保留`として調査する。
+- 2時間: 指定OSで、選択されたprofileに応じた負荷、反復status/APDU、retune/stop-reopen、FD数・RSSの経時傾向、cleanupを確認する。基本負荷はT13に従い、Q3U4の8 receiver T/S混在をユーザーが指定した場合はその負荷として§0.1を使う。運転安定性の合否は本節の時間・出力進行・資源・終了cleanupで判定し、TS/counter品質を自動で結合しない。保存TSの品質確認が必要な場合は別の品質確認として記録する。
+- 10分/30分は該当するSPEC 10.2受入条件を適用する。いずれもshell終了値だけで合否を決めない。FD/RSSは数値固定の合否閾値を設定せず、非安定な持続増加は`判定保留`として調査する。
 
 追加profile認定、single receiver認定、PX-M1UR/PX-S1UR同一serial確認、receiver 7比較の個別条件はSPEC 10.2.6a/10.2.7と各記録を参照する。これらの認定をreleaseごとの代表Linux x86_64 2時間、またはmajor versionごとの各OS/architecture短TSの代わりに使わない。
 
