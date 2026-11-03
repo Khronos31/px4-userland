@@ -55,6 +55,37 @@ Px4dArguments parse_px4d_arguments(int argc,
         return invalid("invalid argument vector");
     }
 
+    bool request_help = false;
+    bool request_version = false;
+    for (int index = 1; index < argc; ++index) {
+        if (argv[index] == nullptr) continue;
+        const std::string_view option(argv[index]);
+        if (option == "--help" || option == "-h") request_help = true;
+        else if (option == "--version") request_version = true;
+        if ((option == "--firmware" || option == "--runtime-dir") &&
+            index + 1 < argc && argv[index + 1] != nullptr &&
+            std::string_view(argv[index + 1]).rfind("--", 0U) != 0U) {
+            ++index;
+        } else if ((option == "--device" || option == "--instance") &&
+                   index + 1 < argc && argv[index + 1] != nullptr &&
+                   std::string_view(argv[index + 1]).rfind("-", 0U) != 0U) {
+            ++index;
+        } else if (option == "--fd" && index + 1 < argc &&
+                   argv[index + 1] != nullptr &&
+                   std::string_view(argv[index + 1]) != "-h" &&
+                   std::string_view(argv[index + 1]) != "--help" &&
+                   std::string_view(argv[index + 1]) != "--version") {
+            ++index;
+        }
+    }
+    if (request_help || request_version) {
+        Px4dArguments result;
+        result.valid = true;
+        result.help = request_help;
+        result.version = !request_help && request_version;
+        return result;
+    }
+
     Px4dArguments result;
     bool have_device = false;
     bool have_firmware = false;
@@ -66,18 +97,7 @@ Px4dArguments parse_px4d_arguments(int argc,
         std::string_view option(argv[index]);
         if (option == "-h") option = "--help";
         else if (option == "-v") option = "--verbose";
-        if (option == "--help") {
-            if (argc != 2) return invalid("--help cannot be combined");
-            result.valid = true;
-            result.help = true;
-            return result;
-        }
-        if (option == "--version") {
-            if (argc != 2) return invalid("--version cannot be combined");
-            result.valid = true;
-            result.version = true;
-            return result;
-        }
+        if (option == "--help" || option == "--version") return invalid("metadata scan failed");
         if (option == "--list-json") {
             if (argc != 2) return invalid("--list-json cannot be combined");
             result.valid = true;
