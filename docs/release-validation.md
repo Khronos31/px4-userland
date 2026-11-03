@@ -702,13 +702,15 @@ case "$RECEIVER:$CAPTURE_SECONDS" in *[!0-9:]*|:*) echo 'receiver/duration must 
 echo 0 > "$LOG/t27.rc"
 ```
 
-代表機の必須2時間runは同じactive candidate daemonの下で、短時間smokeと別に次を実行する。初回/majorのmacOS・WindowsではCAPTURE_SECONDS=1800、他OS/ABIでは600を設定する。
+代表機の必須2時間runは同じactive candidate daemonの下で、短時間smokeと別に次を実行する。初回/majorのmacOS・WindowsではCAPTURE_SECONDS=1800、他OS/ABIでは600を設定する。7200秒はTSを破棄し、1800秒/600秒ではTSを代表soakファイルへ保存して既存の品質検査に利用できる。
 
 ```sh
 CAPTURE_SECONDS='7200'
 require_value CAPTURE_SECONDS "$CAPTURE_SECONDS"
+CAPTURE_OUTPUT="$LOG/representative-soak.ts"
+if [ "$CAPTURE_SECONDS" = 7200 ]; then CAPTURE_OUTPUT=/dev/null; fi
 "$D/px4-ts" --device "$ID" --instance "$INSTANCE" --receiver "$RECEIVER" --channel T27 \
-  --runtime-dir "$RT" --output /dev/null --time "$CAPTURE_SECONDS" \
+  --runtime-dir "$RT" --output "$CAPTURE_OUTPUT" --time "$CAPTURE_SECONDS" \
   > "$LOG/representative-soak.out" 2> "$LOG/representative-soak.err" || { rc=$?; echo "$rc" > "$LOG/representative-soak.rc"; exit "$rc"; }
 echo 0 > "$LOG/representative-soak.rc"
 ```
