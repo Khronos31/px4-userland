@@ -361,7 +361,7 @@ px4d --version
 同じシリアルでシリアル名のデーモンとTOKEN名のデーモンは同時起動できず、後から起動した方が`BUSY`で失敗します。複数台を同時利用する場合は、先に起動したデーモンも停止してそれぞれ異なる`--instance TOKEN`で起動し直してください。`--device serial:SERIAL`クライアントは稼働中のシリアル名ソケットへ接続し、USBを再列挙して接続先を選び直す機能ではありません。
 - `-h/--help`: 他の引数解析より優先して同じヘルプを表示して終了します（exit 0）。`--version`と両方指定した場合はhelpを表示します。
 - `--firmware PATH`: IT930x ファームウェアバイナリのパスを指定します（必須）。
-- `-v/--verbose`: 起動時のfirmware読込・USB open・サービス起動の定型debug診断を標準エラーへ追加します。省略時のログ閾値はinfoです。パス・シリアル・TS/APDU本文は追加診断へ出しません。繰り返し指定は同じverbose有効化とし、単独のhelp/version/models/list-jsonとは併用できません。
+- `-v/--verbose`: 起動時のfirmware読込・USB open・サービス起動の定型debug診断を標準エラーへ追加します。省略時のログ閾値はinfoです。パス・シリアル・TS/APDU本文は追加診断へ出しません。繰り返し指定は同じverbose有効化とし、help/versionが含まれる場合はmetadataを優先して終了します。`--models`/`--list-json`とは併用できません。
 - `--runtime-dir PATH`: ランタイムルートディレクトリを指定します（省略時は `$XDG_RUNTIME_DIR`）。
 - `--allow-lnb-power`: LNB 15V 対応機種で、衛星放送受信時の給電を許可します（安全のための明示的 opt-in）。非対応の5機種は上の一覧を参照してください。
 - `--fd FD [--fd FD]`: Android 環境などで、ホスト側が開いた USB ファイルディスクリプタを直接渡して起動します。PX-Q3U4 は 2 つ、PX-M1UR / PX-S1UR / DTV02A-5TS-P / PX-MLT5PE は 1 つ指定します（この場合 `--device` は任意）。
