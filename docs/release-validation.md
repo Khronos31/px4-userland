@@ -708,7 +708,7 @@ echo 0 > "$LOG/t27.rc"
 CAPTURE_SECONDS='7200'
 require_value CAPTURE_SECONDS "$CAPTURE_SECONDS"
 "$D/px4-ts" --device "$ID" --instance "$INSTANCE" --receiver "$RECEIVER" --channel T27 \
-  --runtime-dir "$RT" --output "$LOG/representative-soak.ts" --time "$CAPTURE_SECONDS" \
+  --runtime-dir "$RT" --output /dev/null --time "$CAPTURE_SECONDS" \
   > "$LOG/representative-soak.out" 2> "$LOG/representative-soak.err" || { rc=$?; echo "$rc" > "$LOG/representative-soak.rc"; exit "$rc"; }
 echo 0 > "$LOG/representative-soak.rc"
 ```
@@ -1029,8 +1029,8 @@ Linux musl aarch64はE15 Fedora aarch64上のAlpine arm64 Docker containerでcan
 ユーザーが追加soakを選んだときの実行方法は次の通り。
 
 - 10分/30分: 指定OSで指定profileの連続受信を行い、該当するstatus/card/retune/stop-reopenなどの挙動を記録する。
-- 2時間: 指定OSで、選択されたprofileに応じた負荷、反復status/APDU、retune/stop-reopen、FD数・RSSの経時傾向、cleanupを確認する。Q3U4では§0.1の8 receiver T/S混在を使う。
-- いずれもshell終了値だけで合否を決めない。TS/counterはSPECの受入条件を使う。FD/RSSは数値固定の合否閾値を設定せず、非安定な持続増加は`判定保留`として調査する。
+- 2時間: 指定OSで、選択されたprofileに応じた負荷、反復status/APDU、retune/stop-reopen、FD数・RSSの経時傾向、cleanupを確認する。基本負荷はT13に従い、Q3U4の8 receiver T/S混在をユーザーが指定した場合はその負荷として§0.1を使う。運転安定性の合否は本節の時間・出力進行・資源・終了cleanupで判定し、TS/counter品質を自動で結合しない。保存TSの品質確認が必要な場合は別の品質確認として記録する。
+- 10分/30分は該当するSPEC 10.2受入条件を適用する。いずれもshell終了値だけで合否を決めない。FD/RSSは数値固定の合否閾値を設定せず、非安定な持続増加は`判定保留`として調査する。
 
 追加profile認定、single receiver認定、PX-M1UR/PX-S1UR同一serial確認、receiver 7比較の個別条件はSPEC 10.2.6a/10.2.7と各記録を参照する。これらの認定をreleaseごとの代表Linux x86_64 2時間、またはmajor versionごとの各OS/architecture短TSの代わりに使わない。
 

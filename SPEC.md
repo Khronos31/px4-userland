@@ -1554,9 +1554,10 @@ soakと`px4_drv`のfresh comparisonを行わない選択をした。receiver 7�
 （[実測記録](docs/platforms/validation-results.md)）。これはこのcandidateに対するrelease-specificな受入判断のみであり、
 本節の将来向け手順・条件を変更せず、release approvalも意味しない。
 
-ユーザーが実施を選んだ場合は、指定OS上で指定時間、対象profile/topologyに適用される10.2の受入項目を実行する。
-Q3U4を指定された場合は8 receiverのISDB-T/S混在、必要なstatus/APDU/retune/stop-reopen、TS/counter、終了cleanupを
-確認する。30分・2時間試験のFD数/RSSは傾向を記録し、固定数値閾値では判定しない。最終観測まで安定しない持続増加が
+ユーザーが実施を選んだ場合は、指定OS上で指定時間、対象profile/topologyに応じた負荷、status/APDU/retune/stop-reopen、
+終了cleanupを確認する。10分・30分では該当する10.2の受入項目を適用する。2時間は次段落の運転安定性条件で判定し、
+TS/counter品質を自動で合否へ結合しない。TS品質の確認が必要な場合は保存TSを用いた独立確認として記録する。
+Q3U4の8 receiver ISDB-T/S混在はユーザーが負荷として指定した場合に確認する。30分・2時間試験のFD数/RSSは傾向を記録し、固定数値閾値では判定しない。最終観測まで安定しない持続増加が
 外部要因で説明できない場合は`判定保留`とし、passにしない。profile認定、serial衝突、receiver 7比較等の個別受入条件は
 10.2.6a/10.2.7のまま維持し、毎回必須の短時間artifact matrixの代わりにはしない。
 
