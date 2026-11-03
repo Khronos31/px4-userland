@@ -7,8 +7,8 @@ Status: Frozen v0.38 (2026-10-27)
 
 ### 1.0.0 CLI決定の追補 (2026-10-24)
 
-`px4d -h`は`--help`と同じ単独ヘルプ/exit 0、`-F PATH`は`--firmware PATH`と
-同じ値検証・読込処理、`-v`は`--verbose`と同じ起動時debug診断の有効化とする。
+`px4d -h`は`--help`と同じ単独ヘルプ/exit 0。`-F`はunknown argumentとしてexit 2で拒否し、
+firmware指定には`--firmware PATH`を使う。`-v`は`--verbose`と同じ起動時debug診断の有効化とする。
 verboseは既存Core Loggerの閾値をdebugへ切り替え、stderrへ定型診断だけを出す。
 繰り返し指定は同じ有効化とする。標準動作、単独help/version/models/list-jsonの併用拒否を維持し、
 機密値・TS/APDU本文を追加ログへ出さない。`-l`は追加しない。
