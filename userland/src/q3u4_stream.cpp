@@ -186,6 +186,10 @@ public:
                         owner.count_empty(receiver_base);
                         continue;
                     }
+                    if (stopping()) {
+                        owner.finish_pump(*this);
+                        break;
+                    }
                     owner.mark_bridge_terminal(*this, terminal_for_error(event.error()));
                     owner.finish_pump(*this);
                     break;

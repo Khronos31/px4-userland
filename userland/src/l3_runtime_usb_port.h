@@ -5,7 +5,11 @@
 #include "l3_adapter.h"
 #include "px4/libusb_transport.h"
 
+#include <array>
+#include <atomic>
 #include <cstdint>
+#include <memory>
+#include <thread>
 
 namespace px4::userland {
 
@@ -15,7 +19,8 @@ namespace px4::userland {
 class L3RuntimeUsbPort final : public L3UsbPort {
 public:
     explicit L3RuntimeUsbPort(Q3U4Runtime& runtime) noexcept;
-    ~L3RuntimeUsbPort() noexcept override = default;
+    L3RuntimeUsbPort(Transport& dev1, Transport& dev2) noexcept;
+    ~L3RuntimeUsbPort() noexcept override;
 
     dtv_l3_claim_result claim(dtv_l3_provider_binding* binding,
                               std::uint32_t claim_index) noexcept override;
@@ -31,14 +36,23 @@ public:
                          std::uint64_t transfer_id) noexcept override;
     dtv_l3_cancel_scope cancel_scope() const noexcept override;
 
-    unsigned int claim_calls = 0U;
-    unsigned int release_calls = 0U;
-    unsigned int write_calls = 0U;
-    unsigned int read_calls = 0U;
-    unsigned int completion_calls = 0U;
+    std::atomic<unsigned int> claim_calls{0U};
+    std::atomic<unsigned int> release_calls{0U};
+    std::atomic<unsigned int> submit_calls{0U};
+    std::atomic<unsigned int> write_calls{0U};
+    std::atomic<unsigned int> read_calls{0U};
+    std::atomic<unsigned int> stream_read_calls{0U};
+    std::atomic<unsigned int> completion_calls{0U};
 
 private:
-    Q3U4Runtime* runtime_;
+    struct WorkerState;
+    struct Request;
+
+    void run(std::uint32_t claim_index) noexcept;
+    static dtv_l3_result from_error(Error error) noexcept;
+
+    std::array<Transport*, 2U> transports_{};
+    std::array<std::unique_ptr<WorkerState>, 2U> workers_;
 };
 
 }  // namespace px4::userland

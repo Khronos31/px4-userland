@@ -6,6 +6,7 @@
 
 #include <dtv/l3_owner.h>
 
+#include <array>
 #include <cstdint>
 #include <mutex>
 #include <vector>
@@ -39,19 +40,28 @@ public:
     bool stream_active() const noexcept override;
 
 private:
+    struct StreamOperation final {
+        dtv_l3_op* op = nullptr;
+    };
+
     Result<std::size_t> transfer(std::uint32_t kind, std::uint8_t endpoint,
                                  const std::uint8_t* out_data,
                                  std::size_t out_size,
                                  std::uint8_t* in_data,
                                  std::size_t in_capacity,
                                  Timeout timeout) noexcept;
+    Result<dtv_l3_op*> start_stream_operation() noexcept;
+    void cancel_stream_operations() noexcept;
+    Result<void> drain_stream_operations() noexcept;
 
     dtv_l3_context* owner_;
     std::uint32_t claim_index_;
     mutable std::mutex stream_mutex_;
     bool stream_active_ = false;
     StreamConfig stream_config_{};
-    dtv_l3_op* stream_op_ = nullptr;
+    std::array<StreamOperation, 64U> stream_operations_{};
+    std::size_t stream_operation_count_ = 0U;
+    std::size_t stream_delivery_index_ = 0U;
     std::vector<std::uint8_t> stream_buffer_;
 };
 

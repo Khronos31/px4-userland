@@ -346,7 +346,7 @@ int main(int argc, char** argv)
             static_cast<int>(stream_stop_result),
             static_cast<int>(close_result),
             static_cast<unsigned int>(close_status.physical_quiesced),
-            usb_port.claim_calls, usb_port.release_calls,
+            usb_port.claim_calls.load(), usb_port.release_calls.load(),
             factory.create_calls, factory.release_calls);
     }
 

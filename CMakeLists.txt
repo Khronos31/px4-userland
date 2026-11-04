@@ -423,6 +423,20 @@ if(PX4_BUILD_L3_ADAPTER)
     add_test(NAME px4_l3_owner_control_fixture
              COMMAND px4_l3_owner_control_fixture)
 
+    add_executable(px4_l3_owner_stream_fixture
+        userland/tests/l3_owner_stream_fixture.cpp
+    )
+    target_include_directories(px4_l3_owner_stream_fixture PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
+    )
+    target_compile_features(px4_l3_owner_stream_fixture PRIVATE cxx_std_17)
+    target_link_libraries(px4_l3_owner_stream_fixture PRIVATE
+        px4_l3_adapter Threads::Threads)
+    px4_enable_project_warnings(px4_l3_owner_stream_fixture)
+    add_test(NAME px4_l3_owner_stream_fixture
+             COMMAND px4_l3_owner_stream_fixture)
+
     add_executable(px4_l3_owner_usb_backend_tests
         userland/tests/l3_owner_usb_backend_fixture.cpp
     )
