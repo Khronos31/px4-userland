@@ -90,23 +90,30 @@ public:
     explicit ProbeFactory(dtv_l3_product_adapter* adapter) noexcept
         : adapter_(adapter)
     {
+        factory_.struct_size = sizeof(factory_);
         factory_.factory_context = this;
         factory_.create = &ProbeFactory::create;
         factory_.release = &ProbeFactory::release;
     }
 
-    const dtv_l3_adapter_factory* factory() const noexcept { return &factory_; }
+    const dtv_l3_factory* factory() const noexcept { return &factory_; }
 
     static dtv_l3_result create(void* context,
-                                const dtv_l3_open_config*,
+                                const dtv_l3_open_args* args,
                                 const dtv_l3_product_adapter** adapter_out,
+                                uint32_t* claim_count_out,
                                 void** owner_out)
     {
         auto* self = static_cast<ProbeFactory*>(context);
-        if (self == nullptr || adapter_out == nullptr || owner_out == nullptr) {
+        if (self == nullptr || args == nullptr || adapter_out == nullptr ||
+            claim_count_out == nullptr || owner_out == nullptr) {
             return DTV_L3_INVALID;
         }
+        self->seen_grant_count = args->grant_count;
+        self->seen_grants = args->grants;
+        self->seen_firmware = args->firmware;
         *adapter_out = self->adapter_;
+        *claim_count_out = 2U;
         *owner_out = self;
         ++self->create_calls;
         return DTV_L3_OK;
@@ -122,10 +129,13 @@ public:
 
     unsigned int create_calls = 0U;
     unsigned int release_calls = 0U;
+    uint32_t seen_grant_count = 0U;
+    const dtv_l3_grant* seen_grants = nullptr;
+    const dtv_l3_firmware* seen_firmware = nullptr;
 
 private:
     dtv_l3_product_adapter* adapter_;
-    dtv_l3_adapter_factory factory_{};
+    dtv_l3_factory factory_{};
 };
 
 void usage()
@@ -294,21 +304,44 @@ int main(int argc, char** argv)
                                  device_profile(device.model()), true,
                                  DTV_L3_CANCEL_SCOPE_PIPE);
         const ByteView firmware_bytes = firmware.value().bytes();
+        const dtv_l3_firmware_manifest manifest{
+            1U, static_cast<std::uint64_t>(firmware_bytes.size),
+            kIt930xFirmwareSha256.data(), 0U};
         const dtv_l3_firmware firmware_view{
-            DTV_L3_FIRMWARE_BYTES, nullptr, firmware_bytes.data,
+            DTV_L3_FIRMWARE_BYTES, &manifest, nullptr, firmware_bytes.data,
             firmware_bytes.size, nullptr, nullptr};
         L3ProductAdapter product_adapter(product, &firmware_view);
         L3UsbProviderAdapter usb_adapter(usb_port);
         dtv_l3_product_adapter adapter = product_adapter.adapter();
         const dtv_l3_usb_provider usb = usb_adapter.provider();
         ProbeFactory factory(&adapter);
-        dtv_l3_open_config config{};
-        config.model = static_cast<std::uint32_t>(device.model());
-        config.selector = 0U;
-        config.firmware = &firmware_view;
+        const DeviceProfile& profile = device_profile(device.model());
+        dtv_l3_grant_descriptor descriptors[2]{};
+        for (std::size_t index = 0U; index < 2U; ++index) {
+            const UsbLocation location = device.usb_location(index);
+            descriptors[index].vendor_id = kQ3U4VendorId;
+            descriptors[index].product_id = profile.product_id;
+            descriptors[index].bus = location.has_bus ? location.bus : 0U;
+            descriptors[index].address =
+                location.has_address ? location.address : 0U;
+            descriptors[index].num_interfaces = 1U;
+            descriptors[index].num_endpoints = 2U;
+        }
+        dtv_l3_grant grants[2]{};
+        grants[0].token = 1U;
+        grants[0].descriptor = &descriptors[0];
+        grants[1].token = 2U;
+        grants[1].descriptor = &descriptors[1];
+        dtv_l3_open_args open_args{};
+        open_args.struct_size = sizeof(open_args);
+        open_args.usb_provider = &usb;
+        open_args.factory = factory.factory();
+        open_args.grants = grants;
+        open_args.grant_count = 2U;
+        open_args.firmware = &firmware_view;
+        open_args.power_permission = 0U;
 
-        const dtv_l3_open_result opened =
-            dtv_l3_open_factory(&usb, factory.factory(), &config, 2U);
+        const dtv_l3_open_result opened = dtv_l3_open_with_args(&open_args);
         opened_result = opened.result;
         if (opened.result != DTV_L3_ACCEPTED || opened.owner == nullptr ||
             opened.op == nullptr) {

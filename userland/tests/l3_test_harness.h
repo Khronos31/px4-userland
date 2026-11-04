@@ -17,9 +17,9 @@ const dtv_l3_usb_provider* px4_l3_test_usb_provider(
     struct px4_l3_test_harness* harness);
 const dtv_l3_product_adapter* px4_l3_test_product_adapter(
     struct px4_l3_test_harness* harness);
-const dtv_l3_adapter_factory* px4_l3_test_factory(
+const dtv_l3_factory* px4_l3_test_factory(
     struct px4_l3_test_harness* harness);
-const dtv_l3_open_config* px4_l3_test_seen_config(
+const dtv_l3_open_args* px4_l3_test_seen_args(
     struct px4_l3_test_harness* harness);
 const dtv_l3_firmware* px4_l3_test_seen_firmware(
     struct px4_l3_test_harness* harness);
@@ -42,6 +42,7 @@ unsigned int px4_l3_test_stop_capture_calls(
     struct px4_l3_test_harness* harness);
 unsigned int px4_l3_test_last_receiver(struct px4_l3_test_harness* harness);
 unsigned long long px4_l3_test_last_hz(struct px4_l3_test_harness* harness);
+int px4_l3_test_last_system(struct px4_l3_test_harness* harness);
 unsigned int px4_l3_test_submit_calls(struct px4_l3_test_harness* harness);
 unsigned int px4_l3_test_cancel_calls(struct px4_l3_test_harness* harness);
 int px4_l3_test_destroy(struct px4_l3_test_harness* harness);

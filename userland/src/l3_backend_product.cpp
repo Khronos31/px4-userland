@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "l3_backend_product.h"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -59,15 +60,14 @@ struct L3BackendProduct::Impl final {
 
     struct BridgeRecord final {
         bool running = false;
-        bool capture_running = false;
-        std::uint8_t receiver = 0U;
-        ipc::System system = ipc::System::ISDB_T;
-        std::uint64_t stream_generation = 0U;
+        std::array<bool, kMaxReceivers> capture_running{};
+        std::array<ipc::System, kMaxReceivers> capture_system{};
     };
 
     struct StreamRecord final {
         std::uint64_t generation = 0U;
         std::uint8_t bridge = 0U;
+        std::uint8_t receiver = 0U;
         TunerAttachment attachment{};
         dtv_l3_ts_deliver_fn deliver = nullptr;
         void* callback_context = nullptr;
@@ -81,13 +81,52 @@ struct L3BackendProduct::Impl final {
          TunerStreamControl& stream_value,
          const DeviceProfile& profile_value,
          bool has_card_reader,
-         dtv_l3_cancel_scope cancel_scope_value) noexcept
+         dtv_l3_cancel_scope cancel_scope_value,
+         L3OwnerLifecycle* lifecycle_value) noexcept
         : tuner(tuner_value),
           stream(stream_value),
           profile(profile_value),
           card_reader(has_card_reader),
-          cancel_scope(cancel_scope_value)
+          cancel_scope(cancel_scope_value),
+          lifecycle(lifecycle_value)
     {
+        for (std::uint32_t receiver = 0U; receiver < profile.receiver_count &&
+             receiver < kMaxReceivers; ++receiver) {
+            const std::uint8_t id = static_cast<std::uint8_t>(receiver);
+            receiver_caps[receiver].id = receiver;
+            receiver_caps[receiver].systems =
+                (tuner.receiver_supports(id, ipc::System::ISDB_T)
+                     ? DTV_L3_SYSTEM_ISDB_T : 0U) |
+                (tuner.receiver_supports(id, ipc::System::ISDB_S)
+                     ? DTV_L3_SYSTEM_ISDB_S : 0U);
+            receiver_caps[receiver].pid_filter = DTV_L3_PID_FILTER_SOFTWARE;
+            receiver_caps[receiver].support = DTV_L3_SUPPORT_SUPPORTED;
+        }
+        reader_caps[0].id = 0U;
+        reader_caps[0].external_apdu = DTV_L3_SUPPORT_UNSUPPORTED;
+        reader_caps[0].support = card_reader ? DTV_L3_SUPPORT_UNSUPPORTED
+                                             : DTV_L3_SUPPORT_UNSUPPORTED;
+        lnb_caps[0].id = 0U;
+        lnb_caps[0].support = DTV_L3_SUPPORT_UNSUPPORTED;
+        for (std::uint32_t bridge = 0U; bridge < profile.bridge_count &&
+             bridge < kMaxBridges; ++bridge) {
+            shared_caps[bridge].id = bridge;
+            shared_caps[bridge].compatibility = DTV_L3_LEASE_SHAREABLE;
+            shared_caps[bridge].support = DTV_L3_SUPPORT_SUPPORTED;
+        }
+        catalog.receivers = receiver_caps.data();
+        catalog.receiver_count = profile.receiver_count < kMaxReceivers
+                                     ? profile.receiver_count
+                                     : kMaxReceivers;
+        catalog.readers = reader_caps.data();
+        catalog.reader_count = card_reader ? 1U : 0U;
+        catalog.lnb_scopes = lnb_caps.data();
+        catalog.lnb_scope_count = 1U;
+        catalog.shared_scopes = shared_caps.data();
+        catalog.shared_scope_count = profile.bridge_count < kMaxBridges
+                                         ? profile.bridge_count
+                                         : kMaxBridges;
+        catalog.ts_form = DTV_L3_SUPPORT_SUPPORTED;
     }
 
     bool valid_receiver(std::uint32_t receiver) const noexcept
@@ -165,6 +204,183 @@ struct L3BackendProduct::Impl final {
         }
     }
 
+    dtv_l3_result select_satellite_locked(
+        std::uint8_t receiver, std::uint32_t selection,
+        std::uint32_t slot, std::uint32_t tsid) noexcept
+    {
+        Result<void> selected = Result<void>::success();
+        if (selection == DTV_L3_TUNE_SELECTION_SLOT) {
+            if (slot > 0xffU) {
+                return DTV_L3_INVALID;
+            }
+            selected = tuner.select_satellite_slot(
+                receiver, static_cast<std::uint8_t>(slot), kTuneTimeoutMs);
+        } else if (selection == DTV_L3_TUNE_SELECTION_TSID) {
+            if (tsid > 0xffffU) {
+                return DTV_L3_INVALID;
+            }
+            selected = tuner.select_satellite_tsid(
+                receiver, static_cast<std::uint16_t>(tsid), kTuneTimeoutMs);
+        } else if (selection != DTV_L3_TUNE_SELECTION_AUTO) {
+            return DTV_L3_INVALID;
+        }
+        return selected ? DTV_L3_OK : from_error(selected.error());
+    }
+
+    dtv_l3_result tune_locked(std::uint32_t receiver_id,
+                              ipc::System system,
+                              std::uint32_t selection,
+                              std::uint32_t slot,
+                              std::uint32_t tsid,
+                              std::uint64_t requested_hz,
+                              std::uint64_t* programmed_hz) noexcept
+    {
+        const std::uint8_t receiver =
+            static_cast<std::uint8_t>(receiver_id);
+        if (!tuner.receiver_supports(receiver, system)) {
+            return DTV_L3_UNSUPPORTED;
+        }
+        if (system == ipc::System::ISDB_T &&
+            selection != DTV_L3_TUNE_SELECTION_AUTO) {
+            return DTV_L3_INVALID;
+        }
+        if (system == ipc::System::ISDB_S &&
+            selection != DTV_L3_TUNE_SELECTION_AUTO &&
+            selection != DTV_L3_TUNE_SELECTION_SLOT &&
+            selection != DTV_L3_TUNE_SELECTION_TSID) {
+            return DTV_L3_INVALID;
+        }
+        const auto opened = open_if_needed(receiver_id);
+        if (opened != DTV_L3_OK) {
+            return opened;
+        }
+        const auto prepared = tuner.begin_tune_power(receiver, system, 0U);
+        if (!prepared) {
+            return from_error(prepared.error());
+        }
+        const bool select_before =
+            system == ipc::System::ISDB_S && selection !=
+                    DTV_L3_TUNE_SELECTION_AUTO &&
+            tuner.selects_satellite_stream_before_tune();
+        if (select_before) {
+            const dtv_l3_result selected =
+                select_satellite_locked(receiver, selection, slot, tsid);
+            if (selected != DTV_L3_OK) {
+                (void)tuner.rollback_tune_power(receiver);
+                return selected;
+            }
+        }
+        const auto tuned = system == ipc::System::ISDB_T
+            ? tuner.tune_terrestrial_hz(receiver, requested_hz,
+                                        kTuneTimeoutMs)
+            : tuner.tune_satellite_hz(receiver, requested_hz, kTuneTimeoutMs);
+        if (!tuned) {
+            (void)tuner.rollback_tune_power(receiver);
+            return from_error(tuned.error());
+        }
+        if (!lock_poll(receiver, system, kTuneTimeoutMs)) {
+            (void)tuner.rollback_tune_power(receiver);
+            return DTV_L3_TIMEOUT;
+        }
+        if (system == ipc::System::ISDB_S && !select_before &&
+            selection != DTV_L3_TUNE_SELECTION_AUTO) {
+            const dtv_l3_result selected =
+                select_satellite_locked(receiver, selection, slot, tsid);
+            if (selected != DTV_L3_OK) {
+                (void)tuner.rollback_tune_power(receiver);
+                return selected;
+            }
+        }
+        if (system == ipc::System::ISDB_T &&
+            tuner.requires_terrestrial_lock_settle()) {
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(kTerrestrialSettleMs));
+        }
+        const auto committed = tuner.commit_tune_power(receiver);
+        if (!committed) {
+            (void)tuner.rollback_tune_power(receiver);
+            return from_error(committed.error());
+        }
+        receivers[receiver_id].tuned = true;
+        receivers[receiver_id].system = system;
+        *programmed_hz = tuned.value().programmed_hz.value_or(requested_hz);
+        return DTV_L3_OK;
+    }
+
+    dtv_l3_result attach_stream_locked(
+        std::uint64_t stream_id, std::uint32_t receiver_id,
+        std::uint32_t bridge_id, dtv_l3_ts_deliver_fn deliver,
+        void* callback_context) noexcept
+    {
+        if (streams.find(stream_id) != streams.end()) {
+            return DTV_L3_BUSY;
+        }
+        if (!valid_receiver(receiver_id) || !valid_bridge(bridge_id) ||
+            bridge_for_receiver(receiver_id) != bridge_id) {
+            return DTV_L3_INVALID;
+        }
+        BridgeRecord& bridge = bridges[bridge_id];
+        if (!bridge.running) {
+            return DTV_L3_BUSY;
+        }
+        for (const auto& entry : streams) {
+            if (entry.second->receiver == receiver_id) {
+                return DTV_L3_BUSY;
+            }
+        }
+        const std::uint8_t receiver =
+            static_cast<std::uint8_t>(receiver_id);
+        ipc::System system = ipc::System::ISDB_T;
+        if (bridge.capture_running[receiver]) {
+            system = bridge.capture_system[receiver];
+        } else {
+            const auto selected = select_system(receiver_id, &system);
+            if (selected != DTV_L3_OK) {
+                return selected;
+            }
+            const auto opened = open_if_needed(receiver_id);
+            if (opened != DTV_L3_OK) {
+                return opened;
+            }
+            const auto started = tuner.start_capture(receiver, system);
+            if (!started) {
+                return from_error(started.error());
+            }
+            bridge.capture_running[receiver] = true;
+            bridge.capture_system[receiver] = system;
+        }
+        auto record = std::unique_ptr<StreamRecord>(
+            new (std::nothrow) StreamRecord());
+        if (!record) {
+            return DTV_L3_FAILED;
+        }
+        record->generation = stream_id;
+        record->bridge = static_cast<std::uint8_t>(bridge_id);
+        record->receiver = receiver;
+        record->attachment.owner_client_id = 1U;
+        record->attachment.lease_id = stream_id;
+        record->attachment.attachment_id = stream_id;
+        record->attachment.receiver = receiver;
+        record->attachment.system = system;
+        record->attachment.evict_oldest = false;
+        record->deliver = deliver;
+        record->callback_context = callback_context;
+        record->buffer.resize(kReadPackets * kPacketSize);
+        const auto attached = stream.attach(record->attachment);
+        if (!attached) {
+            return from_error(attached.error());
+        }
+        StreamRecord* raw = record.get();
+        record->thread.reset(new (std::nothrow) std::thread(
+            [this, raw]() noexcept { pump(*raw); }));
+        if (!record->thread) {
+            (void)stream.detach(record->attachment);
+            return DTV_L3_FAILED;
+        }
+        streams.emplace(stream_id, std::move(record));
+        return DTV_L3_OK;
+    }
+
     void pump(StreamRecord& record) noexcept
     {
         for (;;) {
@@ -216,6 +432,12 @@ struct L3BackendProduct::Impl final {
     DeviceProfile profile;
     bool card_reader;
     dtv_l3_cancel_scope cancel_scope;
+    L3OwnerLifecycle* lifecycle;
+    std::array<dtv_l3_receiver_capability, kMaxReceivers> receiver_caps{};
+    std::array<dtv_l3_reader_capability, 1> reader_caps{};
+    std::array<dtv_l3_lnb_scope_capability, 1> lnb_caps{};
+    std::array<dtv_l3_shared_scope_capability, kMaxBridges> shared_caps{};
+    dtv_l3_capability_catalog catalog{};
     std::mutex mutex;
     ReceiverRecord receivers[kMaxReceivers]{};
     BridgeRecord bridges[kMaxBridges]{};
@@ -226,9 +448,10 @@ L3BackendProduct::L3BackendProduct(TunerServiceBackend& tuner,
                                    TunerStreamControl& stream,
                                    const DeviceProfile& profile,
                                    bool has_card_reader,
-                                   dtv_l3_cancel_scope cancel_scope) noexcept
+                                   dtv_l3_cancel_scope cancel_scope,
+                                   L3OwnerLifecycle* lifecycle) noexcept
     : impl_(new (std::nothrow) Impl(tuner, stream, profile, has_card_reader,
-                                    cancel_scope))
+                                    cancel_scope, lifecycle))
 {
 }
 
@@ -266,6 +489,29 @@ dtv_l3_result L3BackendProduct::scope_query(
     return DTV_L3_OK;
 }
 
+const dtv_l3_capability_catalog* L3BackendProduct::catalog() const noexcept
+{
+    return impl_ == nullptr ? nullptr : &impl_->catalog;
+}
+
+dtv_l3_result L3BackendProduct::bind(dtv_l3_context* owner) noexcept
+{
+    if (!impl_) {
+        return DTV_L3_FAILED;
+    }
+    return impl_->lifecycle == nullptr ? DTV_L3_OK
+                                       : impl_->lifecycle->bind(owner);
+}
+
+dtv_l3_result L3BackendProduct::initialize(dtv_l3_context* owner) noexcept
+{
+    if (!impl_) {
+        return DTV_L3_FAILED;
+    }
+    return impl_->lifecycle == nullptr ? DTV_L3_OK
+                                       : impl_->lifecycle->initialize(owner);
+}
+
 dtv_l3_result L3BackendProduct::bridge_start(
     std::uint32_t bridge_id, std::uint32_t receiver_id) noexcept
 {
@@ -274,15 +520,15 @@ dtv_l3_result L3BackendProduct::bridge_start(
     }
     std::lock_guard<std::mutex> lock(impl_->mutex);
     if (!impl_->valid_bridge(bridge_id) ||
-        !impl_->valid_receiver(receiver_id)) {
+        !impl_->valid_receiver(receiver_id) ||
+        impl_->bridge_for_receiver(receiver_id) != bridge_id) {
         return DTV_L3_INVALID;
     }
     Impl::BridgeRecord& bridge = impl_->bridges[bridge_id];
-    if (bridge.running) {
-        return DTV_L3_BUSY;
-    }
-    if (impl_->bridge_for_receiver(receiver_id) != bridge_id) {
-        return DTV_L3_INVALID;
+    const std::uint8_t receiver = static_cast<std::uint8_t>(receiver_id);
+    bridge.running = true;
+    if (bridge.capture_running[receiver]) {
+        return DTV_L3_OK;
     }
     ipc::System system = ipc::System::ISDB_T;
     const auto selected = impl_->select_system(receiver_id, &system);
@@ -293,15 +539,12 @@ dtv_l3_result L3BackendProduct::bridge_start(
     if (opened != DTV_L3_OK) {
         return opened;
     }
-    const auto started = impl_->tuner.start_capture(
-        static_cast<std::uint8_t>(receiver_id), system);
+    const auto started = impl_->tuner.start_capture(receiver, system);
     if (!started) {
         return from_error(started.error());
     }
-    bridge.running = true;
-    bridge.capture_running = true;
-    bridge.receiver = static_cast<std::uint8_t>(receiver_id);
-    bridge.system = system;
+    bridge.capture_running[receiver] = true;
+    bridge.capture_system[receiver] = system;
     return DTV_L3_OK;
 }
 
@@ -314,27 +557,40 @@ dtv_l3_result L3BackendProduct::bridge_stop(std::uint32_t bridge_id) noexcept
     if (!impl_->valid_bridge(bridge_id)) {
         return DTV_L3_INVALID;
     }
-    Impl::BridgeRecord& bridge = impl_->bridges[bridge_id];
-    if (bridge.stream_generation != 0U) {
-        return DTV_L3_BUSY;
+    for (const auto& entry : impl_->streams) {
+        if (entry.second->bridge == bridge_id) {
+            return DTV_L3_BUSY;
+        }
     }
-    if (!bridge.running && !bridge.capture_running) {
+    Impl::BridgeRecord& bridge = impl_->bridges[bridge_id];
+    bool any_capture = false;
+    for (std::size_t receiver = 0U; receiver < kMaxReceivers; ++receiver) {
+        if (bridge.capture_running[receiver]) {
+            any_capture = true;
+            break;
+        }
+    }
+    if (!bridge.running && !any_capture) {
         return DTV_L3_OK;
     }
-    const std::uint8_t receiver = bridge.receiver;
-    if (bridge.capture_running) {
-        const auto stopped = impl_->tuner.stop_capture(receiver, bridge.system);
+    for (std::size_t receiver = 0U; receiver < kMaxReceivers; ++receiver) {
+        if (!bridge.capture_running[receiver]) {
+            continue;
+        }
+        const std::uint8_t id = static_cast<std::uint8_t>(receiver);
+        const auto stopped =
+            impl_->tuner.stop_capture(id, bridge.capture_system[receiver]);
         if (!stopped) {
             return from_error(stopped.error());
         }
-        bridge.capture_running = false;
+        bridge.capture_running[receiver] = false;
+        const auto closed = impl_->tuner.close_receiver(id);
+        if (!closed) {
+            return from_error(closed.error());
+        }
+        impl_->receivers[receiver].opened = false;
+        impl_->receivers[receiver].tuned = false;
     }
-    const auto closed = impl_->tuner.close_receiver(receiver);
-    if (!closed) {
-        return from_error(closed.error());
-    }
-    impl_->receivers[receiver].opened = false;
-    impl_->receivers[receiver].tuned = false;
     bridge.running = false;
     return DTV_L3_OK;
 }
@@ -347,75 +603,79 @@ dtv_l3_result L3BackendProduct::stream_attach(
         return DTV_L3_INVALID;
     }
     std::lock_guard<std::mutex> lock(impl_->mutex);
-    if (impl_->streams.find(stream_id) != impl_->streams.end()) {
-        return DTV_L3_BUSY;
-    }
-    std::uint32_t bridge_index = kMaxBridges;
-    for (std::uint32_t index = 0U; index < impl_->profile.bridge_count;
-         ++index) {
-        if (impl_->bridges[index].running &&
-            impl_->bridges[index].stream_generation == 0U) {
-            bridge_index = index;
-            break;
+    for (std::uint32_t bridge = 0U; bridge < impl_->profile.bridge_count;
+         ++bridge) {
+        if (!impl_->bridges[bridge].running) {
+            continue;
+        }
+        for (std::uint32_t receiver = 0U;
+             receiver < impl_->profile.receiver_count; ++receiver) {
+            if (!impl_->bridges[bridge].capture_running[receiver]) {
+                continue;
+            }
+            bool used = false;
+            for (const auto& entry : impl_->streams) {
+                if (entry.second->receiver == receiver) {
+                    used = true;
+                    break;
+                }
+            }
+            if (!used) {
+                return impl_->attach_stream_locked(
+                    stream_id, receiver, bridge, deliver, callback_context);
+            }
         }
     }
-    if (bridge_index == kMaxBridges) {
-        // The candidate stream callback carries no receiver.  A second stream
-        // on an already-started bridge cannot be attributed to its receiver.
-        return DTV_L3_UNSUPPORTED;
+    return DTV_L3_UNSUPPORTED;
+}
+
+dtv_l3_result L3BackendProduct::stream_attach_ex(
+    std::uint64_t stream_id, std::uint32_t receiver_id,
+    std::uint32_t bridge_id, dtv_l3_ts_deliver_fn deliver,
+    void* callback_context) noexcept
+{
+    if (!impl_ || deliver == nullptr) {
+        return DTV_L3_INVALID;
     }
-    Impl::BridgeRecord& bridge = impl_->bridges[bridge_index];
-    auto record = std::unique_ptr<Impl::StreamRecord>(
-        new (std::nothrow) Impl::StreamRecord());
-    if (!record) {
-        return DTV_L3_FAILED;
-    }
-    record->generation = stream_id;
-    record->bridge = static_cast<std::uint8_t>(bridge_index);
-    record->attachment.owner_client_id = 1U;
-    record->attachment.lease_id = stream_id;
-    record->attachment.attachment_id = stream_id;
-    record->attachment.receiver = bridge.receiver;
-    record->attachment.system = bridge.system;
-    record->attachment.evict_oldest = false;
-    record->deliver = deliver;
-    record->callback_context = callback_context;
-    record->buffer.resize(kReadPackets * kPacketSize);
-    const auto attached = impl_->stream.attach(record->attachment);
-    if (!attached) {
-        return from_error(attached.error());
-    }
-    Impl* impl = impl_.get();
-    Impl::StreamRecord* raw = record.get();
-    record->thread.reset(new (std::nothrow) std::thread(
-        [impl, raw]() noexcept { impl->pump(*raw); }));
-    if (!record->thread) {
-        (void)impl_->stream.detach(record->attachment);
-        return DTV_L3_FAILED;
-    }
-    bridge.stream_generation = stream_id;
-    impl_->streams.emplace(stream_id, std::move(record));
-    return DTV_L3_OK;
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    return impl_->attach_stream_locked(stream_id, receiver_id, bridge_id,
+                                       deliver, callback_context);
 }
 
 dtv_l3_result L3BackendProduct::stream_stop(
     std::uint64_t stream_id) noexcept
 {
+    return stop_stream(stream_id, 0U, 0U, false);
+}
+
+dtv_l3_result L3BackendProduct::stream_stop_ex(
+    std::uint64_t stream_id, std::uint32_t receiver_id,
+    std::uint32_t bridge_id) noexcept
+{
+    return stop_stream(stream_id, receiver_id, bridge_id, true);
+}
+
+dtv_l3_result L3BackendProduct::stop_stream(
+    std::uint64_t stream_id, std::uint32_t receiver_id,
+    std::uint32_t bridge_id, bool check_route) noexcept
+{
     if (!impl_) {
         return DTV_L3_FAILED;
     }
     std::unique_ptr<Impl::StreamRecord> record;
-    std::uint32_t bridge_index = kMaxBridges;
     {
         std::lock_guard<std::mutex> lock(impl_->mutex);
         const auto found = impl_->streams.find(stream_id);
         if (found == impl_->streams.end()) {
             return DTV_L3_STALE;
         }
+        if (check_route &&
+            (found->second->receiver != receiver_id ||
+             found->second->bridge != bridge_id)) {
+            return DTV_L3_INVALID;
+        }
         record = std::move(found->second);
         impl_->streams.erase(found);
-        bridge_index = record->bridge;
-        impl_->bridges[bridge_index].stream_generation = 0U;
     }
     if (!impl_->join_stream(*record)) {
         // A provider callback stopped its own stream.  The pump still owns the
@@ -447,42 +707,43 @@ dtv_l3_result L3BackendProduct::tune(std::uint32_t receiver_id,
     if (selected != DTV_L3_OK) {
         return selected;
     }
-    const auto opened = impl_->open_if_needed(receiver_id);
-    if (opened != DTV_L3_OK) {
-        return opened;
+    return impl_->tune_locked(receiver_id, system,
+                              DTV_L3_TUNE_SELECTION_AUTO, 0U, 0U,
+                              requested_hz, programmed_hz);
+}
+
+dtv_l3_result L3BackendProduct::tune_ex(
+    std::uint32_t receiver_id, const dtv_l3_tune_request* request,
+    std::uint64_t* programmed_hz) noexcept
+{
+    if (!impl_ || request == nullptr || programmed_hz == nullptr) {
+        return DTV_L3_INVALID;
     }
-    const std::uint8_t receiver = static_cast<std::uint8_t>(receiver_id);
-    const auto prepared = impl_->tuner.begin_tune_power(receiver, system, 0U);
-    if (!prepared) {
-        return from_error(prepared.error());
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    if (!impl_->valid_receiver(receiver_id)) {
+        return DTV_L3_INVALID;
     }
-    const auto tuned = system == ipc::System::ISDB_T
-        ? impl_->tuner.tune_terrestrial_hz(receiver, requested_hz,
-                                           kTuneTimeoutMs)
-        : impl_->tuner.tune_satellite_hz(receiver, requested_hz,
-                                         kTuneTimeoutMs);
-    if (!tuned) {
-        (void)impl_->tuner.rollback_tune_power(receiver);
-        return from_error(tuned.error());
+    ipc::System system = ipc::System::ISDB_T;
+    switch (request->system) {
+    case DTV_L3_TUNE_SYSTEM_AUTO: {
+        const auto selected = impl_->select_system(receiver_id, &system);
+        if (selected != DTV_L3_OK) {
+            return selected;
+        }
+        break;
     }
-    if (!impl_->lock_poll(receiver, system, kTuneTimeoutMs)) {
-        (void)impl_->tuner.rollback_tune_power(receiver);
-        return DTV_L3_TIMEOUT;
+    case DTV_L3_TUNE_SYSTEM_ISDB_T:
+        system = ipc::System::ISDB_T;
+        break;
+    case DTV_L3_TUNE_SYSTEM_ISDB_S:
+        system = ipc::System::ISDB_S;
+        break;
+    default:
+        return DTV_L3_UNSUPPORTED;
     }
-    if (system == ipc::System::ISDB_T &&
-        impl_->tuner.requires_terrestrial_lock_settle()) {
-        std::this_thread::sleep_for(
-            std::chrono::milliseconds(kTerrestrialSettleMs));
-    }
-    const auto committed = impl_->tuner.commit_tune_power(receiver);
-    if (!committed) {
-        (void)impl_->tuner.rollback_tune_power(receiver);
-        return from_error(committed.error());
-    }
-    impl_->receivers[receiver_id].tuned = true;
-    impl_->receivers[receiver_id].system = system;
-    *programmed_hz = tuned.value().programmed_hz.value_or(requested_hz);
-    return DTV_L3_OK;
+    return impl_->tune_locked(receiver_id, system, request->selection,
+                              request->slot, request->tsid,
+                              request->requested_hz, programmed_hz);
 }
 
 dtv_l3_result L3BackendProduct::close_all() noexcept

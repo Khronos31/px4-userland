@@ -77,6 +77,7 @@ public:
         ++tune_calls;
         last_receiver = receiver;
         last_hz = frequency_hz;
+        last_system = 0;
         TunerHzProgramming programmed;
         programmed.programmed_hz = frequency_hz;
         return Result<TunerHzProgramming>::success(programmed);
@@ -89,6 +90,7 @@ public:
         ++tune_calls;
         last_receiver = receiver;
         last_hz = frequency_hz;
+        last_system = 1;
         TunerHzProgramming programmed;
         programmed.programmed_hz = frequency_hz;
         return Result<TunerHzProgramming>::success(programmed);
@@ -171,6 +173,7 @@ public:
     unsigned int shutdown_calls = 0U;
     unsigned int last_receiver = 0U;
     std::uint64_t last_hz = 0U;
+    int last_system = 0;
 
 private:
     std::uint8_t receiver_count_;
@@ -341,6 +344,7 @@ struct px4_l3_test_harness {
         if (usb_holder != nullptr) {
             usb_provider = usb_holder->provider();
         }
+        factory.struct_size = sizeof(factory);
         factory.factory_context = this;
         factory.create = &factory_create;
         factory.release = &factory_release;
@@ -354,19 +358,21 @@ struct px4_l3_test_harness {
     }
 
     static dtv_l3_result factory_create(
-        void* context, const dtv_l3_open_config* config,
+        void* context, const dtv_l3_open_args* args,
         const dtv_l3_product_adapter** adapter_out,
+        uint32_t* claim_count_out,
         void** adapter_owner_out)
     {
         auto* harness = static_cast<px4_l3_test_harness*>(context);
-        if (harness == nullptr || config == nullptr || adapter_out == nullptr ||
-            adapter_owner_out == nullptr) {
+        if (harness == nullptr || args == nullptr || adapter_out == nullptr ||
+            claim_count_out == nullptr || adapter_owner_out == nullptr) {
             return DTV_L3_INVALID;
         }
         ++harness->factory_create_calls;
-        harness->seen_config = *config;
-        harness->seen_firmware = config->firmware;
+        harness->seen_args = *args;
+        harness->seen_firmware = args->firmware;
         *adapter_out = &harness->adapter;
+        *claim_count_out = 2U;
         *adapter_owner_out = harness;
         return DTV_L3_OK;
     }
@@ -390,8 +396,8 @@ struct px4_l3_test_harness {
     L3UsbProviderAdapter* usb_holder = nullptr;
     dtv_l3_product_adapter adapter{};
     dtv_l3_usb_provider usb_provider{};
-    dtv_l3_adapter_factory factory{};
-    dtv_l3_open_config seen_config{};
+    dtv_l3_factory factory{};
+    dtv_l3_open_args seen_args{};
     const dtv_l3_firmware* seen_firmware = nullptr;
     unsigned int factory_create_calls = 0U;
     unsigned int factory_release_calls = 0U;
@@ -425,16 +431,16 @@ const dtv_l3_product_adapter* px4_l3_test_product_adapter(
     return harness == nullptr ? nullptr : &harness->adapter;
 }
 
-const dtv_l3_adapter_factory* px4_l3_test_factory(
+const dtv_l3_factory* px4_l3_test_factory(
     struct px4_l3_test_harness* harness)
 {
     return harness == nullptr ? nullptr : &harness->factory;
 }
 
-const dtv_l3_open_config* px4_l3_test_seen_config(
+const dtv_l3_open_args* px4_l3_test_seen_args(
     struct px4_l3_test_harness* harness)
 {
-    return harness == nullptr ? nullptr : &harness->seen_config;
+    return harness == nullptr ? nullptr : &harness->seen_args;
 }
 
 const dtv_l3_firmware* px4_l3_test_seen_firmware(
@@ -514,6 +520,11 @@ unsigned int px4_l3_test_last_receiver(struct px4_l3_test_harness* harness)
 unsigned long long px4_l3_test_last_hz(struct px4_l3_test_harness* harness)
 {
     return harness == nullptr ? 0ULL : harness->backend.last_hz;
+}
+
+int px4_l3_test_last_system(struct px4_l3_test_harness* harness)
+{
+    return harness == nullptr ? -1 : harness->backend.last_system;
 }
 
 unsigned int px4_l3_test_submit_calls(struct px4_l3_test_harness* harness)

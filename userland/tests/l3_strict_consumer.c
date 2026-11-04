@@ -64,16 +64,26 @@ static int open_ready_ex(const dtv_l3_usb_provider* usb,
     return dtv_l3_op_release(opened.op) == DTV_L3_OK;
 }
 
-static int open_ready_factory(const dtv_l3_usb_provider* usb,
-                              const dtv_l3_adapter_factory* factory,
-                              const dtv_l3_open_config* config,
-                              unsigned int claim_count,
-                              dtv_l3_context** owner,
-                              dtv_l3_result* open_result)
+static int open_ready_args(const dtv_l3_usb_provider* usb,
+                           const dtv_l3_factory* factory,
+                           const dtv_l3_grant* grants,
+                           unsigned int grant_count,
+                           const dtv_l3_firmware* firmware,
+                           dtv_l3_context** owner,
+                           dtv_l3_result* open_result)
 {
-    dtv_l3_open_result opened =
-        dtv_l3_open_factory(usb, factory, config, claim_count);
+    dtv_l3_open_args args;
+    dtv_l3_open_result opened;
     dtv_l3_op_result result;
+    memset(&args, 0, sizeof(args));
+    args.struct_size = sizeof(args);
+    args.usb_provider = usb;
+    args.factory = factory;
+    args.grants = grants;
+    args.grant_count = grant_count;
+    args.firmware = firmware;
+    args.power_permission = 0U;
+    opened = dtv_l3_open_with_args(&args);
     *owner = NULL;
     *open_result = opened.result;
     if (opened.result != DTV_L3_ACCEPTED || opened.owner == NULL ||
@@ -214,53 +224,117 @@ static int run_factory_and_capabilities(void)
 {
     struct px4_l3_test_harness* harness = px4_l3_test_create(2U, -1, -1);
     const dtv_l3_usb_provider* usb;
-    const dtv_l3_adapter_factory* factory;
+    const dtv_l3_factory* factory;
+    const dtv_l3_open_args* seen_args;
+    const dtv_l3_firmware* seen_firmware;
     const uint8_t firmware_bytes[3] = {0xaaU, 0xbbU, 0xccU};
-    const dtv_l3_firmware firmware = {
-        .source = DTV_L3_FIRMWARE_BYTES,
-        .path = NULL,
-        .bytes = firmware_bytes,
-        .size = sizeof(firmware_bytes),
-        .read = NULL,
-        .read_context = NULL};
-    dtv_l3_open_config config;
+    uint8_t sha256[32];
+    dtv_l3_firmware_manifest manifest;
+    dtv_l3_firmware firmware;
+    dtv_l3_grant_descriptor descriptors[2];
+    dtv_l3_grant grants[2];
     dtv_l3_context* owner = NULL;
     dtv_l3_result open_result = DTV_L3_FAILED;
     dtv_l3_capabilities capabilities;
-    const dtv_l3_open_config* seen_config;
-    const dtv_l3_firmware* seen_firmware;
+    const dtv_l3_capability_catalog* catalog = NULL;
 
     CHECK(harness != NULL);
     usb = px4_l3_test_usb_provider(harness);
     factory = px4_l3_test_factory(harness);
     CHECK(usb != NULL);
     CHECK(factory != NULL);
-    memset(&config, 0, sizeof(config));
-    config.model = 0x51U;
-    config.selector = 0x1234U;
-    config.firmware = &firmware;
+    memset(sha256, 0x5a, sizeof(sha256));
+    memset(&manifest, 0, sizeof(manifest));
+    manifest.format = 1U;
+    manifest.length_bytes = sizeof(firmware_bytes);
+    manifest.sha256 = sha256;
+    memset(&firmware, 0, sizeof(firmware));
+    firmware.source = DTV_L3_FIRMWARE_BYTES;
+    firmware.manifest = &manifest;
+    firmware.bytes = firmware_bytes;
+    firmware.size = sizeof(firmware_bytes);
+    memset(descriptors, 0, sizeof(descriptors));
+    descriptors[0].vendor_id = 0x0511U;
+    descriptors[0].product_id = 0x084aU;
+    descriptors[0].bus = 1U;
+    descriptors[0].address = 54U;
+    descriptors[0].num_interfaces = 1U;
+    descriptors[0].num_endpoints = 2U;
+    descriptors[1] = descriptors[0];
+    descriptors[1].address = 55U;
+    memset(grants, 0, sizeof(grants));
+    grants[0].token = 1U;
+    grants[0].descriptor = &descriptors[0];
+    grants[1].token = 2U;
+    grants[1].descriptor = &descriptors[1];
 
-    CHECK(open_ready_factory(usb, factory, &config, 2U, &owner,
-                             &open_result));
+    CHECK(open_ready_args(usb, factory, grants, 2U, &firmware, &owner,
+                          &open_result));
     CHECK(open_result == DTV_L3_OK);
     CHECK(px4_l3_test_factory_create_calls(harness) == 1U);
-    seen_config = px4_l3_test_seen_config(harness);
+    seen_args = px4_l3_test_seen_args(harness);
     seen_firmware = px4_l3_test_seen_firmware(harness);
-    CHECK(seen_config != NULL);
-    CHECK(seen_config->model == 0x51U);
-    CHECK(seen_config->selector == 0x1234U);
+    CHECK(seen_args != NULL);
+    CHECK(seen_args->grant_count == 2U);
+    CHECK(seen_args->grants == grants);
+    CHECK(seen_args->firmware == &firmware);
+    CHECK(seen_args->usb_provider == usb);
     CHECK(seen_firmware == &firmware);
+    CHECK(px4_l3_test_claim_calls(harness) == 2U);
     CHECK(dtv_l3_capabilities_get(owner, &capabilities) == DTV_L3_OK);
     CHECK(capabilities.receiver_count == 4U);
     CHECK(capabilities.reader_count == 1U);
     CHECK(capabilities.lnb_power == 1);
     CHECK(capabilities.cancel_scope == DTV_L3_CANCEL_SCOPE_PIPE);
+    CHECK(dtv_l3_capabilities_get_catalog(owner, &catalog) == DTV_L3_OK);
+    CHECK(catalog != NULL);
+    CHECK(catalog->receiver_count == 4U);
+    CHECK(catalog->shared_scope_count == 1U);
+    CHECK(catalog->lnb_scope_count == 1U);
+    CHECK(catalog->readers != NULL);
+    CHECK(catalog->readers[0].support == DTV_L3_SUPPORT_UNSUPPORTED);
+    CHECK(catalog->ts_form == DTV_L3_SUPPORT_SUPPORTED);
 
     CHECK(close_and_release(owner));
     CHECK(px4_l3_test_factory_release_calls(harness) == 1U);
     CHECK(px4_l3_test_release_calls(harness) == 2U);
     CHECK(px4_l3_test_release_at(harness, 0U) == 1U);
     CHECK(px4_l3_test_release_at(harness, 1U) == 0U);
+    CHECK(px4_l3_test_destroy(harness) == 0);
+    return 0;
+}
+
+static int run_tune_ex_explicit_system(void)
+{
+    struct px4_l3_test_harness* harness = px4_l3_test_create(1U, -1, 1);
+    const dtv_l3_usb_provider* usb;
+    const dtv_l3_product_adapter* adapter;
+    dtv_l3_context* owner = NULL;
+    dtv_l3_result open_result = DTV_L3_FAILED;
+    dtv_l3_lease* lease = NULL;
+    dtv_l3_tune_request request;
+    uint64_t programmed = 0U;
+    uint64_t revision = 0U;
+
+    CHECK(harness != NULL);
+    usb = px4_l3_test_usb_provider(harness);
+    adapter = px4_l3_test_product_adapter(harness);
+    CHECK(open_ready_ex(usb, adapter, 1U, &owner, &open_result));
+    CHECK(open_result == DTV_L3_OK);
+    CHECK(dtv_l3_lease_acquire(owner, 1U, &lease) == DTV_L3_OK);
+    memset(&request, 0, sizeof(request));
+    request.system = DTV_L3_TUNE_SYSTEM_ISDB_S;
+    request.selection = DTV_L3_TUNE_SELECTION_AUTO;
+    request.requested_hz = 1100000000ULL;
+    CHECK(dtv_l3_lease_tune_ex(lease, &request, &programmed, &revision) ==
+          DTV_L3_OK);
+    CHECK(programmed == 1100000000ULL);
+    CHECK(revision == 1U);
+    CHECK(px4_l3_test_tune_calls(harness) == 1U);
+    CHECK(px4_l3_test_last_receiver(harness) == 1U);
+    CHECK(px4_l3_test_last_system(harness) == 1);
+    CHECK(dtv_l3_lease_release(lease) == DTV_L3_OK);
+    CHECK(close_and_release(owner));
     CHECK(px4_l3_test_destroy(harness) == 0);
     return 0;
 }
@@ -366,6 +440,9 @@ int main(void)
         return 1;
     }
     if (run_factory_and_capabilities() != 0) {
+        return 1;
+    }
+    if (run_tune_ex_explicit_system() != 0) {
         return 1;
     }
     if (run_partial_claim_failure() != 0) {

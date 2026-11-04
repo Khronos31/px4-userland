@@ -389,6 +389,20 @@ if(PX4_BUILD_L3_ADAPTER)
     enable_testing()
     add_test(NAME px4_l3_contract_tests COMMAND px4_l3_contract_tests)
 
+    # Manual G1/G2 fixture.  Keep it out of CTest until the Core initialize-lane
+    # transfer_start/submit window is fixed and linked here.
+    add_executable(px4_l3_owner_control_fixture
+        userland/tests/l3_owner_control_fixture.cpp
+    )
+    target_include_directories(px4_l3_owner_control_fixture PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
+    )
+    target_compile_features(px4_l3_owner_control_fixture PRIVATE cxx_std_17)
+    target_link_libraries(px4_l3_owner_control_fixture PRIVATE
+        px4_l3_adapter Threads::Threads)
+    px4_enable_project_warnings(px4_l3_owner_control_fixture)
+
     if(PX4_ENABLE_LIBUSB)
         add_executable(px4_l3_real_probe userland/tests/l3_real_probe.cpp)
         target_include_directories(px4_l3_real_probe PRIVATE

@@ -13,7 +13,8 @@ T* context_from(void* context) noexcept
 
 }  // namespace
 
-L3UsbProviderAdapter::L3UsbProviderAdapter(L3UsbPort& port) noexcept
+L3UsbProviderAdapter::L3UsbProviderAdapter(L3UsbPort& port,
+                                           std::uint32_t call_flags) noexcept
     : port_(port)
 {
     provider_.provider_context = &port_;
@@ -23,6 +24,7 @@ L3UsbProviderAdapter::L3UsbProviderAdapter(L3UsbPort& port) noexcept
     provider_.cancel = &L3UsbProviderAdapter::cancel_thunk;
     provider_.claim_cancel = &L3UsbProviderAdapter::claim_cancel_thunk;
     provider_.cancel_scope = port_.cancel_scope();
+    provider_.call_flags = call_flags;
     provider_.logger = dtv_l3_logger{};
 }
 
@@ -87,15 +89,33 @@ L3ProductAdapter::L3ProductAdapter(
 {
     adapter_.product_context = &product_;
     adapter_.capabilities = product_.capabilities();
+    adapter_.catalog = product_.catalog();
     adapter_.firmware = firmware;
+    adapter_.bind = &L3ProductAdapter::bind_thunk;
+    adapter_.initialize = &L3ProductAdapter::initialize_thunk;
     adapter_.scope_query = &L3ProductAdapter::scope_query_thunk;
     adapter_.tune = &L3ProductAdapter::tune_thunk;
+    adapter_.tune_ex = &L3ProductAdapter::tune_ex_thunk;
     adapter_.bridge_start = &L3ProductAdapter::bridge_start_thunk;
     adapter_.bridge_stop = &L3ProductAdapter::bridge_stop_thunk;
     adapter_.stream_attach = &L3ProductAdapter::stream_attach_thunk;
+    adapter_.stream_attach_ex = &L3ProductAdapter::stream_attach_ex_thunk;
     adapter_.stream_stop = &L3ProductAdapter::stream_stop_thunk;
-    adapter_.reader_acquire = &L3ProductAdapter::reader_acquire_thunk;
-    adapter_.lnb_set = &L3ProductAdapter::lnb_set_thunk;
+    adapter_.stream_stop_ex = &L3ProductAdapter::stream_stop_ex_thunk;
+}
+
+dtv_l3_result L3ProductAdapter::bind_thunk(void* context,
+                                           dtv_l3_context* owner) noexcept
+{
+    L3Product* product = context_from<L3Product>(context);
+    return product == nullptr ? DTV_L3_INVALID : product->bind(owner);
+}
+
+dtv_l3_result L3ProductAdapter::initialize_thunk(
+    void* context, dtv_l3_context* owner) noexcept
+{
+    L3Product* product = context_from<L3Product>(context);
+    return product == nullptr ? DTV_L3_INVALID : product->initialize(owner);
 }
 
 dtv_l3_result L3ProductAdapter::scope_query_thunk(
@@ -120,6 +140,19 @@ dtv_l3_result L3ProductAdapter::tune_thunk(
         return DTV_L3_INVALID;
     }
     return product->tune(receiver_id, requested_hz, programmed_hz);
+}
+
+dtv_l3_result L3ProductAdapter::tune_ex_thunk(
+    void* context, dtv_l3_provider_binding* binding,
+    std::uint32_t receiver_id, const dtv_l3_tune_request* request,
+    std::uint64_t* programmed_hz) noexcept
+{
+    (void)binding;
+    L3Product* product = context_from<L3Product>(context);
+    if (product == nullptr || request == nullptr || programmed_hz == nullptr) {
+        return DTV_L3_INVALID;
+    }
+    return product->tune_ex(receiver_id, request, programmed_hz);
 }
 
 dtv_l3_result L3ProductAdapter::bridge_start_thunk(
@@ -155,6 +188,21 @@ dtv_l3_result L3ProductAdapter::stream_attach_thunk(
     return product->stream_attach(stream_id, deliver, callback_context);
 }
 
+dtv_l3_result L3ProductAdapter::stream_attach_ex_thunk(
+    void* context, dtv_l3_provider_binding* binding,
+    std::uint64_t stream_id, std::uint32_t receiver_id,
+    std::uint32_t bridge_id, dtv_l3_ts_deliver_fn deliver,
+    void* callback_context) noexcept
+{
+    (void)binding;
+    L3Product* product = context_from<L3Product>(context);
+    if (product == nullptr || deliver == nullptr) {
+        return DTV_L3_INVALID;
+    }
+    return product->stream_attach_ex(stream_id, receiver_id, bridge_id,
+                                     deliver, callback_context);
+}
+
 dtv_l3_result L3ProductAdapter::stream_stop_thunk(
     void* context, dtv_l3_provider_binding* binding,
     std::uint64_t stream_id) noexcept
@@ -165,25 +213,16 @@ dtv_l3_result L3ProductAdapter::stream_stop_thunk(
                               : product->stream_stop(stream_id);
 }
 
-dtv_l3_result L3ProductAdapter::reader_acquire_thunk(
-    void* context, std::uint32_t reader_id,
-    dtv_l3_reader** reader_out) noexcept
+dtv_l3_result L3ProductAdapter::stream_stop_ex_thunk(
+    void* context, dtv_l3_provider_binding* binding,
+    std::uint64_t stream_id, std::uint32_t receiver_id,
+    std::uint32_t bridge_id) noexcept
 {
-    L3Product* product = context_from<L3Product>(context);
-    if (product == nullptr || reader_out == nullptr) {
-        return DTV_L3_INVALID;
-    }
-    *reader_out = nullptr;
-    return product->reader_acquire(reader_id, reader_out);
-}
-
-dtv_l3_result L3ProductAdapter::lnb_set_thunk(
-    void* context, std::uint32_t receiver_id,
-    std::uint32_t mode) noexcept
-{
+    (void)binding;
     L3Product* product = context_from<L3Product>(context);
     return product == nullptr ? DTV_L3_INVALID
-                              : product->lnb_set(receiver_id, mode);
+                              : product->stream_stop_ex(stream_id, receiver_id,
+                                                        bridge_id);
 }
 
 }  // namespace px4::userland
