@@ -1,0 +1,68 @@
+diff --git a/src/control_client.cpp b/src/control_client.cpp
+index eaf9400..eaf9400 100644
+--- a/src/control_client.cpp
++++ b/src/control_client.cpp
+@@ -8,6 +8,7 @@
+ #include <array>
+ #include <cstring>
+ #include <limits>
++#include <cstdio>
+ #include <memory>
+ #include <new>
+ #include <utility>
+@@ -207,6 +207,13 @@ Result<void> roundtrip(ClientTransport& transport, std::uint16_t opcode,
+         if (!error) {
+             return Result<void>::failure(error.error());
+         }
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++        std::fprintf(stderr, "PX4_IPC_DIAG server-error opcode=0x%04x request=%u code=%u operation=%.*s\n",
++                     static_cast<unsigned int>(opcode), static_cast<unsigned int>(request_id),
++                     static_cast<unsigned int>(error.value().error.code),
++                     static_cast<int>(error.value().error.operation.length),
++                     error.value().error.operation.bytes.data());
++#endif
+         if (expected_epoch != nullptr && error.value().epoch != *expected_epoch) {
+             return Result<void>::failure(Error::PROTOCOL_ERROR);
+         }
+@@ -399,6 +399,10 @@ void fetch_status_with_required_features(ClientTransport& transport,
+     const Error list_error = decode_list_response_into(
+         ByteView{workspace->payload.data(), reply.length}, result.snapshot.list);
+     if (list_error != Error::OK) {
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++        std::fprintf(stderr, "PX4_IPC_DIAG client-validation stage=LIST.decode error=%s\n",
++                     error_string(list_error));
++#endif
+         fail(list_error);
+         return;
+     }
+@@ -412,5 +416,9 @@ void fetch_status_with_required_features(ClientTransport& transport,
+     const Error list_valid = validate_list_response(result.snapshot.list);
+     if (list_valid != Error::OK) {
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++        std::fprintf(stderr, "PX4_IPC_DIAG client-validation stage=LIST.validate error=%s\n",
++                     error_string(list_valid));
++#endif
+         fail(list_valid);
+         return;
+     }
+@@ -446,6 +454,10 @@ void fetch_status_with_required_features(ClientTransport& transport,
+     const Error status_error = decode_status_response_into(
+         ByteView{workspace->payload.data(), reply.length}, result.snapshot.status);
+     if (status_error != Error::OK) {
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++        std::fprintf(stderr, "PX4_IPC_DIAG client-validation stage=STATUS.decode error=%s\n",
++                     error_string(status_error));
++#endif
+         fail(status_error);
+         return;
+     }
+@@ -473,5 +485,9 @@ void fetch_status_with_required_features(ClientTransport& transport,
+     const Error status_valid = validate_status_response(result.snapshot.status, context);
+     if (status_valid != Error::OK) {
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++        std::fprintf(stderr, "PX4_IPC_DIAG client-validation stage=STATUS.validate error=%s\n",
++                     error_string(status_valid));
++#endif
+         fail(status_valid);
+         return;
+     }
