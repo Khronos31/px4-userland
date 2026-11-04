@@ -141,11 +141,29 @@ public:
         (void)reader_out;
         return DTV_L3_UNSUPPORTED;
     }
-    virtual dtv_l3_result lnb_set(std::uint32_t receiver_id,
-                                  std::uint32_t mode) noexcept
+    virtual dtv_l3_result lnb_status(std::uint32_t scope_id,
+                                     dtv_l3_lnb_state* out) noexcept
     {
-        (void)receiver_id;
-        (void)mode;
+        (void)scope_id;
+        (void)out;
+        return DTV_L3_UNSUPPORTED;
+    }
+    virtual dtv_l3_result lnb_set(std::uint32_t scope_id,
+                                  dtv_l3_lnb_command command,
+                                  std::uint64_t deadline_ns,
+                                  dtv_l3_lnb_state* out) noexcept
+    {
+        (void)scope_id;
+        (void)command;
+        (void)deadline_ns;
+        (void)out;
+        return DTV_L3_UNSUPPORTED;
+    }
+    virtual dtv_l3_result lnb_restore(std::uint32_t scope_id,
+                                      dtv_l3_restore_result* out) noexcept
+    {
+        (void)scope_id;
+        (void)out;
         return DTV_L3_UNSUPPORTED;
     }
 };
@@ -218,12 +236,16 @@ private:
         void* context, dtv_l3_provider_binding* binding,
         std::uint64_t stream_id, std::uint32_t receiver_id,
         std::uint32_t bridge_id) noexcept;
-    static dtv_l3_result reader_acquire_thunk(
-        void* context, std::uint32_t reader_id,
-        dtv_l3_reader** reader_out) noexcept;
+    static dtv_l3_result lnb_status_thunk(
+        void* context, std::uint32_t scope_id,
+        dtv_l3_lnb_state* out) noexcept;
     static dtv_l3_result lnb_set_thunk(
-        void* context, std::uint32_t receiver_id,
-        std::uint32_t mode) noexcept;
+        void* context, std::uint32_t scope_id,
+        dtv_l3_lnb_command command, std::uint64_t deadline_ns,
+        dtv_l3_lnb_state* out) noexcept;
+    static dtv_l3_result lnb_restore_thunk(
+        void* context, std::uint32_t scope_id,
+        dtv_l3_restore_result* out) noexcept;
 
     L3Product& product_;
     dtv_l3_product_adapter adapter_{};

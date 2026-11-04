@@ -102,6 +102,9 @@ L3ProductAdapter::L3ProductAdapter(
     adapter_.stream_attach_ex = &L3ProductAdapter::stream_attach_ex_thunk;
     adapter_.stream_stop = &L3ProductAdapter::stream_stop_thunk;
     adapter_.stream_stop_ex = &L3ProductAdapter::stream_stop_ex_thunk;
+    adapter_.lnb_status = &L3ProductAdapter::lnb_status_thunk;
+    adapter_.lnb_set = &L3ProductAdapter::lnb_set_thunk;
+    adapter_.lnb_restore = &L3ProductAdapter::lnb_restore_thunk;
 }
 
 dtv_l3_result L3ProductAdapter::bind_thunk(void* context,
@@ -223,6 +226,35 @@ dtv_l3_result L3ProductAdapter::stream_stop_ex_thunk(
     return product == nullptr ? DTV_L3_INVALID
                               : product->stream_stop_ex(stream_id, receiver_id,
                                                         bridge_id);
+}
+
+dtv_l3_result L3ProductAdapter::lnb_status_thunk(
+    void* context, std::uint32_t scope_id,
+    dtv_l3_lnb_state* out) noexcept
+{
+    L3Product* product = context_from<L3Product>(context);
+    return product == nullptr ? DTV_L3_INVALID
+                              : product->lnb_status(scope_id, out);
+}
+
+dtv_l3_result L3ProductAdapter::lnb_set_thunk(
+    void* context, std::uint32_t scope_id,
+    dtv_l3_lnb_command command, std::uint64_t deadline_ns,
+    dtv_l3_lnb_state* out) noexcept
+{
+    L3Product* product = context_from<L3Product>(context);
+    return product == nullptr ? DTV_L3_INVALID
+                              : product->lnb_set(scope_id, command,
+                                                 deadline_ns, out);
+}
+
+dtv_l3_result L3ProductAdapter::lnb_restore_thunk(
+    void* context, std::uint32_t scope_id,
+    dtv_l3_restore_result* out) noexcept
+{
+    L3Product* product = context_from<L3Product>(context);
+    return product == nullptr ? DTV_L3_INVALID
+                              : product->lnb_restore(scope_id, out);
 }
 
 }  // namespace px4::userland

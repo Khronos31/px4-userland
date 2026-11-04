@@ -82,7 +82,7 @@ static int open_ready_args(const dtv_l3_usb_provider* usb,
     args.grants = grants;
     args.grant_count = grant_count;
     args.firmware = firmware;
-    args.power_permission = 0U;
+    args.power_permission = 1U;
     opened = dtv_l3_open_with_args(&args);
     *owner = NULL;
     *open_result = opened.result;
@@ -181,9 +181,9 @@ static int run_separated_stream_and_close(void)
     CHECK(reader == NULL);
     dtv_l3_lnb_state lnb_state;
     memset(&lnb_state, 0, sizeof(lnb_state));
+    CHECK(dtv_l3_lnb_status(owner, 0U, &lnb_state) == DTV_L3_OK);
     CHECK(dtv_l3_lnb_set(owner, 0U, DTV_L3_LNB_ON_15V, 0U, &lnb_state) ==
-          DTV_L3_UNSUPPORTED);
-    CHECK(dtv_l3_lnb_status(owner, 0U, &lnb_state) == DTV_L3_UNSUPPORTED);
+          DTV_L3_REJECTED);
 
     CHECK(dtv_l3_lease_acquire(owner, 2U, &lease) == DTV_L3_OK);
     CHECK(lease != NULL);
@@ -295,11 +295,26 @@ static int run_factory_and_capabilities(void)
     CHECK(catalog->receiver_count == 4U);
     CHECK(catalog->shared_scope_count == 1U);
     CHECK(catalog->lnb_scope_count == 1U);
+    CHECK(catalog->lnb_scopes != NULL);
+    CHECK(catalog->lnb_scopes[0].support == DTV_L3_SUPPORT_SUPPORTED);
+    CHECK((catalog->lnb_scopes[0].commands & DTV_L3_LNB_COMMAND_ON_15V) != 0U);
     CHECK(catalog->readers != NULL);
     CHECK(catalog->readers[0].support == DTV_L3_SUPPORT_UNSUPPORTED);
     CHECK(catalog->ts_form == DTV_L3_SUPPORT_SUPPORTED);
 
+    dtv_l3_lnb_state lnb_state;
+    memset(&lnb_state, 0, sizeof(lnb_state));
+    CHECK(dtv_l3_lnb_status(owner, 0U, &lnb_state) == DTV_L3_OK);
+    CHECK(dtv_l3_lnb_set(owner, 0U, DTV_L3_LNB_ON_15V, 0U, &lnb_state) ==
+          DTV_L3_OK);
+    CHECK(lnb_state.controlled == DTV_L3_LNB_COMMAND_ON_15V);
+    CHECK(lnb_state.consistency == DTV_L3_LNB_CONSISTENCY_CONSISTENT);
+    CHECK(px4_l3_test_independent_lnb(harness) == 1);
+    CHECK(dtv_l3_lnb_status(owner, 0U, &lnb_state) == DTV_L3_OK);
+
     CHECK(close_and_release(owner));
+    CHECK(px4_l3_test_shutdown_calls(harness) == 1U);
+    CHECK(px4_l3_test_independent_lnb(harness) == 0);
     CHECK(px4_l3_test_factory_release_calls(harness) == 1U);
     CHECK(px4_l3_test_release_calls(harness) == 2U);
     CHECK(px4_l3_test_release_at(harness, 0U) == 1U);

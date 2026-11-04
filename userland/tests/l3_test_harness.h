@@ -45,6 +45,8 @@ unsigned long long px4_l3_test_last_hz(struct px4_l3_test_harness* harness);
 int px4_l3_test_last_system(struct px4_l3_test_harness* harness);
 unsigned int px4_l3_test_submit_calls(struct px4_l3_test_harness* harness);
 unsigned int px4_l3_test_cancel_calls(struct px4_l3_test_harness* harness);
+unsigned int px4_l3_test_shutdown_calls(struct px4_l3_test_harness* harness);
+int px4_l3_test_independent_lnb(struct px4_l3_test_harness* harness);
 int px4_l3_test_destroy(struct px4_l3_test_harness* harness);
 
 #ifdef __cplusplus

@@ -154,9 +154,25 @@ public:
         return Result<void>::success();
     }
 
+    Result<void> set_independent_lnb_power(bool enabled) noexcept override
+    {
+        ++independent_set_calls;
+        independent.present = true;
+        independent.value = enabled;
+        return Result<void>::success();
+    }
+
+    dtv::userland::wire::Optional<bool>
+    independent_lnb_power_state() noexcept override
+    {
+        return independent;
+    }
+
     Result<void> shutdown() noexcept override
     {
         ++shutdown_calls;
+        independent.present = true;
+        independent.value = false;
         return Result<void>::success();
     }
 
@@ -171,6 +187,8 @@ public:
     unsigned int start_capture_calls = 0U;
     unsigned int stop_capture_calls = 0U;
     unsigned int shutdown_calls = 0U;
+    unsigned int independent_set_calls = 0U;
+    dtv::userland::wire::Optional<bool> independent{};
     unsigned int last_receiver = 0U;
     std::uint64_t last_hz = 0U;
     int last_system = 0;
@@ -328,7 +346,8 @@ struct px4_l3_test_harness {
           backend(profile.receiver_count, dual_receiver),
           usb(claim_count, fail_claim_index, DTV_L3_CANCEL_SCOPE_PIPE),
           product(new (std::nothrow) L3BackendProduct(
-              backend, stream, profile, true, DTV_L3_CANCEL_SCOPE_PIPE)),
+              backend, stream, profile, true, DTV_L3_CANCEL_SCOPE_PIPE,
+              true)),
           product_holder(product != nullptr
                              ? new (std::nothrow) L3ProductAdapter(*product,
                                                                   &firmware_view)
@@ -535,6 +554,19 @@ unsigned int px4_l3_test_submit_calls(struct px4_l3_test_harness* harness)
 unsigned int px4_l3_test_cancel_calls(struct px4_l3_test_harness* harness)
 {
     return harness == nullptr ? 0U : harness->usb.cancel_calls;
+}
+
+unsigned int px4_l3_test_shutdown_calls(struct px4_l3_test_harness* harness)
+{
+    return harness == nullptr ? 0U : harness->backend.shutdown_calls;
+}
+
+int px4_l3_test_independent_lnb(struct px4_l3_test_harness* harness)
+{
+    if (harness == nullptr || !harness->backend.independent.present) {
+        return -1;
+    }
+    return harness->backend.independent.value ? 1 : 0;
 }
 
 int px4_l3_test_destroy(struct px4_l3_test_harness* harness)

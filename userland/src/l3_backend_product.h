@@ -25,6 +25,7 @@ public:
                      const DeviceProfile& profile,
                      bool has_card_reader,
                      dtv_l3_cancel_scope cancel_scope,
+                     bool allow_lnb_15v = false,
                      L3OwnerLifecycle* lifecycle = nullptr) noexcept;
     ~L3BackendProduct() noexcept override;
 
@@ -57,6 +58,14 @@ public:
     dtv_l3_result stream_stop_ex(std::uint64_t stream_id,
                                  std::uint32_t receiver_id,
                                  std::uint32_t bridge_id) noexcept override;
+    dtv_l3_result lnb_status(std::uint32_t scope_id,
+                             dtv_l3_lnb_state* out) noexcept override;
+    dtv_l3_result lnb_set(std::uint32_t scope_id,
+                          dtv_l3_lnb_command command,
+                          std::uint64_t deadline_ns,
+                          dtv_l3_lnb_state* out) noexcept override;
+    dtv_l3_result lnb_restore(std::uint32_t scope_id,
+                              dtv_l3_restore_result* out) noexcept override;
 
     // The candidate Core close has no product callback.  Callers that own the
     // backend must use this after dtv_l3_context_release() to close receivers

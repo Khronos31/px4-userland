@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "l3_backend_product.h"
 
+#include "l3_lnb_port.h"
+
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -82,13 +84,15 @@ struct L3BackendProduct::Impl final {
          const DeviceProfile& profile_value,
          bool has_card_reader,
          dtv_l3_cancel_scope cancel_scope_value,
+         bool allow_lnb_15v,
          L3OwnerLifecycle* lifecycle_value) noexcept
         : tuner(tuner_value),
           stream(stream_value),
           profile(profile_value),
           card_reader(has_card_reader),
           cancel_scope(cancel_scope_value),
-          lifecycle(lifecycle_value)
+          lifecycle(lifecycle_value),
+          lnb(tuner_value, profile_value.supports_lnb_15v, allow_lnb_15v)
     {
         for (std::uint32_t receiver = 0U; receiver < profile.receiver_count &&
              receiver < kMaxReceivers; ++receiver) {
@@ -107,7 +111,21 @@ struct L3BackendProduct::Impl final {
         reader_caps[0].support = card_reader ? DTV_L3_SUPPORT_UNSUPPORTED
                                              : DTV_L3_SUPPORT_UNSUPPORTED;
         lnb_caps[0].id = 0U;
-        lnb_caps[0].support = DTV_L3_SUPPORT_UNSUPPORTED;
+        lnb_caps[0].support = profile.supports_lnb_15v
+                                  ? DTV_L3_SUPPORT_SUPPORTED
+                                  : DTV_L3_SUPPORT_UNSUPPORTED;
+        lnb_caps[0].receivers_mask = 0U;
+        for (std::uint32_t receiver = 0U;
+             receiver < profile.receiver_count && receiver < kMaxReceivers;
+             ++receiver) {
+            if (tuner.receiver_supports(static_cast<std::uint8_t>(receiver),
+                                        ipc::System::ISDB_S)) {
+                lnb_caps[0].receivers_mask |= (1U << receiver);
+            }
+        }
+        lnb_caps[0].commands = DTV_L3_LNB_COMMAND_OFF |
+                               DTV_L3_LNB_COMMAND_ON_15V;
+        lnb_caps[0].readback = DTV_L3_SUPPORT_UNKNOWN;
         for (std::uint32_t bridge = 0U; bridge < profile.bridge_count &&
              bridge < kMaxBridges; ++bridge) {
             shared_caps[bridge].id = bridge;
@@ -121,7 +139,8 @@ struct L3BackendProduct::Impl final {
         catalog.readers = reader_caps.data();
         catalog.reader_count = card_reader ? 1U : 0U;
         catalog.lnb_scopes = lnb_caps.data();
-        catalog.lnb_scope_count = 1U;
+        catalog.lnb_scope_count =
+            profile.supports_lnb_15v ? 1U : 0U;
         catalog.shared_scopes = shared_caps.data();
         catalog.shared_scope_count = profile.bridge_count < kMaxBridges
                                          ? profile.bridge_count
@@ -433,6 +452,7 @@ struct L3BackendProduct::Impl final {
     bool card_reader;
     dtv_l3_cancel_scope cancel_scope;
     L3OwnerLifecycle* lifecycle;
+    L3LnbPort lnb;
     std::array<dtv_l3_receiver_capability, kMaxReceivers> receiver_caps{};
     std::array<dtv_l3_reader_capability, 1> reader_caps{};
     std::array<dtv_l3_lnb_scope_capability, 1> lnb_caps{};
@@ -449,9 +469,10 @@ L3BackendProduct::L3BackendProduct(TunerServiceBackend& tuner,
                                    const DeviceProfile& profile,
                                    bool has_card_reader,
                                    dtv_l3_cancel_scope cancel_scope,
+                                   bool allow_lnb_15v,
                                    L3OwnerLifecycle* lifecycle) noexcept
     : impl_(new (std::nothrow) Impl(tuner, stream, profile, has_card_reader,
-                                    cancel_scope, lifecycle))
+                                    cancel_scope, allow_lnb_15v, lifecycle))
 {
 }
 
@@ -689,6 +710,29 @@ dtv_l3_result L3BackendProduct::stop_stream(
     }
     return record->failed.load(std::memory_order_acquire) ? DTV_L3_FAILED
                                                           : DTV_L3_OK;
+}
+
+dtv_l3_result L3BackendProduct::lnb_status(
+    std::uint32_t scope_id, dtv_l3_lnb_state* out) noexcept
+{
+    return impl_ == nullptr ? DTV_L3_FAILED
+                            : impl_->lnb.status(scope_id, out);
+}
+
+dtv_l3_result L3BackendProduct::lnb_set(
+    std::uint32_t scope_id, dtv_l3_lnb_command command,
+    std::uint64_t deadline_ns, dtv_l3_lnb_state* out) noexcept
+{
+    return impl_ == nullptr ? DTV_L3_FAILED
+                            : impl_->lnb.set(scope_id, command, deadline_ns,
+                                             out);
+}
+
+dtv_l3_result L3BackendProduct::lnb_restore(
+    std::uint32_t scope_id, dtv_l3_restore_result* out) noexcept
+{
+    return impl_ == nullptr ? DTV_L3_FAILED
+                            : impl_->lnb.restore(scope_id, out);
 }
 
 dtv_l3_result L3BackendProduct::tune(std::uint32_t receiver_id,
