@@ -34,10 +34,22 @@ std::uint16_t checksum(const std::uint8_t* data, std::size_t size) noexcept
 
 class FakeQ3U4Transport final : public Transport {
 public:
-    Result<std::size_t> bulk_read(std::uint8_t endpoint, MutableByteView output,
-                                  Timeout, BulkReadObservation*) noexcept override
+    Result<std::size_t> bulk_read(std::uint8_t endpoint,
+                                  MutableByteView output, Timeout,
+                                  BulkReadObservation* observation) noexcept override
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        if (endpoint == kTsInEndpoint) {
+            constexpr std::size_t psb_purge_size = 1024U;
+            if (output.data == nullptr || output.size < psb_purge_size) {
+                return Result<std::size_t>::failure(Error::INVALID_ARGUMENT);
+            }
+            std::memset(output.data, 0, psb_purge_size);
+            if (observation != nullptr) {
+                *observation = BulkReadObservation{Error::OK, psb_purge_size};
+            }
+            return Result<std::size_t>::success(psb_purge_size);
+        }
         if (endpoint != kCommandInEndpoint || output.data == nullptr ||
             output.size < pending_length_ + 5U) {
             return Result<std::size_t>::failure(Error::INVALID_ARGUMENT);
