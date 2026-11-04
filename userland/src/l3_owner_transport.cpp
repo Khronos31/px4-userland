@@ -4,7 +4,9 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
 #include <cstdio>
+#endif
 
 namespace px4::userland {
 
@@ -240,6 +242,13 @@ Result<void> L3OwnerTransport::start_stream(
         config.transfer_count > stream_operations_.size() ||
         config.endpoint != kTsInEndpoint ||
         config.transfer_size > 1048576U) {
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+        std::fprintf(stderr,
+                     "PX4_ATTACH_DIAG stage=L3-stream-config owner=%u endpoint=0x%02x capacity=%zu transfers=%zu\n",
+                     owner_ != nullptr ? 1U : 0U,
+                     static_cast<unsigned>(config.endpoint),
+                     config.transfer_size, config.transfer_count);
+#endif
         return Result<void>::failure(Error::INVALID_ARGUMENT);
     }
     bool started_all = false;
@@ -257,12 +266,14 @@ Result<void> L3OwnerTransport::start_stream(
         for (std::size_t index = 0U; index < config.transfer_count; ++index) {
             const auto started = start_stream_operation();
             if (!started) {
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
                 std::fprintf(stderr,
                              "PX4_ATTACH_DIAG L3-transfer-start claim=%u endpoint=0x%02x timeout=0 capacity=%zu slot=%zu error=%s\n",
                              static_cast<unsigned>(claim_index_),
                              static_cast<unsigned>(config.endpoint),
                              config.transfer_size, index,
                              error_string(started.error()));
+#endif
                 stream_active_ = false;
                 start_error = started.error();
                 break;

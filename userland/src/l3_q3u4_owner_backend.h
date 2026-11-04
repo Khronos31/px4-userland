@@ -63,6 +63,8 @@ public:
     dtv_l3_result lnb_restore(std::uint32_t scope_id,
                               dtv_l3_restore_result* out) noexcept override;
     void abandon() noexcept;
+    // Drops backend transports while the L3 callback context is still alive.
+    void release_resources() noexcept;
 
     // Assembly accessors for the standard daemon.  They expose the already
     // owner-backed instances; they do not create another transport.

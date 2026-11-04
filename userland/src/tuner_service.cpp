@@ -3,7 +3,6 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <cstdio>
 #include <limits>
 
 namespace px4::userland {
@@ -596,11 +595,6 @@ Result<TunerAttachment> TunerService::attach_stream(
     }
     if (!started || data_error != Error::OK) {
         Error result_error = !started ? started.error() : data_error;
-        std::fprintf(stderr,
-                     "PX4_ATTACH_DIAG capture=%s stream-control=%s receiver=%u system=%u\n",
-                     error_string(started.error()), error_string(data_error),
-                     static_cast<unsigned>(receiver),
-                     static_cast<unsigned>(pending.system));
         bool data_maybe_attached = false;
         pending.capture_maybe_active = static_cast<bool>(started);
         pending.backend_disconnected = started.error() == Error::DISCONNECTED ||

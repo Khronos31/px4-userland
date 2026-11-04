@@ -2,6 +2,10 @@
 #include "q3u4_tuner_backend.h"
 #include "px4_tuner_hz.h"
 
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+#include <cstdio>
+#endif
+
 namespace px4::userland {
 
 namespace {
@@ -184,13 +188,22 @@ Result<void> Q3U4FrontendTunerBackend::shutdown() noexcept
 Result<void> Q3U4FrontendTunerBackend::start_capture(
     std::uint8_t receiver, ipc::System system) noexcept
 {
-    if (!valid_receiver(receiver))
-        return Result<void>::failure(Error::INVALID_ARGUMENT);
-    if (system == ipc::System::ISDB_T)
-        return enclosure_.start_terrestrial_capture(receiver);
-    if (system == ipc::System::ISDB_S)
-        return enclosure_.start_satellite_capture(receiver);
-    return Result<void>::failure(Error::INVALID_ARGUMENT);
+    Result<void> result = Result<void>::failure(Error::INVALID_ARGUMENT);
+    if (valid_receiver(receiver)) {
+        if (system == ipc::System::ISDB_T)
+            result = enclosure_.start_terrestrial_capture(receiver);
+        else if (system == ipc::System::ISDB_S)
+            result = enclosure_.start_satellite_capture(receiver);
+    }
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+    if (!result) {
+        std::fprintf(stderr,
+                     "PX4_ATTACH_DIAG stage=backend-start-capture receiver=%u system=%u error=%s\n",
+                     static_cast<unsigned>(receiver),
+                     static_cast<unsigned>(system), error_string(result.error()));
+    }
+#endif
+    return result;
 }
 
 Result<void> Q3U4FrontendTunerBackend::stop_capture(

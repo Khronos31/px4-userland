@@ -525,12 +525,13 @@ bool wait_l3_releasable(dtv_l3_context* owner)
     return false;
 }
 
-int run_q3u4_l3_session(const Px4dArguments& arguments, Q3U4Runtime& runtime,
-                        const FirmwareImage& firmware,
-                        const std::string& base_serial,
-                        dtv_l3_context*& owner, bool& releasable) noexcept
+int run_q3u4_l3(const Px4dArguments& arguments, Q3U4Runtime& runtime,
+                const FirmwareImage& firmware,
+                const std::string& base_serial) noexcept
 {
     const DeviceProfile& profile = device_profile(runtime.model());
+    dtv_l3_context* owner = nullptr;
+    bool releasable = false;
     L3Q3U4OwnerBackend product(profile, arguments.allow_lnb_power,
 #if defined(PX4_L3_FAKE_USB_DAEMON)
                                false,
@@ -560,6 +561,11 @@ int run_q3u4_l3_session(const Px4dArguments& arguments, Q3U4Runtime& runtime,
         if (owner != nullptr) {
             (void)dtv_l3_close(owner, 2000U);
             releasable = wait_l3_releasable(owner);
+            if (releasable) {
+                product.release_resources();
+                if (dtv_l3_context_release(owner) != DTV_L3_OK)
+                    std::fprintf(stderr, "L3 release failed\n");
+            }
         }
         return exit_status(Error::INTERNAL);
     }
@@ -573,6 +579,11 @@ int run_q3u4_l3_session(const Px4dArguments& arguments, Q3U4Runtime& runtime,
                      static_cast<int>(open_result.result));
         (void)dtv_l3_close(owner, 2000U);
         releasable = wait_l3_releasable(owner);
+        if (releasable) {
+            product.release_resources();
+            if (dtv_l3_context_release(owner) != DTV_L3_OK)
+                std::fprintf(stderr, "L3 release failed\n");
+        }
         return exit_status(Error::INTERNAL);
     }
 
@@ -594,23 +605,12 @@ int run_q3u4_l3_session(const Px4dArguments& arguments, Q3U4Runtime& runtime,
         std::fprintf(stderr, "L3 release failed\n");
         return exit_status(Error::INTERNAL);
     }
-    return serve_result;
-}
-
-int run_q3u4_l3(const Px4dArguments& arguments, Q3U4Runtime& runtime,
-                const FirmwareImage& firmware,
-                const std::string& base_serial) noexcept
-{
-    dtv_l3_context* owner = nullptr;
-    bool releasable = false;
-    const int result = run_q3u4_l3_session(
-        arguments, runtime, firmware, base_serial, owner, releasable);
-    if (owner != nullptr && releasable &&
-        dtv_l3_context_release(owner) != DTV_L3_OK) {
+    product.release_resources();
+    if (dtv_l3_context_release(owner) != DTV_L3_OK) {
         std::fprintf(stderr, "L3 release failed\n");
         return exit_status(Error::INTERNAL);
     }
-    return result;
+    return serve_result;
 }
 #endif
 

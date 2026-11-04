@@ -9,7 +9,9 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
 #include <cstdio>
+#endif
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -316,6 +318,15 @@ public:
         const auto started = bridge.transport.start_stream(
             StreamConfig{kTsInEndpoint, 188U * 816U, 6U});
         if (!started) {
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+            std::fprintf(stderr,
+                         "PX4_ATTACH_DIAG stage=stream-start bridge=%u receiver-base=%zu endpoint=0x%02x error=%s\n",
+                         static_cast<unsigned>(bridge.receiver_base /
+                                               layout_.receivers_per_bridge),
+                         bridge.receiver_base,
+                         static_cast<unsigned>(kTsInEndpoint),
+                         error_string(started.error()));
+#endif
             bridge.state = Bridge::State::stopped;
             bridge.state_changed.notify_all();
             return started;
@@ -451,19 +462,23 @@ public:
     {
         if (attachment.owner_client_id == 0U || attachment.lease_id == 0U ||
             attachment.attachment_id == 0U || !valid_receiver(attachment.receiver)) {
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
             std::fprintf(stderr,
                          "PX4_ATTACH_DIAG stream-validation receiver=%u owner=%llu lease=%llu attachment=%llu\n",
                          static_cast<unsigned>(attachment.receiver),
                          static_cast<unsigned long long>(attachment.owner_client_id),
                          static_cast<unsigned long long>(attachment.lease_id),
                          static_cast<unsigned long long>(attachment.attachment_id));
+#endif
             return Result<void>::failure(Error::INVALID_ARGUMENT);
         }
         if (!valid_system(attachment.receiver, attachment.system)) {
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
             std::fprintf(stderr,
                          "PX4_ATTACH_DIAG stream-system receiver=%u system=%u\n",
                          static_cast<unsigned>(attachment.receiver),
                          static_cast<unsigned>(attachment.system));
+#endif
             return Result<void>::failure(Error::INVALID_ARGUMENT);
         }
 
@@ -1192,8 +1207,18 @@ Q3U4StreamDataPlane::~Q3U4StreamDataPlane() noexcept = default;
 
 Result<void> Q3U4StreamDataPlane::attach(const TunerAttachment& attachment) noexcept
 {
-    return impl_ == nullptr ? Result<void>::failure(Error::INTERNAL)
-                            : impl_->attach(attachment);
+    const auto result = impl_ == nullptr
+        ? Result<void>::failure(Error::INTERNAL) : impl_->attach(attachment);
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+    if (!result) {
+        std::fprintf(stderr,
+                     "PX4_ATTACH_DIAG stage=stream-control receiver=%u system=%u error=%s\n",
+                     static_cast<unsigned>(attachment.receiver),
+                     static_cast<unsigned>(attachment.system),
+                     error_string(result.error()));
+    }
+#endif
+    return result;
 }
 
 Result<void> Q3U4StreamDataPlane::detach(const TunerAttachment& attachment) noexcept

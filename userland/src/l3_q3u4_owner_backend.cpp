@@ -312,4 +312,9 @@ void L3Q3U4OwnerBackend::abandon() noexcept
     }
 }
 
+void L3Q3U4OwnerBackend::release_resources() noexcept
+{
+    impl_.reset();
+}
+
 }  // namespace px4::userland
