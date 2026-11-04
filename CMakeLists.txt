@@ -357,6 +357,7 @@ if(PX4_BUILD_L3_ADAPTER)
         userland/src/l3_backend_product.cpp
         userland/src/l3_lnb_port.cpp
         userland/src/l3_owner_transport.cpp
+        userland/src/l3_q3u4_owner_backend.cpp
     )
     target_include_directories(px4_l3_adapter
         PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/userland/include

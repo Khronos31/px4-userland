@@ -71,6 +71,9 @@ public:
     // backend must use this after dtv_l3_context_release() to close receivers
     // and stop any residual capture.
     dtv_l3_result close_all() noexcept;
+    // Called by the factory release after Core has released the owner.  It
+    // prevents a second owner-backed cleanup from touching a retired context.
+    void abandon() noexcept;
 
 private:
     dtv_l3_result stop_stream(std::uint64_t stream_id,

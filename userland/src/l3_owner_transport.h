@@ -7,6 +7,8 @@
 #include <dtv/l3_owner.h>
 
 #include <cstdint>
+#include <mutex>
+#include <vector>
 
 namespace px4::userland {
 
@@ -34,7 +36,7 @@ public:
     Result<StreamEvent> wait_stream(Timeout timeout) noexcept override;
     Result<void> cancel_stream() noexcept override;
     Result<void> stop_stream() noexcept override;
-    bool stream_active() const noexcept override { return false; }
+    bool stream_active() const noexcept override;
 
 private:
     Result<std::size_t> transfer(std::uint32_t kind, std::uint8_t endpoint,
@@ -46,6 +48,11 @@ private:
 
     dtv_l3_context* owner_;
     std::uint32_t claim_index_;
+    mutable std::mutex stream_mutex_;
+    bool stream_active_ = false;
+    StreamConfig stream_config_{};
+    dtv_l3_op* stream_op_ = nullptr;
+    std::vector<std::uint8_t> stream_buffer_;
 };
 
 }  // namespace px4::userland

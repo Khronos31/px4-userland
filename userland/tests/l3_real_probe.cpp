@@ -7,15 +7,9 @@
 // already-claimed to the L3 USB provider.
 
 #include "l3_adapter.h"
-#include "l3_backend_product.h"
+#include "l3_q3u4_owner_backend.h"
 #include "px4/firmware.h"
-#include "px4/it930x.h"
 #include "px4/libusb_transport.h"
-#include "px4/q3u4_stream.h"
-#include "q3u4_frontend.h"
-#include "q3u4_lnb_power.h"
-#include "q3u4_tuner_backend.h"
-#include "bridge_i2c.h"
 
 #include <chrono>
 #include <cstddef>
@@ -24,24 +18,38 @@
 #include <cstring>
 #include <memory>
 #include <string_view>
+#include <vector>
 #include <thread>
 
 namespace {
 
 using namespace px4::userland;
 
-class ProbeTime final : public Q3U4FrontendDelay {
-public:
-    void sleep_ms(std::uint32_t milliseconds) noexcept override
-    {
-        std::this_thread::sleep_for(std::chrono::milliseconds(milliseconds));
+dtv_l3_result from_error(Error error) noexcept
+{
+    switch (error) {
+    case Error::OK: return DTV_L3_OK;
+    case Error::INVALID_ARGUMENT:
+    case Error::BUFFER_TOO_SMALL: return DTV_L3_INVALID;
+    case Error::BUSY: return DTV_L3_BUSY;
+    case Error::NOT_READY: return DTV_L3_FAILED;
+    case Error::TIMEOUT: return DTV_L3_TIMEOUT;
+    case Error::DISCONNECTED: return DTV_L3_DISCONNECTED;
+    case Error::UNSUPPORTED: return DTV_L3_UNSUPPORTED;
+    default: return DTV_L3_FAILED;
     }
-};
+}
 
 // Q3U4Runtime already owns the libusb claims.  The L3 owner sees a borrowed
-// claim: no second open, and the runtime stays alive until context release.
+// claim; this host provider performs the actual bulk I/O through the runtime's
+// transports.  Control transfers remain UNSUPPORTED at this seam.
 class BorrowedRuntimeUsbPort final : public L3UsbPort {
 public:
+    explicit BorrowedRuntimeUsbPort(Q3U4Runtime& runtime) noexcept
+        : runtime_(&runtime)
+    {
+    }
+
     dtv_l3_claim_result claim(dtv_l3_provider_binding*,
                               std::uint32_t claim_index) noexcept override
     {
@@ -64,16 +72,52 @@ public:
                 DTV_L3_RESTORE_SUCCEEDED, DTV_L3_OK};
     }
 
-    dtv_l3_result submit(dtv_l3_provider_binding*, std::uint64_t,
-                         const dtv_l3_transfer_request*,
-                         dtv_l3_transfer_complete_fn, void*) noexcept override
+    dtv_l3_result submit(dtv_l3_provider_binding* binding,
+                         std::uint64_t transfer_id,
+                         const dtv_l3_transfer_request* request,
+                         dtv_l3_transfer_complete_fn complete,
+                         void* callback_context) noexcept override
     {
-        return DTV_L3_FAILED;
+        if (runtime_ == nullptr || request == nullptr || complete == nullptr ||
+            request->kind != DTV_L3_TRANSFER_BULK ||
+            request->claim_index >= 2U) {
+            return DTV_L3_UNSUPPORTED;
+        }
+        Transport& transport = request->claim_index == 0U
+                                   ? runtime_->dev1() : runtime_->dev2();
+        const Timeout timeout{request->timeout_ms};
+        if (request->out_size != 0U) {
+            const auto written = transport.bulk_write(
+                static_cast<std::uint8_t>(request->endpoint),
+                ByteView{request->out_data, request->out_size}, timeout);
+            if (!written) {
+                return from_error(written.error());
+            }
+            ++write_calls;
+            const dtv_l3_transfer_completion completion{
+                DTV_L3_OK, nullptr, 0U, written.value(), 1U};
+            complete(binding, transfer_id, &completion, callback_context);
+            ++completion_calls;
+            return DTV_L3_ACCEPTED;
+        }
+        std::vector<std::uint8_t> buffer(request->in_capacity);
+        const auto read = transport.bulk_read(
+            static_cast<std::uint8_t>(request->endpoint),
+            MutableByteView{buffer.data(), buffer.size()}, timeout);
+        if (!read) {
+            return from_error(read.error());
+        }
+        ++read_calls;
+        const dtv_l3_transfer_completion completion{
+            DTV_L3_OK, buffer.data(), read.value(), read.value(), 1U};
+        complete(binding, transfer_id, &completion, callback_context);
+        ++completion_calls;
+        return DTV_L3_ACCEPTED;
     }
 
     dtv_l3_result cancel(dtv_l3_provider_binding*, std::uint64_t) noexcept override
     {
-        return DTV_L3_FAILED;
+        return DTV_L3_UNSUPPORTED;
     }
 
     dtv_l3_cancel_scope cancel_scope() const noexcept override
@@ -81,14 +125,19 @@ public:
         return DTV_L3_CANCEL_SCOPE_PIPE;
     }
 
+    Q3U4Runtime* runtime_ = nullptr;
     unsigned int claim_calls = 0U;
     unsigned int release_calls = 0U;
+    unsigned int write_calls = 0U;
+    unsigned int read_calls = 0U;
+    unsigned int completion_calls = 0U;
 };
 
 class ProbeFactory final {
 public:
-    explicit ProbeFactory(dtv_l3_product_adapter* adapter) noexcept
-        : adapter_(adapter)
+    ProbeFactory(dtv_l3_product_adapter* adapter,
+                 L3Q3U4OwnerBackend* product) noexcept
+        : adapter_(adapter), product_(product)
     {
         factory_.struct_size = sizeof(factory_);
         factory_.factory_context = this;
@@ -123,6 +172,9 @@ public:
     {
         auto* self = static_cast<ProbeFactory*>(owner);
         if (self != nullptr) {
+            if (self->product_ != nullptr) {
+                self->product_->abandon();
+            }
             ++self->release_calls;
         }
     }
@@ -135,6 +187,7 @@ public:
 
 private:
     dtv_l3_product_adapter* adapter_;
+    L3Q3U4OwnerBackend* product_ = nullptr;
     dtv_l3_factory factory_{};
 };
 
@@ -261,48 +314,9 @@ int main(int argc, char** argv)
     dtv_l3_result close_result = DTV_L3_FAILED;
     {
         Q3U4Runtime& device = *runtime.value();
-        It930xController dev1(device.dev1());
-        It930xController dev2(device.dev2());
-        const auto initialized1 = dev1.initialize_q3u4(
-            firmware.value(), InitializationPolicy::accept_cold_or_warm,
-            device.model());
-        const auto initialized2 = initialized1
-            ? dev2.initialize_q3u4(firmware.value(),
-                                   InitializationPolicy::accept_cold_or_warm,
-                                   device.model())
-            : Result<FirmwareLoadResult>::failure(initialized1.error());
-        if (!initialized1 || !initialized2) {
-            std::fprintf(stderr, "initialize: %s\n",
-                         error_string(!initialized1 ? initialized1.error()
-                                                    : initialized2.error()));
-            return 5;
-        }
-
-        ProbeTime time;
-        It930xBridgeI2cMaster dev1_i2c(dev1);
-        It930xBridgeI2cMaster dev2_i2c(dev2);
-        It930xBackendPower dev1_power(dev1);
-        It930xBackendPower dev2_power(dev2);
-        It930xPsbPurger dev1_purger(dev1);
-        It930xPsbPurger dev2_purger(dev2);
-        Q3U4FrontendEnclosure enclosure(dev1_i2c, dev2_i2c, dev1_power,
-                                        dev2_power, time, &dev1_purger,
-                                        &dev2_purger);
-        It930xLnbPower dev1_lnb(dev1);
-        It930xLnbPower dev2_lnb(dev2);
-        Q3U4LnbPowerCoordinator lnb_power(dev1_lnb, dev2_lnb, false);
-        Q3U4FrontendTunerBackend tuner(enclosure, lnb_power);
-        const auto stream = Q3U4StreamDataPlane::create(device.dev1(),
-                                                        device.dev2());
-        if (!stream) {
-            std::fprintf(stderr, "stream: %s\n", error_string(stream.error()));
-            return 6;
-        }
-
-        BorrowedRuntimeUsbPort usb_port;
-        L3BackendProduct product(tuner, *stream.value(),
-                                 device_profile(device.model()), true,
-                                 DTV_L3_CANCEL_SCOPE_PIPE);
+        const DeviceProfile& profile = device_profile(device.model());
+        L3Q3U4OwnerBackend product(profile, false, true, &firmware.value());
+        BorrowedRuntimeUsbPort usb_port(device);
         const ByteView firmware_bytes = firmware.value().bytes();
         const dtv_l3_firmware_manifest manifest{
             1U, static_cast<std::uint64_t>(firmware_bytes.size),
@@ -314,8 +328,7 @@ int main(int argc, char** argv)
         L3UsbProviderAdapter usb_adapter(usb_port);
         dtv_l3_product_adapter adapter = product_adapter.adapter();
         const dtv_l3_usb_provider usb = usb_adapter.provider();
-        ProbeFactory factory(&adapter);
-        const DeviceProfile& profile = device_profile(device.model());
+        ProbeFactory factory(&adapter, &product);
         dtv_l3_grant_descriptor descriptors[2]{};
         for (std::size_t index = 0U; index < 2U; ++index) {
             const UsbLocation location = device.usb_location(index);

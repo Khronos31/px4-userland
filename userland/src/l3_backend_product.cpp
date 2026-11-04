@@ -454,6 +454,7 @@ struct L3BackendProduct::Impl final {
     L3OwnerLifecycle* lifecycle;
     L3LnbPort lnb;
     bool shutdown_attempted = false;
+    bool abandoned = false;
     std::array<dtv_l3_receiver_capability, kMaxReceivers> receiver_caps{};
     std::array<dtv_l3_reader_capability, 1> reader_caps{};
     std::array<dtv_l3_lnb_scope_capability, 1> lnb_caps{};
@@ -821,10 +822,20 @@ dtv_l3_result L3BackendProduct::tune_ex(
                               request->requested_hz, programmed_hz);
 }
 
+void L3BackendProduct::abandon() noexcept
+{
+    if (impl_) {
+        impl_->abandoned = true;
+    }
+}
+
 dtv_l3_result L3BackendProduct::close_all() noexcept
 {
     if (!impl_) {
         return DTV_L3_FAILED;
+    }
+    if (impl_->abandoned) {
+        return DTV_L3_OK;
     }
     dtv_l3_result first = DTV_L3_OK;
     std::vector<std::uint64_t> generations;

@@ -137,24 +137,135 @@ Result<std::size_t> L3OwnerTransport::transfer(
     return Result<std::size_t>::success(size);
 }
 
-Result<void> L3OwnerTransport::start_stream(const StreamConfig&) noexcept
+bool L3OwnerTransport::stream_active() const noexcept
 {
-    return Result<void>::failure(Error::UNSUPPORTED);
+    std::lock_guard<std::mutex> lock(stream_mutex_);
+    return stream_active_;
 }
 
-Result<StreamEvent> L3OwnerTransport::wait_stream(Timeout) noexcept
+Result<void> L3OwnerTransport::start_stream(
+    const StreamConfig& config) noexcept
 {
-    return Result<StreamEvent>::failure(Error::UNSUPPORTED);
+    if (owner_ == nullptr || config.endpoint == 0U ||
+        config.transfer_size == 0U) {
+        return Result<void>::failure(Error::INVALID_ARGUMENT);
+    }
+    std::lock_guard<std::mutex> lock(stream_mutex_);
+    if (stream_op_ != nullptr) {
+        return Result<void>::failure(Error::BUSY);
+    }
+    stream_config_ = config;
+    stream_active_ = true;
+    stream_buffer_.clear();
+    return Result<void>::success();
+}
+
+Result<StreamEvent> L3OwnerTransport::wait_stream(Timeout timeout) noexcept
+{
+    std::vector<std::uint8_t> request_buffer;
+    std::uint8_t endpoint = 0U;
+    {
+        std::lock_guard<std::mutex> lock(stream_mutex_);
+        if (owner_ == nullptr || !stream_active_) {
+            return Result<StreamEvent>::failure(Error::NOT_READY);
+        }
+        if (stream_op_ != nullptr) {
+            return Result<StreamEvent>::failure(Error::BUSY);
+        }
+        endpoint = stream_config_.endpoint;
+        request_buffer.resize(stream_config_.transfer_size);
+        stream_buffer_.assign(stream_config_.transfer_size, 0U);
+    }
+
+    dtv_l3_transfer_request request{};
+    request.kind = DTV_L3_TRANSFER_BULK;
+    request.endpoint = endpoint;
+    request.timeout_ms = timeout.milliseconds;
+    request.in_capacity = request_buffer.size();
+    request.claim_index = claim_index_;
+    dtv_l3_op* op = nullptr;
+    const dtv_l3_result started =
+        dtv_l3_transfer_start(owner_, &request, &op);
+    if (started != DTV_L3_ACCEPTED || op == nullptr) {
+        return Result<StreamEvent>::failure(from_l3_result(started));
+    }
+    {
+        std::lock_guard<std::mutex> lock(stream_mutex_);
+        if (!stream_active_) {
+            (void)dtv_l3_op_cancel(op);
+            (void)dtv_l3_op_release(op);
+            return Result<StreamEvent>::failure(Error::DISCONNECTED);
+        }
+        stream_op_ = op;
+    }
+
+    const std::uint32_t wait_ms =
+        timeout.milliseconds == 0U ? DTV_L3_WAIT_FOREVER
+                                   : timeout.milliseconds;
+    dtv_l3_op_result op_result{};
+    dtv_l3_result waited = dtv_l3_op_wait(op, wait_ms);
+    if (waited == DTV_L3_OK) {
+        waited = dtv_l3_op_poll(op, &op_result);
+    }
+    bool timed_out = false;
+    if (waited != DTV_L3_OK ||
+        (op_result.state != DTV_L3_OP_DONE &&
+         op_result.state != DTV_L3_OP_FAILED)) {
+        (void)dtv_l3_op_cancel(op);
+        (void)dtv_l3_op_wait(op, 100U);
+        (void)dtv_l3_op_poll(op, &op_result);
+        timed_out = true;
+    }
+
+    const dtv_l3_result terminal = op_result.result;
+    const std::size_t size =
+        op_result.data_size <= request_buffer.size() ? op_result.data_size : 0U;
+    {
+        std::lock_guard<std::mutex> lock(stream_mutex_);
+        if (size != 0U && op_result.data != nullptr) {
+            std::copy(op_result.data, op_result.data + size,
+                      stream_buffer_.begin());
+        }
+        stream_op_ = nullptr;
+    }
+    const dtv_l3_result released = dtv_l3_op_release(op);
+    if (released != DTV_L3_OK) {
+        return Result<StreamEvent>::failure(from_l3_result(released));
+    }
+    if (timed_out) {
+        return Result<StreamEvent>::failure(Error::TIMEOUT);
+    }
+    if (op_result.state != DTV_L3_OP_DONE || terminal != DTV_L3_OK) {
+        return Result<StreamEvent>::failure(from_l3_result(terminal));
+    }
+    std::lock_guard<std::mutex> lock(stream_mutex_);
+    if (!stream_active_) {
+        return Result<StreamEvent>::failure(Error::DISCONNECTED);
+    }
+    const StreamEventKind kind =
+        size < stream_config_.transfer_size ? StreamEventKind::short_transfer
+                                            : StreamEventKind::data;
+    return Result<StreamEvent>::success(
+        StreamEvent{kind, stream_buffer_.data(), size});
 }
 
 Result<void> L3OwnerTransport::cancel_stream() noexcept
 {
-    return Result<void>::failure(Error::UNSUPPORTED);
+    std::lock_guard<std::mutex> lock(stream_mutex_);
+    if (stream_op_ != nullptr) {
+        (void)dtv_l3_op_cancel(stream_op_);
+    }
+    return Result<void>::success();
 }
 
 Result<void> L3OwnerTransport::stop_stream() noexcept
 {
-    return Result<void>::failure(Error::UNSUPPORTED);
+    std::lock_guard<std::mutex> lock(stream_mutex_);
+    stream_active_ = false;
+    if (stream_op_ != nullptr) {
+        (void)dtv_l3_op_cancel(stream_op_);
+    }
+    return Result<void>::success();
 }
 
 }  // namespace px4::userland

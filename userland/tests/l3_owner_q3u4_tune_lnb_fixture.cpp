@@ -8,6 +8,7 @@
 #include "l3_adapter.h"
 #include "l3_backend_product.h"
 #include "l3_owner_transport.h"
+#include "l3_q3u4_owner_backend.h"
 #include "px4/it930x.h"
 #include "q3u4_frontend.h"
 #include "q3u4_lnb_power.h"
@@ -21,6 +22,7 @@
 #include <cstring>
 #include <memory>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -74,6 +76,27 @@ public:
         ++submit_calls;
         if (request->kind != DTV_L3_TRANSFER_BULK) {
             return DTV_L3_INVALID;
+        }
+        if (request->out_size == 0U &&
+            (request->endpoint == kTsInEndpoint ||
+             request->endpoint == kObservedTsInEndpoint)) {
+            const std::size_t packets =
+                request->in_capacity >= 188U ? request->in_capacity / 188U : 0U;
+            std::vector<std::uint8_t> ts(packets * 188U);
+            for (std::size_t packet = 0U; packet < packets; ++packet) {
+                std::uint8_t* target = ts.data() + packet * 188U;
+                target[0U] = static_cast<std::uint8_t>((3U << 4U) | 0x07U);
+                target[1U] = 0x01U;
+                target[2U] = 0x01U;
+                target[3U] = static_cast<std::uint8_t>(0x10U |
+                                                       (stream_cc++ & 0x0fU));
+            }
+            ++stream_read_calls;
+            const dtv_l3_transfer_completion completion{
+                DTV_L3_OK, ts.data(), ts.size(), ts.size(), 1U};
+            complete(binding, transfer_id, &completion, callback_context);
+            ++completion_calls;
+            return DTV_L3_ACCEPTED;
         }
         if (request->out_size != 0U) {
             if (request->out_data[1U] != 0U) {
@@ -149,180 +172,12 @@ public:
     unsigned int write_calls = 0U;
     unsigned int read_calls = 0U;
     unsigned int completion_calls = 0U;
+    unsigned int stream_read_calls = 0U;
+    std::uint8_t stream_cc = 0U;
     std::uint8_t last_command = 0U;
     std::uint8_t sequence = 0U;
     std::uint8_t last_i2c_register = 0U;
     std::size_t pending_length = 0U;
-};
-
-class Delay final : public Q3U4FrontendDelay {
-public:
-    void sleep_ms(std::uint32_t) noexcept override {}
-};
-
-class FakePower final : public Q3U4BackendPower {
-public:
-    Result<void> set_backend_power(bool, Q3U4Delay&) noexcept override
-    {
-        return Result<void>::success();
-    }
-};
-
-class DummyStream final : public TunerStreamControl {
-public:
-    Result<void> attach(const TunerAttachment&) noexcept override
-    {
-        return Result<void>::failure(Error::UNSUPPORTED);
-    }
-
-    Result<void> detach(const TunerAttachment&) noexcept override
-    {
-        return Result<void>::failure(Error::UNSUPPORTED);
-    }
-};
-
-class OwnerQ3U4Product final : public L3Product {
-public:
-    OwnerQ3U4Product() noexcept
-        : profile_(device_profile(DeviceModel::px_q3u4))
-    {
-    }
-
-    dtv_l3_capabilities capabilities() const noexcept override
-    {
-        dtv_l3_capabilities out{};
-        out.receiver_count = profile_.receiver_count;
-        out.reader_count = 1U;
-        out.lnb_power = 1U;
-        out.cancel_scope = DTV_L3_CANCEL_SCOPE_PIPE;
-        return out;
-    }
-
-    dtv_l3_result bind(dtv_l3_context* owner) noexcept override
-    {
-        owner_ = owner;
-        return owner == nullptr ? DTV_L3_INVALID : DTV_L3_OK;
-    }
-
-    dtv_l3_result initialize(dtv_l3_context* owner) noexcept override
-    {
-        if (owner == nullptr) {
-            return DTV_L3_INVALID;
-        }
-        owner_ = owner;
-        dev1_transport_ = std::make_unique<L3OwnerTransport>(owner, 0U);
-        dev2_transport_ = std::make_unique<L3OwnerTransport>(owner, 1U);
-        dev1_ = std::make_unique<It930xController>(
-            *dev1_transport_, CommandPacingOptions{CommandPacingMode::no_delay});
-        dev2_ = std::make_unique<It930xController>(
-            *dev2_transport_, CommandPacingOptions{CommandPacingMode::no_delay});
-        dev1_i2c_ = std::make_unique<It930xBridgeI2cMaster>(*dev1_);
-        dev2_i2c_ = std::make_unique<It930xBridgeI2cMaster>(*dev2_);
-        dev1_power_ = std::make_unique<FakePower>();
-        dev2_power_ = std::make_unique<FakePower>();
-        enclosure_ = std::make_unique<Q3U4FrontendEnclosure>(
-            *dev1_i2c_, *dev2_i2c_, *dev1_power_, *dev2_power_, delay_);
-        lnb1_ = std::make_unique<It930xLnbPower>(*dev1_);
-        lnb2_ = std::make_unique<It930xLnbPower>(*dev2_);
-        lnb_ = std::make_unique<Q3U4LnbPowerCoordinator>(*lnb1_, *lnb2_, true);
-        tuner_ = std::make_unique<Q3U4FrontendTunerBackend>(*enclosure_, *lnb_);
-        backend_ = std::make_unique<L3BackendProduct>(
-            *tuner_, stream_, profile_, true, DTV_L3_CANCEL_SCOPE_PIPE, true);
-        return DTV_L3_OK;
-    }
-
-    dtv_l3_result scope_query(std::uint32_t receiver,
-                              dtv_l3_scope_info* scope) noexcept override
-    {
-        return backend_ == nullptr ? DTV_L3_FAILED
-                                   : backend_->scope_query(receiver, scope);
-    }
-
-    dtv_l3_result tune(std::uint32_t receiver, std::uint64_t hz,
-                       std::uint64_t* programmed) noexcept override
-    {
-        return backend_ == nullptr ? DTV_L3_FAILED
-                                   : backend_->tune(receiver, hz, programmed);
-    }
-
-    dtv_l3_result tune_ex(std::uint32_t receiver,
-                          const dtv_l3_tune_request* request,
-                          std::uint64_t* programmed) noexcept override
-    {
-        return backend_ == nullptr ? DTV_L3_FAILED
-                                   : backend_->tune_ex(receiver, request,
-                                                       programmed);
-    }
-
-    dtv_l3_result bridge_start(std::uint32_t bridge,
-                               std::uint32_t receiver) noexcept override
-    {
-        return backend_ == nullptr ? DTV_L3_FAILED
-                                   : backend_->bridge_start(bridge, receiver);
-    }
-
-    dtv_l3_result bridge_stop(std::uint32_t bridge) noexcept override
-    {
-        return backend_ == nullptr ? DTV_L3_FAILED
-                                   : backend_->bridge_stop(bridge);
-    }
-
-    dtv_l3_result stream_attach(std::uint64_t,
-                                dtv_l3_ts_deliver_fn,
-                                void*) noexcept override
-    {
-        return DTV_L3_UNSUPPORTED;
-    }
-
-    dtv_l3_result stream_stop(std::uint64_t) noexcept override
-    {
-        return DTV_L3_UNSUPPORTED;
-    }
-
-    dtv_l3_result lnb_status(std::uint32_t scope,
-                             dtv_l3_lnb_state* out) noexcept override
-    {
-        return backend_ == nullptr ? DTV_L3_FAILED
-                                   : backend_->lnb_status(scope, out);
-    }
-
-    dtv_l3_result lnb_set(std::uint32_t scope, dtv_l3_lnb_command command,
-                          std::uint64_t deadline,
-                          dtv_l3_lnb_state* out) noexcept override
-    {
-        return backend_ == nullptr ? DTV_L3_FAILED
-                                   : backend_->lnb_set(scope, command,
-                                                       deadline, out);
-    }
-
-    dtv_l3_result lnb_restore(std::uint32_t scope,
-                              dtv_l3_restore_result* out) noexcept override
-    {
-        return backend_ == nullptr ? DTV_L3_FAILED
-                                   : backend_->lnb_restore(scope, out);
-    }
-
-    ~OwnerQ3U4Product() noexcept override = default;
-
-private:
-    const DeviceProfile& profile_;
-    dtv_l3_context* owner_ = nullptr;
-    Delay delay_;
-    std::unique_ptr<L3OwnerTransport> dev1_transport_;
-    std::unique_ptr<L3OwnerTransport> dev2_transport_;
-    std::unique_ptr<It930xController> dev1_;
-    std::unique_ptr<It930xController> dev2_;
-    std::unique_ptr<It930xBridgeI2cMaster> dev1_i2c_;
-    std::unique_ptr<It930xBridgeI2cMaster> dev2_i2c_;
-    std::unique_ptr<FakePower> dev1_power_;
-    std::unique_ptr<FakePower> dev2_power_;
-    std::unique_ptr<Q3U4FrontendEnclosure> enclosure_;
-    std::unique_ptr<It930xLnbPower> lnb1_;
-    std::unique_ptr<It930xLnbPower> lnb2_;
-    std::unique_ptr<Q3U4LnbPowerCoordinator> lnb_;
-    std::unique_ptr<Q3U4FrontendTunerBackend> tuner_;
-    std::unique_ptr<L3BackendProduct> backend_;
-    DummyStream stream_;
 };
 
 struct FactoryContext final {
@@ -383,7 +238,8 @@ bool release_context(dtv_l3_context* owner)
 int main()
 {
     FakeUsb usb_port;
-    OwnerQ3U4Product product;
+    const DeviceProfile& profile = device_profile(DeviceModel::px_q3u4);
+    L3Q3U4OwnerBackend product(profile, true, false, nullptr);
     L3ProductAdapter product_adapter(product);
     L3UsbProviderAdapter usb_adapter(usb_port);
     const dtv_l3_usb_provider usb = usb_adapter.provider();
@@ -412,6 +268,11 @@ int main()
     dtv_l3_lnb_state lnb{};
     dtv_l3_lnb_state after{};
     dtv_l3_lease* lease = nullptr;
+    dtv_l3_stream* stream_handle = nullptr;
+    std::uint8_t ts_buffer[188U * 64U];
+    std::size_t ts_bytes = 0U;
+    dtv_l3_read_state read_state = DTV_L3_READ_WAIT;
+    dtv_l3_result stream_result = DTV_L3_FAILED;
     dtv_l3_tune_request tune{};
     uint64_t programmed = 0U;
     uint64_t revision = 0U;
@@ -450,6 +311,40 @@ int main()
             worked = dtv_l3_lnb_status(opened.owner, 0U, &lnb) == DTV_L3_OK &&
                      lnb.controlled == DTV_L3_LNB_COMMAND_ON_15V;
         }
+        if (worked) {
+            worked = dtv_l3_lease_attach(lease, &stream_handle) == DTV_L3_OK &&
+                     stream_handle != nullptr;
+        }
+        if (worked) {
+            for (unsigned int attempt = 0U; attempt < 200U; ++attempt) {
+                stream_result = dtv_l3_stream_read_ts_wait(
+                    stream_handle, ts_buffer, sizeof(ts_buffer), &ts_bytes,
+                    &read_state, 1000U);
+                if (stream_result == DTV_L3_OK && ts_bytes != 0U) {
+                    break;
+                }
+                if (stream_result != DTV_L3_OK &&
+                    stream_result != DTV_L3_WAIT_TIMEOUT) {
+                    break;
+                }
+            }
+            worked = stream_result == DTV_L3_OK && ts_bytes != 0U;
+        }
+        if (stream_handle != nullptr) {
+            (void)dtv_l3_stream_stop(stream_handle, 2000U);
+            for (unsigned int attempt = 0U; attempt < 500U; ++attempt) {
+                const dtv_l3_result released = dtv_l3_stream_release(
+                    stream_handle, DTV_L3_STREAM_RELEASE_DISCARD_UNREAD);
+                if (released == DTV_L3_OK || released == DTV_L3_STALE) {
+                    break;
+                }
+                if (released != DTV_L3_ACCEPTED && released != DTV_L3_BUSY) {
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            (void)dtv_l3_stream_destroy(stream_handle);
+        }
         if (lease != nullptr) {
             (void)dtv_l3_lease_release(lease);
         }
@@ -464,17 +359,20 @@ int main()
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
-    const bool ok = open_ok && worked && cleaned &&
+    const bool ok = open_ok && worked && cleaned && ts_bytes != 0U &&
+                    usb_port.stream_read_calls != 0U &&
                     usb_port.submit_calls > 2U &&
                     usb_port.completion_calls == usb_port.submit_calls;
     std::printf(
         "{\"open\":%s,\"off\":%d,\"on\":%d,\"tune\":%d,"
-        "\"start\":%d,\"submits\":%u,\"completions\":%u,"
-        "\"cleaned\":%s,\"ok\":%s}\n",
+        "\"start\":%d,\"stream\":%d,\"ts_bytes\":%zu,\"submits\":%u,"
+        "\"completions\":%u,\"stream_reads\":%u,\"cleaned\":%s,"
+        "\"ok\":%s}\n",
         open_ok ? "true" : "false", static_cast<int>(off_result),
         static_cast<int>(on_result), static_cast<int>(tune_result),
-        static_cast<int>(start_result), usb_port.submit_calls,
-        usb_port.completion_calls, cleaned ? "true" : "false",
+        static_cast<int>(start_result), static_cast<int>(stream_result),
+        ts_bytes, usb_port.submit_calls, usb_port.completion_calls,
+        usb_port.stream_read_calls, cleaned ? "true" : "false",
         ok ? "true" : "false");
     return ok ? 0 : 1;
 }
