@@ -300,7 +300,7 @@ int main()
             if (product.transport != nullptr) {
                 control_result = product.transport->bulk_read(
                     0x81U, MutableByteView{control_data.data(), control_data.size()},
-                    Timeout{2000U});
+                    Timeout{2000U}, nullptr);
             }
         });
         control_read_progress = timed_stream_wait_entered &&
