@@ -435,6 +435,20 @@ if(PX4_BUILD_L3_ADAPTER)
     add_test(NAME px4_l3_owner_usb_backend_tests
              COMMAND px4_l3_owner_usb_backend_tests)
 
+    add_executable(px4_l3_owner_q3u4_tune_lnb_tests
+        userland/tests/l3_owner_q3u4_tune_lnb_fixture.cpp
+    )
+    target_include_directories(px4_l3_owner_q3u4_tune_lnb_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
+    )
+    target_compile_features(px4_l3_owner_q3u4_tune_lnb_tests PRIVATE cxx_std_17)
+    target_link_libraries(px4_l3_owner_q3u4_tune_lnb_tests PRIVATE
+        px4_l3_adapter px4_userland_device_core Threads::Threads)
+    px4_enable_project_warnings(px4_l3_owner_q3u4_tune_lnb_tests)
+    add_test(NAME px4_l3_owner_q3u4_tune_lnb_tests
+             COMMAND px4_l3_owner_q3u4_tune_lnb_tests)
+
     if(PX4_ENABLE_LIBUSB)
         add_executable(px4_l3_real_probe userland/tests/l3_real_probe.cpp)
         target_include_directories(px4_l3_real_probe PRIVATE

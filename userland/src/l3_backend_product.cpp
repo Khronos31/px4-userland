@@ -453,6 +453,7 @@ struct L3BackendProduct::Impl final {
     dtv_l3_cancel_scope cancel_scope;
     L3OwnerLifecycle* lifecycle;
     L3LnbPort lnb;
+    bool shutdown_attempted = false;
     std::array<dtv_l3_receiver_capability, kMaxReceivers> receiver_caps{};
     std::array<dtv_l3_reader_capability, 1> reader_caps{};
     std::array<dtv_l3_lnb_scope_capability, 1> lnb_caps{};
@@ -731,8 +732,38 @@ dtv_l3_result L3BackendProduct::lnb_set(
 dtv_l3_result L3BackendProduct::lnb_restore(
     std::uint32_t scope_id, dtv_l3_restore_result* out) noexcept
 {
-    return impl_ == nullptr ? DTV_L3_FAILED
-                            : impl_->lnb.restore(scope_id, out);
+    if (impl_ == nullptr) {
+        return DTV_L3_FAILED;
+    }
+    const dtv_l3_result result = impl_->lnb.restore(scope_id, out);
+    if (impl_->profile.supports_lnb_15v) {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        for (std::uint32_t bridge = 0U; bridge < impl_->profile.bridge_count;
+             ++bridge) {
+            for (std::size_t receiver = 0U; receiver < kMaxReceivers;
+                 ++receiver) {
+                if (impl_->bridges[bridge].capture_running[receiver]) {
+                    (void)impl_->tuner.stop_capture(
+                        static_cast<std::uint8_t>(receiver),
+                        impl_->bridges[bridge].capture_system[receiver]);
+                    impl_->bridges[bridge].capture_running[receiver] = false;
+                }
+            }
+            impl_->bridges[bridge].running = false;
+        }
+        for (std::uint32_t receiver = 0U;
+             receiver < impl_->profile.receiver_count; ++receiver) {
+            if (impl_->receivers[receiver].opened) {
+                (void)impl_->tuner.close_receiver(
+                    static_cast<std::uint8_t>(receiver));
+                impl_->receivers[receiver].opened = false;
+                impl_->receivers[receiver].tuned = false;
+            }
+        }
+        // The owner shutdown frame is the last chance for product USB work.
+        impl_->shutdown_attempted = true;
+    }
+    return result;
 }
 
 dtv_l3_result L3BackendProduct::tune(std::uint32_t receiver_id,
@@ -833,9 +864,11 @@ dtv_l3_result L3BackendProduct::close_all() noexcept
             }
         }
     }
-    const auto stopped = impl_->tuner.shutdown();
-    if (!stopped && first == DTV_L3_OK) {
-        first = from_error(stopped.error());
+    if (!impl_->shutdown_attempted) {
+        const auto stopped = impl_->tuner.shutdown();
+        if (!stopped && first == DTV_L3_OK) {
+            first = from_error(stopped.error());
+        }
     }
     return first;
 }
