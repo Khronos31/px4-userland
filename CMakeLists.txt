@@ -27,6 +27,10 @@ option(PX4_RELEASE_PX4D_NO_BUILD_ID
 option(PX4_BUILD_PCSC_IFD "Build the POSIX PC/SC IFD Handler when headers are available" ON)
 option(PX4_REQUIRE_PCSC_IFD "Fail configuration when the PC/SC IFD Handler cannot be built" OFF)
 option(PX4_BUILD_WINSCARD "Build the Windows B25-compatible app-local WinSCard DLL" ON)
+option(PX4_BUILD_L3_ADAPTER
+    "Build the experimental common L3 adapter and its contract tests" OFF)
+set(PX4_L3_OWNER_SOURCE_DIR "" CACHE PATH
+    "Optional l3_owner prototype source tree (defaults to the pinned Core tree)")
 set(PX4_ANDROID_NDK_ROOT_MAP "" CACHE PATH
     "Android NDK root to remove from compiler debug paths")
 set(PX4_ANDROID_LINK_MAP_DIR "" CACHE PATH
@@ -336,6 +340,78 @@ if(PX4_ENABLE_LIBUSB)
     target_compile_features(px4_userland_host_backends PRIVATE cxx_std_17)
     target_link_libraries(px4_userland_host_backends PRIVATE px4_userland_device_core)
     px4_enable_project_warnings(px4_userland_host_backends)
+endif()
+
+if(PX4_BUILD_L3_ADAPTER)
+    enable_language(C)
+    set(_px4_l3_owner_dir "${PX4_L3_OWNER_SOURCE_DIR}")
+    if(NOT _px4_l3_owner_dir)
+        set(_px4_l3_owner_dir
+            "${dtv_userland_core_SOURCE_DIR}/prototype/l3_owner")
+    endif()
+    if(NOT EXISTS "${_px4_l3_owner_dir}/CMakeLists.txt")
+        message(FATAL_ERROR
+            "PX4_BUILD_L3_ADAPTER needs an l3_owner prototype tree; "
+            "set PX4_L3_OWNER_SOURCE_DIR (looked for ${_px4_l3_owner_dir})")
+    endif()
+    add_subdirectory("${_px4_l3_owner_dir}"
+        "${CMAKE_CURRENT_BINARY_DIR}/l3_owner")
+
+    add_library(px4_l3_adapter STATIC
+        userland/src/l3_adapter.cpp
+        userland/src/l3_backend_product.cpp
+    )
+    target_include_directories(px4_l3_adapter
+        PUBLIC
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+            ${_px4_l3_owner_dir}/include
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
+            ${dtv_userland_core_SOURCE_DIR}/adapters/host_daemon/include
+            ${dtv_userland_core_SOURCE_DIR}/include
+    )
+    target_compile_features(px4_l3_adapter PUBLIC cxx_std_17)
+    target_link_libraries(px4_l3_adapter
+        PUBLIC px4_userland_core l3_owner_model Threads::Threads
+    )
+    px4_enable_project_warnings(px4_l3_adapter)
+
+    add_executable(px4_l3_contract_tests
+        userland/tests/l3_strict_consumer.c
+        userland/tests/l3_test_harness.cpp
+    )
+    target_include_directories(px4_l3_contract_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/tests
+    )
+    target_compile_features(px4_l3_contract_tests PRIVATE cxx_std_17)
+    target_link_libraries(px4_l3_contract_tests PRIVATE
+        px4_l3_adapter l3_owner_model Threads::Threads)
+    set_target_properties(px4_l3_contract_tests PROPERTIES
+        C_STANDARD 11
+        C_STANDARD_REQUIRED YES
+        C_EXTENSIONS NO
+    )
+    enable_testing()
+    add_test(NAME px4_l3_contract_tests COMMAND px4_l3_contract_tests)
+
+    if(PX4_ENABLE_LIBUSB)
+        add_executable(px4_l3_real_probe userland/tests/l3_real_probe.cpp)
+        target_include_directories(px4_l3_real_probe PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
+            ${dtv_userland_core_SOURCE_DIR}/adapters/host_daemon/include
+            ${dtv_userland_core_SOURCE_DIR}/include
+        )
+        target_compile_features(px4_l3_real_probe PRIVATE cxx_std_17)
+        target_link_libraries(px4_l3_real_probe PRIVATE
+            px4_l3_adapter
+            px4_userland_host_backends
+            px4_userland_libusb_transport
+        )
+        px4_enable_project_warnings(px4_l3_real_probe)
+    endif()
 endif()
 
 # Filesystem AF_UNIX is a POSIX adapter, including Android API 24.  Keep its
