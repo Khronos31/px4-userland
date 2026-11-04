@@ -7,9 +7,11 @@
 #include "l3_adapter.h"
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <thread>
 
 namespace {
 
@@ -20,6 +22,7 @@ public:
     dtv_l3_claim_result claim(dtv_l3_provider_binding*,
                               std::uint32_t claim_index) noexcept override
     {
+        ++claim_calls;
         if (claim_index != 0U) {
             return {DTV_L3_INVALID, DTV_L3_CLAIM_NONE};
         }
@@ -29,6 +32,7 @@ public:
     dtv_l3_release_result release_claim(
         dtv_l3_provider_binding*, std::uint32_t) noexcept override
     {
+        ++release_calls;
         return {DTV_L3_RELEASE_QUIESCED, DTV_L3_CLAIM_NONE,
                 DTV_L3_RESTORE_SUCCEEDED, DTV_L3_OK};
     }
@@ -63,6 +67,8 @@ public:
 
     std::array<std::uint8_t, 8> data{{0x12U, 0x01U, 0x00U, 0x02U,
                                       0x00U, 0x00U, 0x00U, 0x40U}};
+    unsigned int claim_calls = 0U;
+    unsigned int release_calls = 0U;
     unsigned int submit_calls = 0U;
     bool control_shape_ok = true;
 };
@@ -92,6 +98,10 @@ public:
     dtv_l3_result initialize(dtv_l3_context* owner) noexcept override
     {
         ++initialize_calls;
+        if (fail_initialize) {
+            initialize_result = DTV_L3_FAILED;
+            return initialize_result;
+        }
         if (owner == nullptr) {
             initialize_result = DTV_L3_INVALID;
             return initialize_result;
@@ -172,6 +182,7 @@ public:
     unsigned int bind_calls = 0U;
     unsigned int initialize_calls = 0U;
     dtv_l3_result initialize_result = DTV_L3_FAILED;
+    bool fail_initialize = false;
     std::array<std::uint8_t, 8> received{};
     std::size_t received_size = 0U;
 
@@ -181,10 +192,43 @@ private:
 
 }  // namespace
 
-int main()
+namespace {
+
+bool wait_releasable(dtv_l3_context* owner)
+{
+    dtv_l3_close_status status{};
+    for (unsigned int attempt = 0U; attempt < 500U; ++attempt) {
+        if (dtv_l3_close_status_get(owner, &status) != DTV_L3_OK) {
+            return false;
+        }
+        if (status.releasable) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return false;
+}
+
+bool release_context(dtv_l3_context* owner)
+{
+    for (unsigned int attempt = 0U; attempt < 500U; ++attempt) {
+        const dtv_l3_result result = dtv_l3_context_release(owner);
+        if (result == DTV_L3_OK) {
+            return true;
+        }
+        if (result != DTV_L3_BUSY) {
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return false;
+}
+
+int run_case(bool fail_initialize, bool* json_written)
 {
     FakeUsbPort usb_port;
     ControlProduct product;
+    product.fail_initialize = fail_initialize;
     L3ProductAdapter product_adapter(product);
     L3UsbProviderAdapter usb_adapter(usb_port);
     const dtv_l3_usb_provider usb = usb_adapter.provider();
@@ -198,34 +242,55 @@ int main()
         open_wait = open_result.result;
         (void)dtv_l3_op_release(opened.op);
     }
-    const bool ok = opened.result == DTV_L3_ACCEPTED &&
-                    opened.owner != nullptr && open_wait == DTV_L3_OK &&
-                    product.bind_calls == 1U &&
-                    product.initialize_calls == 1U &&
-                    product.initialize_result == DTV_L3_OK &&
-                    usb_port.submit_calls == 1U &&
-                    usb_port.control_shape_ok && product.received_size == 8U;
+    bool cleaned = true;
+    if (opened.owner != nullptr) {
+        (void)dtv_l3_close(opened.owner, 2000U);
+        cleaned = wait_releasable(opened.owner) &&
+                  release_context(opened.owner);
+    }
+    const bool ok = fail_initialize
+                        ? opened.result == DTV_L3_ACCEPTED &&
+                              opened.owner != nullptr &&
+                              open_wait == DTV_L3_FAILED &&
+                              product.bind_calls == 1U &&
+                              product.initialize_calls == 1U &&
+                              usb_port.submit_calls == 0U &&
+                              usb_port.claim_calls == 1U &&
+                              usb_port.release_calls == 1U && cleaned
+                        : opened.result == DTV_L3_ACCEPTED &&
+                              opened.owner != nullptr &&
+                              open_wait == DTV_L3_OK &&
+                              product.bind_calls == 1U &&
+                              product.initialize_calls == 1U &&
+                              product.initialize_result == DTV_L3_OK &&
+                              usb_port.submit_calls == 1U &&
+                              usb_port.control_shape_ok &&
+                              product.received_size == 8U &&
+                              usb_port.claim_calls == 1U &&
+                              usb_port.release_calls == 1U && cleaned;
     std::printf(
-        "{\"open_result\":%d,\"open_wait\":%d,\"bind\":%u,"
-        "\"initialize\":%u,\"initialize_result\":%d,\"submit\":%u,"
-        "\"control_shape\":%s,\"bytes\":%zu,\"ok\":%s}\n",
+        "{\"case\":\"%s\",\"open_result\":%d,\"open_wait\":%d,"
+        "\"bind\":%u,\"initialize\":%u,\"initialize_result\":%d,"
+        "\"submit\":%u,\"control_shape\":%s,\"bytes\":%zu,"
+        "\"claim\":%u,\"release\":%u,\"cleaned\":%s,\"ok\":%s}\n",
+        fail_initialize ? "initialize-fail" : "ready",
         static_cast<int>(opened.result), static_cast<int>(open_wait),
         product.bind_calls, product.initialize_calls,
         static_cast<int>(product.initialize_result), usb_port.submit_calls,
         usb_port.control_shape_ok ? "true" : "false",
-        product.received_size, ok ? "true" : "false");
-    if (opened.owner != nullptr) {
-        dtv_l3_close_status status{};
-        if (dtv_l3_close(opened.owner, 2000U) == DTV_L3_OK) {
-            for (unsigned int attempt = 0U; attempt < 200U; ++attempt) {
-                if (dtv_l3_close_status_get(opened.owner, &status) ==
-                        DTV_L3_OK &&
-                    status.releasable) {
-                    (void)dtv_l3_context_release(opened.owner);
-                    break;
-                }
-            }
-        }
-    }
+        product.received_size, usb_port.claim_calls, usb_port.release_calls,
+        cleaned ? "true" : "false", ok ? "true" : "false");
+    *json_written = true;
     return ok ? 0 : 1;
+}
+
+}  // namespace
+
+int main()
+{
+    bool written = false;
+    const int ready = run_case(false, &written);
+    const int failed = run_case(true, &written);
+    (void)written;
+    return ready == 0 && failed == 0 ? 0 : 1;
 }
