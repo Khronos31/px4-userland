@@ -29,8 +29,6 @@ option(PX4_REQUIRE_PCSC_IFD "Fail configuration when the PC/SC IFD Handler canno
 option(PX4_BUILD_WINSCARD "Build the Windows B25-compatible app-local WinSCard DLL" ON)
 option(PX4_BUILD_L3_ADAPTER
     "Build the experimental common L3 adapter and its contract tests" OFF)
-set(PX4_L3_OWNER_SOURCE_DIR "" CACHE PATH
-    "Optional l3_owner prototype source tree (defaults to the pinned Core tree)")
 set(PX4_ANDROID_NDK_ROOT_MAP "" CACHE PATH
     "Android NDK root to remove from compiler debug paths")
 set(PX4_ANDROID_LINK_MAP_DIR "" CACHE PATH
@@ -153,6 +151,10 @@ if(WIN32 AND PX4_BUILD_WINSCARD)
     set(DTV_USERLAND_BUILD_WINDOWS_WINSCARD ON)
 else()
     set(DTV_USERLAND_BUILD_WINDOWS_WINSCARD OFF)
+endif()
+if(PX4_BUILD_L3_ADAPTER)
+    set(DTV_USERLAND_BUILD_L3_OWNER ON CACHE BOOL
+        "Build the isolated Core L3 owner/product integration library" FORCE)
 endif()
 px4_add_dtv_userland_core()
 file(STRINGS "${dtv_userland_core_SOURCE_DIR}/CMakeLists.txt" DTV_CORE_PROJECT_LINE
@@ -344,27 +346,18 @@ endif()
 
 if(PX4_BUILD_L3_ADAPTER)
     enable_language(C)
-    set(_px4_l3_owner_dir "${PX4_L3_OWNER_SOURCE_DIR}")
-    if(NOT _px4_l3_owner_dir)
-        set(_px4_l3_owner_dir
-            "${dtv_userland_core_SOURCE_DIR}/prototype/l3_owner")
-    endif()
-    if(NOT EXISTS "${_px4_l3_owner_dir}/CMakeLists.txt")
+    if(NOT TARGET dtv_userland_l3_owner)
         message(FATAL_ERROR
-            "PX4_BUILD_L3_ADAPTER needs an l3_owner prototype tree; "
-            "set PX4_L3_OWNER_SOURCE_DIR (looked for ${_px4_l3_owner_dir})")
+            "PX4_BUILD_L3_ADAPTER requires the shared Core L3 owner target; "
+            "use the Core branch that provides dtv_userland_l3_owner")
     endif()
-    add_subdirectory("${_px4_l3_owner_dir}"
-        "${CMAKE_CURRENT_BINARY_DIR}/l3_owner")
 
     add_library(px4_l3_adapter STATIC
         userland/src/l3_adapter.cpp
         userland/src/l3_backend_product.cpp
     )
     target_include_directories(px4_l3_adapter
-        PUBLIC
-            ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
-            ${_px4_l3_owner_dir}/include
+        PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
             ${dtv_userland_core_SOURCE_DIR}/adapters/host_daemon/include
@@ -372,7 +365,7 @@ if(PX4_BUILD_L3_ADAPTER)
     )
     target_compile_features(px4_l3_adapter PUBLIC cxx_std_17)
     target_link_libraries(px4_l3_adapter
-        PUBLIC px4_userland_core l3_owner_model Threads::Threads
+        PUBLIC px4_userland_core dtv_userland_l3_owner Threads::Threads
     )
     px4_enable_project_warnings(px4_l3_adapter)
 
@@ -387,7 +380,7 @@ if(PX4_BUILD_L3_ADAPTER)
     )
     target_compile_features(px4_l3_contract_tests PRIVATE cxx_std_17)
     target_link_libraries(px4_l3_contract_tests PRIVATE
-        px4_l3_adapter l3_owner_model Threads::Threads)
+        px4_l3_adapter Threads::Threads)
     set_target_properties(px4_l3_contract_tests PROPERTIES
         C_STANDARD 11
         C_STANDARD_REQUIRED YES

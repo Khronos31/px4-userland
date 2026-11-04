@@ -10,21 +10,22 @@ extern "C" {
 
 struct px4_l3_test_harness;
 
-struct px4_l3_test_capabilities {
-    unsigned int bridge_count;
-    unsigned int receiver_count;
-    int dual_system;
-    int supports_lnb_15v;
-    int has_card_reader;
-    int cancel_scope;
-};
-
 struct px4_l3_test_harness* px4_l3_test_create(unsigned int claim_count,
                                                int fail_claim_index,
                                                int dual_receiver);
-const dtv_l3_provider* px4_l3_test_provider(
+const dtv_l3_usb_provider* px4_l3_test_usb_provider(
     struct px4_l3_test_harness* harness);
-struct px4_l3_test_capabilities px4_l3_test_capabilities(
+const dtv_l3_product_adapter* px4_l3_test_product_adapter(
+    struct px4_l3_test_harness* harness);
+const dtv_l3_adapter_factory* px4_l3_test_factory(
+    struct px4_l3_test_harness* harness);
+const dtv_l3_open_config* px4_l3_test_seen_config(
+    struct px4_l3_test_harness* harness);
+const dtv_l3_firmware* px4_l3_test_seen_firmware(
+    struct px4_l3_test_harness* harness);
+unsigned int px4_l3_test_factory_create_calls(
+    struct px4_l3_test_harness* harness);
+unsigned int px4_l3_test_factory_release_calls(
     struct px4_l3_test_harness* harness);
 
 unsigned int px4_l3_test_claim_calls(struct px4_l3_test_harness* harness);

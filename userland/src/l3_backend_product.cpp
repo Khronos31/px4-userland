@@ -79,14 +79,14 @@ struct L3BackendProduct::Impl final {
 
     Impl(TunerServiceBackend& tuner_value,
          TunerStreamControl& stream_value,
-         L3UsbPort& usb_value,
          const DeviceProfile& profile_value,
-         bool has_card_reader) noexcept
+         bool has_card_reader,
+         dtv_l3_cancel_scope cancel_scope_value) noexcept
         : tuner(tuner_value),
           stream(stream_value),
-          usb(usb_value),
           profile(profile_value),
-          card_reader(has_card_reader)
+          card_reader(has_card_reader),
+          cancel_scope(cancel_scope_value)
     {
     }
 
@@ -213,9 +213,9 @@ struct L3BackendProduct::Impl final {
 
     TunerServiceBackend& tuner;
     TunerStreamControl& stream;
-    L3UsbPort& usb;
     DeviceProfile profile;
     bool card_reader;
+    dtv_l3_cancel_scope cancel_scope;
     std::mutex mutex;
     ReceiverRecord receivers[kMaxReceivers]{};
     BridgeRecord bridges[kMaxBridges]{};
@@ -224,11 +224,11 @@ struct L3BackendProduct::Impl final {
 
 L3BackendProduct::L3BackendProduct(TunerServiceBackend& tuner,
                                    TunerStreamControl& stream,
-                                   L3UsbPort& usb,
                                    const DeviceProfile& profile,
-                                   bool has_card_reader) noexcept
-    : impl_(new (std::nothrow) Impl(tuner, stream, usb, profile,
-                                    has_card_reader))
+                                   bool has_card_reader,
+                                   dtv_l3_cancel_scope cancel_scope) noexcept
+    : impl_(new (std::nothrow) Impl(tuner, stream, profile, has_card_reader,
+                                    cancel_scope))
 {
 }
 
@@ -237,62 +237,18 @@ L3BackendProduct::~L3BackendProduct() noexcept
     (void)close_all();
 }
 
-L3Capabilities L3BackendProduct::capabilities() const noexcept
+dtv_l3_capabilities L3BackendProduct::capabilities() const noexcept
 {
+    dtv_l3_capabilities capabilities{};
     if (!impl_) {
-        return L3Capabilities{0U, 0U, false, false, false};
+        return capabilities;
     }
-    return L3Capabilities{impl_->profile.bridge_count,
-                          impl_->profile.receiver_count,
-                          impl_->profile.dual_system,
-                          impl_->profile.supports_lnb_15v,
-                          impl_->card_reader};
-}
-
-dtv_l3_cancel_scope L3BackendProduct::cancel_scope() const noexcept
-{
-    return impl_ ? impl_->usb.cancel_scope() : DTV_L3_CANCEL_SCOPE_TRANSFER;
-}
-
-dtv_l3_claim_result L3BackendProduct::claim(
-    dtv_l3_provider_binding* binding, std::uint32_t claim_index) noexcept
-{
-    return impl_ ? impl_->usb.claim(binding, claim_index)
-                 : dtv_l3_claim_result{DTV_L3_FAILED, DTV_L3_CLAIM_UNKNOWN};
-}
-
-dtv_l3_release_result L3BackendProduct::release_claim(
-    dtv_l3_provider_binding* binding, std::uint32_t claim_index) noexcept
-{
-    return impl_ ? impl_->usb.release_claim(binding, claim_index)
-                 : dtv_l3_release_result{DTV_L3_RELEASE_QUIESCENCE_UNKNOWN,
-                                         DTV_L3_CLAIM_UNKNOWN,
-                                         DTV_L3_RESTORE_NOT_ATTEMPTED,
-                                         DTV_L3_FAILED};
-}
-
-dtv_l3_result L3BackendProduct::submit(
-    dtv_l3_provider_binding* binding, std::uint64_t transfer_id,
-    const dtv_l3_transfer_request* request,
-    dtv_l3_transfer_complete_fn complete,
-    void* callback_context) noexcept
-{
-    return impl_ ? impl_->usb.submit(binding, transfer_id, request, complete,
-                                     callback_context)
-                 : DTV_L3_FAILED;
-}
-
-dtv_l3_result L3BackendProduct::cancel(
-    dtv_l3_provider_binding* binding, std::uint64_t transfer_id) noexcept
-{
-    return impl_ ? impl_->usb.cancel(binding, transfer_id) : DTV_L3_FAILED;
-}
-
-dtv_l3_result L3BackendProduct::claim_cancel(
-    dtv_l3_provider_binding* binding, std::uint32_t claim_index) noexcept
-{
-    return impl_ ? impl_->usb.claim_cancel(binding, claim_index)
-                 : DTV_L3_FAILED;
+    capabilities.receiver_count = impl_->profile.receiver_count;
+    capabilities.reader_count = impl_->card_reader ? 1U : 0U;
+    capabilities.lnb_power = impl_->profile.supports_lnb_15v ? 1U : 0U;
+    capabilities.serial = 0U;
+    capabilities.cancel_scope = impl_->cancel_scope;
+    return capabilities;
 }
 
 dtv_l3_result L3BackendProduct::scope_query(

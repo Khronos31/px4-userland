@@ -324,30 +324,77 @@ struct px4_l3_test_harness {
                   false, true},
           backend(profile.receiver_count, dual_receiver),
           usb(claim_count, fail_claim_index, DTV_L3_CANCEL_SCOPE_PIPE),
-          product(new (std::nothrow) L3BackendProduct(backend, stream, usb,
-                                                      profile, true)),
-          adapter(product != nullptr
-                      ? new (std::nothrow) L3ProviderAdapter(*product)
-                      : nullptr)
+          product(new (std::nothrow) L3BackendProduct(
+              backend, stream, profile, true, DTV_L3_CANCEL_SCOPE_PIPE)),
+          product_holder(product != nullptr
+                             ? new (std::nothrow) L3ProductAdapter(*product,
+                                                                  &firmware_view)
+                             : nullptr),
+          usb_holder(new (std::nothrow) L3UsbProviderAdapter(usb))
     {
-        if (adapter != nullptr) {
-            provider = adapter->provider();
+        firmware_view.source = DTV_L3_FIRMWARE_BYTES;
+        firmware_view.bytes = firmware;
+        firmware_view.size = sizeof(firmware);
+        if (product_holder != nullptr) {
+            adapter = product_holder->adapter();
         }
+        if (usb_holder != nullptr) {
+            usb_provider = usb_holder->provider();
+        }
+        factory.factory_context = this;
+        factory.create = &factory_create;
+        factory.release = &factory_release;
     }
 
     ~px4_l3_test_harness() noexcept
     {
-        delete adapter;
+        delete usb_holder;
+        delete product_holder;
         delete product;
+    }
+
+    static dtv_l3_result factory_create(
+        void* context, const dtv_l3_open_config* config,
+        const dtv_l3_product_adapter** adapter_out,
+        void** adapter_owner_out)
+    {
+        auto* harness = static_cast<px4_l3_test_harness*>(context);
+        if (harness == nullptr || config == nullptr || adapter_out == nullptr ||
+            adapter_owner_out == nullptr) {
+            return DTV_L3_INVALID;
+        }
+        ++harness->factory_create_calls;
+        harness->seen_config = *config;
+        harness->seen_firmware = config->firmware;
+        *adapter_out = &harness->adapter;
+        *adapter_owner_out = harness;
+        return DTV_L3_OK;
+    }
+
+    static void factory_release(void* owner)
+    {
+        auto* harness = static_cast<px4_l3_test_harness*>(owner);
+        if (harness != nullptr) {
+            ++harness->factory_release_calls;
+        }
     }
 
     DeviceProfile profile;
     FakeTunerBackend backend;
     FakeStreamControl stream;
     FakeUsbPort usb;
+    std::uint8_t firmware[4] = {0x10U, 0x20U, 0x30U, 0x40U};
+    dtv_l3_firmware firmware_view{};
     L3BackendProduct* product = nullptr;
-    L3ProviderAdapter* adapter = nullptr;
-    dtv_l3_provider provider{};
+    L3ProductAdapter* product_holder = nullptr;
+    L3UsbProviderAdapter* usb_holder = nullptr;
+    dtv_l3_product_adapter adapter{};
+    dtv_l3_usb_provider usb_provider{};
+    dtv_l3_adapter_factory factory{};
+    dtv_l3_open_config seen_config{};
+    const dtv_l3_firmware* seen_firmware = nullptr;
+    unsigned int factory_create_calls = 0U;
+    unsigned int factory_release_calls = 0U;
 };
 
 extern "C" {
@@ -359,34 +406,53 @@ struct px4_l3_test_harness* px4_l3_test_create(unsigned int claim_count,
     auto* harness = new (std::nothrow) px4_l3_test_harness(
         claim_count, fail_claim_index, dual_receiver);
     if (harness == nullptr || harness->product == nullptr ||
-        harness->adapter == nullptr) {
+        harness->product_holder == nullptr || harness->usb_holder == nullptr) {
         delete harness;
         return nullptr;
     }
     return harness;
 }
 
-const dtv_l3_provider* px4_l3_test_provider(
+const dtv_l3_usb_provider* px4_l3_test_usb_provider(
     struct px4_l3_test_harness* harness)
 {
-    return harness == nullptr ? nullptr : &harness->provider;
+    return harness == nullptr ? nullptr : &harness->usb_provider;
 }
 
-struct px4_l3_test_capabilities px4_l3_test_capabilities(
+const dtv_l3_product_adapter* px4_l3_test_product_adapter(
     struct px4_l3_test_harness* harness)
 {
-    struct px4_l3_test_capabilities result{};
-    if (harness == nullptr || harness->product == nullptr) {
-        return result;
-    }
-    const L3Capabilities capabilities = harness->product->capabilities();
-    result.bridge_count = capabilities.bridge_count;
-    result.receiver_count = capabilities.receiver_count;
-    result.dual_system = capabilities.dual_system ? 1 : 0;
-    result.supports_lnb_15v = capabilities.supports_lnb_15v ? 1 : 0;
-    result.has_card_reader = capabilities.has_card_reader ? 1 : 0;
-    result.cancel_scope = static_cast<int>(harness->product->cancel_scope());
-    return result;
+    return harness == nullptr ? nullptr : &harness->adapter;
+}
+
+const dtv_l3_adapter_factory* px4_l3_test_factory(
+    struct px4_l3_test_harness* harness)
+{
+    return harness == nullptr ? nullptr : &harness->factory;
+}
+
+const dtv_l3_open_config* px4_l3_test_seen_config(
+    struct px4_l3_test_harness* harness)
+{
+    return harness == nullptr ? nullptr : &harness->seen_config;
+}
+
+const dtv_l3_firmware* px4_l3_test_seen_firmware(
+    struct px4_l3_test_harness* harness)
+{
+    return harness == nullptr ? nullptr : harness->seen_firmware;
+}
+
+unsigned int px4_l3_test_factory_create_calls(
+    struct px4_l3_test_harness* harness)
+{
+    return harness == nullptr ? 0U : harness->factory_create_calls;
+}
+
+unsigned int px4_l3_test_factory_release_calls(
+    struct px4_l3_test_harness* harness)
+{
+    return harness == nullptr ? 0U : harness->factory_release_calls;
 }
 
 unsigned int px4_l3_test_claim_calls(struct px4_l3_test_harness* harness)

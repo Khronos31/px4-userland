@@ -26,10 +26,29 @@ static void sleep_ms(unsigned int milliseconds)
     nanosleep(&delay, NULL);
 }
 
-static int open_ready(const dtv_l3_provider* provider, dtv_l3_context** owner,
-                      dtv_l3_result* open_result)
+static int wait_op_terminal(dtv_l3_op* op, dtv_l3_op_result* result)
 {
-    dtv_l3_open_result opened = dtv_l3_open(provider, 1U);
+    unsigned int attempt;
+    for (attempt = 0U; attempt < 4000U; ++attempt) {
+        if (dtv_l3_op_poll(op, result) != DTV_L3_OK) {
+            return 0;
+        }
+        if (result->state == DTV_L3_OP_DONE ||
+            result->state == DTV_L3_OP_FAILED) {
+            return 1;
+        }
+        sleep_ms(1U);
+    }
+    return 0;
+}
+
+static int open_ready_ex(const dtv_l3_usb_provider* usb,
+                         const dtv_l3_product_adapter* adapter,
+                         unsigned int claim_count, dtv_l3_context** owner,
+                         dtv_l3_result* open_result)
+{
+    dtv_l3_open_result opened =
+        dtv_l3_open_ex(usb, adapter, claim_count);
     dtv_l3_op_result result;
     *owner = NULL;
     *open_result = opened.result;
@@ -37,8 +56,31 @@ static int open_ready(const dtv_l3_provider* provider, dtv_l3_context** owner,
         opened.op == NULL) {
         return 0;
     }
-    if (dtv_l3_op_wait(opened.op, 2000U) != DTV_L3_OK ||
-        dtv_l3_op_poll(opened.op, &result) != DTV_L3_OK) {
+    if (!wait_op_terminal(opened.op, &result)) {
+        return 0;
+    }
+    *open_result = result.result;
+    *owner = opened.owner;
+    return dtv_l3_op_release(opened.op) == DTV_L3_OK;
+}
+
+static int open_ready_factory(const dtv_l3_usb_provider* usb,
+                              const dtv_l3_adapter_factory* factory,
+                              const dtv_l3_open_config* config,
+                              unsigned int claim_count,
+                              dtv_l3_context** owner,
+                              dtv_l3_result* open_result)
+{
+    dtv_l3_open_result opened =
+        dtv_l3_open_factory(usb, factory, config, claim_count);
+    dtv_l3_op_result result;
+    *owner = NULL;
+    *open_result = opened.result;
+    if (opened.result != DTV_L3_ACCEPTED || opened.owner == NULL ||
+        opened.op == NULL) {
+        return 0;
+    }
+    if (!wait_op_terminal(opened.op, &result)) {
         return 0;
     }
     *open_result = result.result;
@@ -74,17 +116,31 @@ static int close_and_release(dtv_l3_context* owner)
         !status.cleanup_complete) {
         return 0;
     }
-    return dtv_l3_context_release(owner) == DTV_L3_OK;
+    /* BUSY preserves the owner; the open lane may still be joining after a
+     * failed open even though the close observation is releasable. */
+    for (unsigned int attempt = 0U; attempt < 2000U; ++attempt) {
+        const dtv_l3_result result = dtv_l3_context_release(owner);
+        if (result == DTV_L3_OK) {
+            return 1;
+        }
+        if (result != DTV_L3_BUSY) {
+            return 0;
+        }
+        sleep_ms(1U);
+    }
+    return 0;
 }
 
-static int run_ready_stream_and_close(void)
+static int run_separated_stream_and_close(void)
 {
     struct px4_l3_test_harness* harness = px4_l3_test_create(1U, -1, -1);
-    const dtv_l3_provider* provider;
-    struct px4_l3_test_capabilities capabilities;
+    const dtv_l3_usb_provider* usb;
+    const dtv_l3_product_adapter* adapter;
     dtv_l3_context* owner = NULL;
     dtv_l3_result open_result = DTV_L3_FAILED;
     dtv_l3_open_status open_status;
+    dtv_l3_capabilities capabilities;
+    dtv_l3_reader* reader = NULL;
     dtv_l3_lease* lease = NULL;
     dtv_l3_stream* stream = NULL;
     dtv_l3_lease_status lease_status;
@@ -95,22 +151,25 @@ static int run_ready_stream_and_close(void)
     dtv_l3_read_state read_state = DTV_L3_READ_WAIT;
 
     CHECK(harness != NULL);
-    provider = px4_l3_test_provider(harness);
-    CHECK(provider != NULL);
-    capabilities = px4_l3_test_capabilities(harness);
-    CHECK(capabilities.bridge_count == 1U);
-    CHECK(capabilities.receiver_count == 4U);
-    CHECK(capabilities.dual_system == 0);
-    CHECK(capabilities.supports_lnb_15v == 1);
-    CHECK(capabilities.has_card_reader == 1);
-    CHECK(capabilities.cancel_scope == (int)DTV_L3_CANCEL_SCOPE_PIPE);
+    usb = px4_l3_test_usb_provider(harness);
+    adapter = px4_l3_test_product_adapter(harness);
+    CHECK(usb != NULL);
+    CHECK(adapter != NULL);
 
-    CHECK(open_ready(provider, &owner, &open_result));
+    CHECK(open_ready_ex(usb, adapter, 1U, &owner, &open_result));
     CHECK(open_result == DTV_L3_OK);
     CHECK(owner != NULL);
+    CHECK(dtv_l3_capabilities_get(owner, &capabilities) == DTV_L3_OK);
+    CHECK(capabilities.receiver_count == 4U);
+    CHECK(capabilities.reader_count == 1U);
+    CHECK(capabilities.lnb_power == 1);
+    CHECK(capabilities.cancel_scope == DTV_L3_CANCEL_SCOPE_PIPE);
     CHECK(dtv_l3_open_status_get(owner, &open_status) == DTV_L3_OK);
     CHECK(open_status.state == DTV_L3_OPEN_READY);
     CHECK(open_status.claims_acquired == 1U);
+    CHECK(dtv_l3_reader_acquire(owner, 0U, &reader) == DTV_L3_UNSUPPORTED);
+    CHECK(reader == NULL);
+    CHECK(dtv_l3_lnb_set(owner, 0U, 1U) == DTV_L3_UNSUPPORTED);
 
     CHECK(dtv_l3_lease_acquire(owner, 2U, &lease) == DTV_L3_OK);
     CHECK(lease != NULL);
@@ -151,17 +210,74 @@ static int run_ready_stream_and_close(void)
     return 0;
 }
 
+static int run_factory_and_capabilities(void)
+{
+    struct px4_l3_test_harness* harness = px4_l3_test_create(2U, -1, -1);
+    const dtv_l3_usb_provider* usb;
+    const dtv_l3_adapter_factory* factory;
+    const uint8_t firmware_bytes[3] = {0xaaU, 0xbbU, 0xccU};
+    const dtv_l3_firmware firmware = {
+        .source = DTV_L3_FIRMWARE_BYTES,
+        .path = NULL,
+        .bytes = firmware_bytes,
+        .size = sizeof(firmware_bytes),
+        .read = NULL,
+        .read_context = NULL};
+    dtv_l3_open_config config;
+    dtv_l3_context* owner = NULL;
+    dtv_l3_result open_result = DTV_L3_FAILED;
+    dtv_l3_capabilities capabilities;
+    const dtv_l3_open_config* seen_config;
+    const dtv_l3_firmware* seen_firmware;
+
+    CHECK(harness != NULL);
+    usb = px4_l3_test_usb_provider(harness);
+    factory = px4_l3_test_factory(harness);
+    CHECK(usb != NULL);
+    CHECK(factory != NULL);
+    memset(&config, 0, sizeof(config));
+    config.model = 0x51U;
+    config.selector = 0x1234U;
+    config.firmware = &firmware;
+
+    CHECK(open_ready_factory(usb, factory, &config, 2U, &owner,
+                             &open_result));
+    CHECK(open_result == DTV_L3_OK);
+    CHECK(px4_l3_test_factory_create_calls(harness) == 1U);
+    seen_config = px4_l3_test_seen_config(harness);
+    seen_firmware = px4_l3_test_seen_firmware(harness);
+    CHECK(seen_config != NULL);
+    CHECK(seen_config->model == 0x51U);
+    CHECK(seen_config->selector == 0x1234U);
+    CHECK(seen_firmware == &firmware);
+    CHECK(dtv_l3_capabilities_get(owner, &capabilities) == DTV_L3_OK);
+    CHECK(capabilities.receiver_count == 4U);
+    CHECK(capabilities.reader_count == 1U);
+    CHECK(capabilities.lnb_power == 1);
+    CHECK(capabilities.cancel_scope == DTV_L3_CANCEL_SCOPE_PIPE);
+
+    CHECK(close_and_release(owner));
+    CHECK(px4_l3_test_factory_release_calls(harness) == 1U);
+    CHECK(px4_l3_test_release_calls(harness) == 2U);
+    CHECK(px4_l3_test_release_at(harness, 0U) == 1U);
+    CHECK(px4_l3_test_release_at(harness, 1U) == 0U);
+    CHECK(px4_l3_test_destroy(harness) == 0);
+    return 0;
+}
+
 static int run_partial_claim_failure(void)
 {
     struct px4_l3_test_harness* harness = px4_l3_test_create(3U, 1, -1);
-    const dtv_l3_provider* provider;
+    const dtv_l3_usb_provider* usb;
+    const dtv_l3_product_adapter* adapter;
     dtv_l3_open_result opened;
     dtv_l3_op_result result;
     dtv_l3_open_status status;
 
     CHECK(harness != NULL);
-    provider = px4_l3_test_provider(harness);
-    opened = dtv_l3_open(provider, 3U);
+    usb = px4_l3_test_usb_provider(harness);
+    adapter = px4_l3_test_product_adapter(harness);
+    opened = dtv_l3_open_ex(usb, adapter, 3U);
     CHECK(opened.result == DTV_L3_ACCEPTED);
     CHECK(opened.owner != NULL);
     CHECK(opened.op != NULL);
@@ -185,7 +301,8 @@ static int run_partial_claim_failure(void)
 static int run_dual_system_is_not_guessed(void)
 {
     struct px4_l3_test_harness* harness = px4_l3_test_create(1U, -1, 1);
-    const dtv_l3_provider* provider;
+    const dtv_l3_usb_provider* usb;
+    const dtv_l3_product_adapter* adapter;
     dtv_l3_context* owner = NULL;
     dtv_l3_result open_result = DTV_L3_FAILED;
     dtv_l3_lease* lease = NULL;
@@ -193,8 +310,9 @@ static int run_dual_system_is_not_guessed(void)
     uint64_t revision = 0U;
 
     CHECK(harness != NULL);
-    provider = px4_l3_test_provider(harness);
-    CHECK(open_ready(provider, &owner, &open_result));
+    usb = px4_l3_test_usb_provider(harness);
+    adapter = px4_l3_test_product_adapter(harness);
+    CHECK(open_ready_ex(usb, adapter, 1U, &owner, &open_result));
     CHECK(open_result == DTV_L3_OK);
     CHECK(dtv_l3_lease_acquire(owner, 1U, &lease) == DTV_L3_OK);
     CHECK(dtv_l3_lease_tune(lease, 1100000000ULL, &programmed, &revision) ==
@@ -209,7 +327,8 @@ static int run_dual_system_is_not_guessed(void)
 static int run_transfer_and_pipe_scope(void)
 {
     struct px4_l3_test_harness* harness = px4_l3_test_create(1U, -1, -1);
-    const dtv_l3_provider* provider;
+    const dtv_l3_usb_provider* usb;
+    const dtv_l3_product_adapter* adapter;
     dtv_l3_context* owner = NULL;
     dtv_l3_result open_result = DTV_L3_FAILED;
     dtv_l3_transfer_request request;
@@ -217,8 +336,9 @@ static int run_transfer_and_pipe_scope(void)
     dtv_l3_op_result result;
 
     CHECK(harness != NULL);
-    provider = px4_l3_test_provider(harness);
-    CHECK(open_ready(provider, &owner, &open_result));
+    usb = px4_l3_test_usb_provider(harness);
+    adapter = px4_l3_test_product_adapter(harness);
+    CHECK(open_ready_ex(usb, adapter, 1U, &owner, &open_result));
     CHECK(open_result == DTV_L3_OK);
     memset(&request, 0, sizeof(request));
     request.kind = DTV_L3_TRANSFER_BULK;
@@ -242,7 +362,10 @@ static int run_transfer_and_pipe_scope(void)
 
 int main(void)
 {
-    if (run_ready_stream_and_close() != 0) {
+    if (run_separated_stream_and_close() != 0) {
+        return 1;
+    }
+    if (run_factory_and_capabilities() != 0) {
         return 1;
     }
     if (run_partial_claim_failure() != 0) {
