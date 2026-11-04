@@ -179,7 +179,11 @@ static int run_separated_stream_and_close(void)
     CHECK(open_status.claims_acquired == 1U);
     CHECK(dtv_l3_reader_acquire(owner, 0U, &reader) == DTV_L3_UNSUPPORTED);
     CHECK(reader == NULL);
-    CHECK(dtv_l3_lnb_set(owner, 0U, 1U) == DTV_L3_UNSUPPORTED);
+    dtv_l3_lnb_state lnb_state;
+    memset(&lnb_state, 0, sizeof(lnb_state));
+    CHECK(dtv_l3_lnb_set(owner, 0U, DTV_L3_LNB_ON_15V, 0U, &lnb_state) ==
+          DTV_L3_UNSUPPORTED);
+    CHECK(dtv_l3_lnb_status(owner, 0U, &lnb_state) == DTV_L3_UNSUPPORTED);
 
     CHECK(dtv_l3_lease_acquire(owner, 2U, &lease) == DTV_L3_OK);
     CHECK(lease != NULL);

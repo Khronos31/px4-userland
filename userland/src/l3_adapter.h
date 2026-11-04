@@ -71,7 +71,7 @@ private:
         std::uint32_t claim_index) noexcept;
 
     L3UsbPort& port_;
-    dtv_l3_usb_provider provider_;
+    dtv_l3_usb_provider provider_{};
 };
 
 // Internal product seam.  The methods mirror dtv_l3_product_adapter so this
@@ -226,7 +226,7 @@ private:
         std::uint32_t mode) noexcept;
 
     L3Product& product_;
-    dtv_l3_product_adapter adapter_;
+    dtv_l3_product_adapter adapter_{};
 };
 
 }  // namespace px4::userland

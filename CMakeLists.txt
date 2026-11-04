@@ -355,6 +355,7 @@ if(PX4_BUILD_L3_ADAPTER)
     add_library(px4_l3_adapter STATIC
         userland/src/l3_adapter.cpp
         userland/src/l3_backend_product.cpp
+        userland/src/l3_lnb_port.cpp
     )
     target_include_directories(px4_l3_adapter
         PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
@@ -388,6 +389,20 @@ if(PX4_BUILD_L3_ADAPTER)
     )
     enable_testing()
     add_test(NAME px4_l3_contract_tests COMMAND px4_l3_contract_tests)
+
+    add_executable(px4_l3_lnb_inheritance_tests
+        userland/tests/l3_lnb_inheritance_tests.cpp
+    )
+    target_include_directories(px4_l3_lnb_inheritance_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
+    )
+    target_compile_features(px4_l3_lnb_inheritance_tests PRIVATE cxx_std_17)
+    target_link_libraries(px4_l3_lnb_inheritance_tests PRIVATE
+        px4_l3_adapter Threads::Threads)
+    px4_enable_project_warnings(px4_l3_lnb_inheritance_tests)
+    add_test(NAME px4_l3_lnb_inheritance_tests
+             COMMAND px4_l3_lnb_inheritance_tests)
 
     # G1/G2 fixture: adapter initialization performs one control transfer
     # through the common owner before READY, plus an initialize-failure cleanup.
