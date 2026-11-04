@@ -4,10 +4,30 @@ set -eu
 build=$1
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/px4-l3-owner-ipc.XXXXXX")
 daemon_pid=
+finish_daemon() {
+    pid=$daemon_pid
+    term_attempted=$1
+    if [ "$term_attempted" = yes ]; then
+        kill -TERM "$pid" 2>/dev/null || true
+    fi
+    if wait "$pid"; then
+        wait_status=0
+    else
+        wait_status=$?
+    fi
+    signal=none
+    if [ "$wait_status" -gt 128 ]; then
+        signal_number=$((wait_status - 128))
+        signal=$(kill -l "$signal_number" 2>/dev/null || printf unknown)
+    fi
+    printf 'px4d-l3-fake-usb pid=%s wait-status=%s signal=%s term-attempted=%s\n' \
+        "$pid" "$wait_status" "$signal" "$term_attempted" >&2
+    daemon_pid=
+    return "$wait_status"
+}
 cleanup() {
     if [ -n "$daemon_pid" ]; then
-        kill -TERM "$daemon_pid" 2>/dev/null || true
-        wait "$daemon_pid" 2>/dev/null || true
+        finish_daemon yes || true
     fi
     rm -rf "$test_root"
 }
@@ -61,5 +81,8 @@ if [ "$capture_bytes" -lt 188 ]; then
 fi
 
 exec 3>&-
-wait "$daemon_pid"
-daemon_pid=
+if finish_daemon no; then
+    :
+else
+    exit $?
+fi

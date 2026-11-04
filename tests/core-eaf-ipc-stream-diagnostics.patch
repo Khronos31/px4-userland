@@ -1,0 +1,64 @@
+diff --git a/adapters/host_ts/px4_ts_core.cpp b/adapters/host_ts/px4_ts_core.cpp
+index eaf9400..eaf9400 100644
+--- a/adapters/host_ts/px4_ts_core.cpp
++++ b/adapters/host_ts/px4_ts_core.cpp
+@@ -920,10 +920,17 @@ public:
+     Result<void> on_frame(const wire::Frame& frame) noexcept override
+     {
+         if (frame.header.kind == wire::Kind::error_response) {
+             const auto error = wire::decode_error_response(frame.payload);
+             if (!error) return fail(error.error(), Px4TsFailureKind::ipc);
+             failure_ = wire_error(error.value().error.code);
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++            std::fprintf(stderr, "PX4_IPC_DIAG stream-server-error opcode=0x%04x request=%u code=%u operation=%.*s mapped=%s\n",
++                         static_cast<unsigned int>(frame.header.opcode),
++                         static_cast<unsigned int>(frame.header.request_id),
++                         static_cast<unsigned int>(error.value().error.code),
++                         static_cast<int>(error.value().error.operation.length),
++                         error.value().error.operation.bytes.data(), error_string(failure_));
++#endif
+             return Result<void>::failure(failure_);
+         }
+@@ -1488,10 +1495,25 @@ static Result<Px4TsRunResult> run_wire_profile(
+     auto data = SocketStream::connect(
+         stream_endpoint, Timeout{2000U},
+         diagnostics != nullptr ? &diagnostics->endpoint_connect : nullptr);
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++    std::fprintf(stderr, "PX4_IPC_DIAG stream-connect result=%s stage=%u endpoint-reason=%u path-bytes=%zu capacity=%zu\n",
++                 data ? "ok" : error_string(data.error()),
++                 diagnostics != nullptr ? static_cast<unsigned int>(diagnostics->endpoint_connect.stage) : 0U,
++                 diagnostics != nullptr ? static_cast<unsigned int>(diagnostics->endpoint_connect.endpoint.reason) : 0U,
++                 diagnostics != nullptr ? diagnostics->endpoint_connect.endpoint.path_bytes : 0U,
++                 diagnostics != nullptr ? diagnostics->endpoint_connect.endpoint.native_capacity : 0U);
++#endif
+     if (!data) {
+-        (void)wire::stop_recording(control_transport, session, Timeout{4000U});
+-        (void)wire::release_recording(control_transport, session, Timeout{4000U});
++        const auto stopped = wire::stop_recording(control_transport, session, Timeout{4000U});
++        const auto released = wire::release_recording(control_transport, session, Timeout{4000U});
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++        std::fprintf(stderr, "PX4_IPC_DIAG cleanup stream-connect stop=%s release=%s\n",
++                     error_string(stopped.error), error_string(released.error));
++#endif
+         control.value().close();
+         return Result<Px4TsRunResult>::failure(data.error());
+     }
+@@ -1507,6 +1529,10 @@ static Result<Px4TsRunResult> run_wire_profile(
+     const auto attach_size = encode_request(
+         wire::kOpcodeAttachStream, 1U, attach, &wire::encode_attach_request,
+         MutableByteView{attach_frame.data(), attach_frame.size()});
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++    std::fprintf(stderr, "PX4_IPC_DIAG attach-encode result=%s bytes=%zu\n",
++                 attach_size ? "ok" : error_string(attach_size.error()),
++                 attach_size ? attach_size.value() : 0U);
++#endif
+     if (!attach_size) {
+@@ -1514,6 +1540,10 @@ static Result<Px4TsRunResult> run_wire_profile(
+     const auto attach_written =
+         data.value().write_all(ByteView{attach_frame.data(), attach_size.value()},
+                                Timeout{2000U});
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++    std::fprintf(stderr, "PX4_IPC_DIAG attach-write result=%s\n",
++                 attach_written ? "ok" : error_string(attach_written.error()));
++#endif
+     if (!attach_written) {
