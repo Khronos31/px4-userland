@@ -5,6 +5,9 @@
 #include <condition_variable>
 #include <mutex>
 #include <new>
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+#include <cstdio>
+#endif
 
 namespace px4::userland {
 
@@ -115,33 +118,56 @@ dtv_l3_result L3RuntimeUsbPort::from_error(Error error) noexcept
 dtv_l3_claim_result L3RuntimeUsbPort::claim(
     dtv_l3_provider_binding*, std::uint32_t claim_index) noexcept
 {
+    dtv_l3_claim_result result{};
     if (claim_index >= workers_.size() || workers_[claim_index] == nullptr ||
         workers_[claim_index]->thread == nullptr) {
-        return {DTV_L3_INVALID, DTV_L3_CLAIM_NONE};
+        result = {DTV_L3_INVALID, DTV_L3_CLAIM_NONE};
+    } else {
+        ++claim_calls;
+        result = {DTV_L3_OK, DTV_L3_CLAIM_RETAINED};
     }
-    ++claim_calls;
-    return {DTV_L3_OK, DTV_L3_CLAIM_RETAINED};
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+    std::fprintf(stderr,
+                 "PX4_OWNER_DIAG layer=usb-provider op=claim claim=%u result=%u ownership=%u\n",
+                 static_cast<unsigned>(claim_index),
+                 static_cast<unsigned>(result.result),
+                 static_cast<unsigned>(result.residual_state));
+#endif
+    return result;
 }
 
 dtv_l3_release_result L3RuntimeUsbPort::release_claim(
     dtv_l3_provider_binding*, std::uint32_t claim_index) noexcept
 {
+    auto finish = [claim_index](dtv_l3_release_result result) noexcept {
+        (void)claim_index;
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+        std::fprintf(stderr,
+                     "PX4_OWNER_DIAG layer=usb-provider op=release_claim claim=%u result=%u quiescence=%u ownership=%u restore=%u\n",
+                     static_cast<unsigned>(claim_index),
+                     static_cast<unsigned>(result.error),
+                     static_cast<unsigned>(result.quiescence),
+                     static_cast<unsigned>(result.residual_state),
+                     static_cast<unsigned>(result.restoration));
+#endif
+        return result;
+    };
     if (claim_index >= workers_.size() || workers_[claim_index] == nullptr) {
-        return {DTV_L3_RELEASE_QUIESCENCE_UNKNOWN, DTV_L3_CLAIM_UNKNOWN,
-                DTV_L3_RESTORE_NOT_ATTEMPTED, DTV_L3_INVALID};
+        return finish({DTV_L3_RELEASE_QUIESCENCE_UNKNOWN, DTV_L3_CLAIM_UNKNOWN,
+                       DTV_L3_RESTORE_NOT_ATTEMPTED, DTV_L3_INVALID});
     }
     WorkerState& state = *workers_[claim_index];
     {
         std::lock_guard<std::mutex> lock(state.mutex);
         if (state.active != nullptr) {
-            return {DTV_L3_RELEASE_QUIESCENCE_UNKNOWN, DTV_L3_CLAIM_UNKNOWN,
-                    DTV_L3_RESTORE_NOT_ATTEMPTED, DTV_L3_BUSY};
+            return finish({DTV_L3_RELEASE_QUIESCENCE_UNKNOWN, DTV_L3_CLAIM_UNKNOWN,
+                           DTV_L3_RESTORE_NOT_ATTEMPTED, DTV_L3_BUSY});
         }
         for (const auto& request : state.pending) {
             if (request != nullptr) {
-                return {DTV_L3_RELEASE_QUIESCENCE_UNKNOWN,
-                        DTV_L3_CLAIM_UNKNOWN,
-                        DTV_L3_RESTORE_NOT_ATTEMPTED, DTV_L3_BUSY};
+                return finish({DTV_L3_RELEASE_QUIESCENCE_UNKNOWN,
+                               DTV_L3_CLAIM_UNKNOWN,
+                               DTV_L3_RESTORE_NOT_ATTEMPTED, DTV_L3_BUSY});
             }
         }
     }
@@ -151,13 +177,13 @@ dtv_l3_release_result L3RuntimeUsbPort::release_claim(
         const auto stopped = transport->stop_stream();
         if (!cancelled || !stopped) {
             const Error error = !cancelled ? cancelled.error() : stopped.error();
-            return {DTV_L3_RELEASE_QUIESCENCE_UNKNOWN, DTV_L3_CLAIM_UNKNOWN,
-                    DTV_L3_RESTORE_NOT_ATTEMPTED, from_error(error)};
+            return finish({DTV_L3_RELEASE_QUIESCENCE_UNKNOWN, DTV_L3_CLAIM_UNKNOWN,
+                           DTV_L3_RESTORE_NOT_ATTEMPTED, from_error(error)});
         }
     }
     ++release_calls;
-    return {DTV_L3_RELEASE_QUIESCED, DTV_L3_CLAIM_NONE,
-            DTV_L3_RESTORE_SUCCEEDED, DTV_L3_OK};
+    return finish({DTV_L3_RELEASE_QUIESCED, DTV_L3_CLAIM_NONE,
+                   DTV_L3_RESTORE_SUCCEEDED, DTV_L3_OK});
 }
 
 dtv_l3_result L3RuntimeUsbPort::submit(
@@ -166,28 +192,45 @@ dtv_l3_result L3RuntimeUsbPort::submit(
     dtv_l3_transfer_complete_fn complete,
     void* callback_context) noexcept
 {
+    auto finish = [transfer_id, request](dtv_l3_result result) noexcept {
+        (void)transfer_id;
+        (void)request;
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+        std::fprintf(stderr,
+                     "PX4_OWNER_DIAG layer=usb-provider op=submit transfer=%llu claim=%u kind=%u endpoint=0x%02x out=%zu in=%zu timeout=%u result=%u\n",
+                     static_cast<unsigned long long>(transfer_id),
+                     request != nullptr ? static_cast<unsigned>(request->claim_index) : 255U,
+                     request != nullptr ? static_cast<unsigned>(request->kind) : 255U,
+                     request != nullptr ? static_cast<unsigned>(request->endpoint) : 255U,
+                     request != nullptr ? request->out_size : 0U,
+                     request != nullptr ? request->in_capacity : 0U,
+                     request != nullptr ? static_cast<unsigned>(request->timeout_ms) : 0U,
+                     static_cast<unsigned>(result));
+#endif
+        return result;
+    };
     if (request == nullptr || complete == nullptr ||
         request->kind != DTV_L3_TRANSFER_BULK || request->claim_index >= 2U ||
         transports_[request->claim_index] == nullptr ||
         request->endpoint > 0xffU ||
         (request->out_size != 0U && request->out_data == nullptr) ||
         (request->out_size != 0U && request->in_capacity != 0U)) {
-        return DTV_L3_UNSUPPORTED;
+        return finish(DTV_L3_UNSUPPORTED);
     }
     WorkerState* state = workers_[request->claim_index].get();
     if (state == nullptr || state->thread == nullptr) {
-        return DTV_L3_FAILED;
+        return finish(DTV_L3_FAILED);
     }
     std::unique_ptr<Request> pending(new (std::nothrow) Request);
     if (!pending) {
-        return DTV_L3_FAILED;
+        return finish(DTV_L3_FAILED);
     }
     const std::size_t buffer_size =
         request->out_size != 0U ? request->out_size : request->in_capacity;
     if (buffer_size != 0U) {
         pending->buffer.reset(new (std::nothrow) std::uint8_t[buffer_size]);
         if (!pending->buffer) {
-            return DTV_L3_FAILED;
+            return finish(DTV_L3_FAILED);
         }
         if (request->out_size != 0U) {
             std::copy(request->out_data, request->out_data + request->out_size,
@@ -205,7 +248,7 @@ dtv_l3_result L3RuntimeUsbPort::submit(
     {
         std::lock_guard<std::mutex> lock(state->mutex);
         if (state->stopping) {
-            return DTV_L3_DISCONNECTED;
+            return finish(DTV_L3_DISCONNECTED);
         }
         std::size_t free_slot = state->pending.size();
         for (std::size_t index = 0U; index < state->pending.size(); ++index) {
@@ -215,14 +258,14 @@ dtv_l3_result L3RuntimeUsbPort::submit(
             }
         }
         if (free_slot == state->pending.size()) {
-            return DTV_L3_BUSY;
+            return finish(DTV_L3_BUSY);
         }
         pending->sequence = state->next_sequence++;
         state->pending[free_slot] = std::move(pending);
     }
     state->changed.notify_one();
     ++submit_calls;
-    return DTV_L3_ACCEPTED;
+    return finish(DTV_L3_ACCEPTED);
 }
 
 dtv_l3_result L3RuntimeUsbPort::cancel(
@@ -271,11 +314,34 @@ dtv_l3_result L3RuntimeUsbPort::cancel(
         if (abort_stream && transports_[claim_index] != nullptr) {
             const auto cancelled = transports_[claim_index]->cancel_stream();
             if (!cancelled) {
-                return from_error(cancelled.error());
+                const dtv_l3_result result = from_error(cancelled.error());
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+                std::fprintf(stderr,
+                             "PX4_OWNER_DIAG layer=usb-provider op=cancel transfer=%llu claim=%u endpoint=0x%02x result=%u\n",
+                             static_cast<unsigned long long>(transfer_id),
+                             static_cast<unsigned>(claim_index),
+                             static_cast<unsigned>(endpoint),
+                             static_cast<unsigned>(result));
+#endif
+                return result;
             }
         }
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+        std::fprintf(stderr,
+                     "PX4_OWNER_DIAG layer=usb-provider op=cancel transfer=%llu claim=%u endpoint=0x%02x result=%u\n",
+                     static_cast<unsigned long long>(transfer_id),
+                     static_cast<unsigned>(claim_index),
+                     static_cast<unsigned>(endpoint),
+                     static_cast<unsigned>(DTV_L3_OK));
+#endif
         return DTV_L3_OK;
     }
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+    std::fprintf(stderr,
+                 "PX4_OWNER_DIAG layer=usb-provider op=cancel transfer=%llu result=%u\n",
+                 static_cast<unsigned long long>(transfer_id),
+                 static_cast<unsigned>(DTV_L3_STALE));
+#endif
     return DTV_L3_STALE;
 }
 
@@ -336,6 +402,14 @@ void L3RuntimeUsbPort::run(std::uint32_t claim_index) noexcept
         } else if (stream_request) {
             bool ready = true;
             if (!transport.stream_active()) {
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+                std::fprintf(stderr,
+                             "PX4_OWNER_DIAG layer=usb-provider op=dispatch-start_stream transfer=%llu claim=%u endpoint=0x%02x size=%zu transfers=6\n",
+                             static_cast<unsigned long long>(request->transfer_id),
+                             static_cast<unsigned>(claim_index),
+                             static_cast<unsigned>(request->endpoint),
+                             request->in_capacity);
+#endif
                 const auto started = transport.start_stream(StreamConfig{
                     request->endpoint, request->in_capacity, 6U});
                 if (!started) {
@@ -356,6 +430,14 @@ void L3RuntimeUsbPort::run(std::uint32_t claim_index) noexcept
                 if (result != DTV_L3_FAILED) {
                     break;
                 }
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+                std::fprintf(stderr,
+                             "PX4_OWNER_DIAG layer=usb-provider op=dispatch-wait_stream transfer=%llu claim=%u endpoint=0x%02x timeout=%u\n",
+                             static_cast<unsigned long long>(request->transfer_id),
+                             static_cast<unsigned>(claim_index),
+                             static_cast<unsigned>(request->endpoint),
+                             static_cast<unsigned>(kStreamEventWaitMs));
+#endif
                 const auto event = transport.wait_stream(
                     Timeout{kStreamEventWaitMs});
                 if (!event) {
@@ -381,6 +463,14 @@ void L3RuntimeUsbPort::run(std::uint32_t claim_index) noexcept
                 break;
             }
         } else if (request->out_size != 0U) {
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+            std::fprintf(stderr,
+                         "PX4_OWNER_DIAG layer=usb-provider op=dispatch-bulk_write transfer=%llu claim=%u endpoint=0x%02x bytes=%zu timeout=%u\n",
+                         static_cast<unsigned long long>(request->transfer_id),
+                         static_cast<unsigned>(claim_index),
+                         static_cast<unsigned>(request->endpoint), request->out_size,
+                         static_cast<unsigned>(request->timeout_ms));
+#endif
             const auto written = transport.bulk_write(
                 request->endpoint,
                 ByteView{request->buffer.get(), request->out_size},
@@ -391,6 +481,14 @@ void L3RuntimeUsbPort::run(std::uint32_t claim_index) noexcept
                 ++write_calls;
             }
         } else {
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+            std::fprintf(stderr,
+                         "PX4_OWNER_DIAG layer=usb-provider op=dispatch-bulk_read transfer=%llu claim=%u endpoint=0x%02x capacity=%zu timeout=%u\n",
+                         static_cast<unsigned long long>(request->transfer_id),
+                         static_cast<unsigned>(claim_index),
+                         static_cast<unsigned>(request->endpoint), request->in_capacity,
+                         static_cast<unsigned>(request->timeout_ms));
+#endif
             const auto read = transport.bulk_read(
                 request->endpoint,
                 MutableByteView{request->buffer.get(), request->in_capacity},
@@ -423,6 +521,15 @@ void L3RuntimeUsbPort::run(std::uint32_t claim_index) noexcept
                 ? transferred : 0U,
             transferred,
             1U};
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+        std::fprintf(stderr,
+                     "PX4_OWNER_DIAG layer=usb-provider op=complete transfer=%llu claim=%u endpoint=0x%02x out=%zu in=%zu result=%u bytes=%zu\n",
+                     static_cast<unsigned long long>(request->transfer_id),
+                     static_cast<unsigned>(claim_index),
+                     static_cast<unsigned>(request->endpoint), request->out_size,
+                     request->in_capacity, static_cast<unsigned>(result),
+                     transferred);
+#endif
         request->complete(request->binding, request->transfer_id,
                           &completion, request->callback_context);
         ++completion_calls;

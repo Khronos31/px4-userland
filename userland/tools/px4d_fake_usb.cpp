@@ -11,6 +11,9 @@
 #include <cstring>
 #include <mutex>
 #include <thread>
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+#include <cstdio>
+#endif
 
 namespace px4::userland {
 namespace {
@@ -42,16 +45,34 @@ public:
         if (endpoint == kTsInEndpoint) {
             constexpr std::size_t psb_purge_size = 1024U;
             if (output.data == nullptr || output.size < psb_purge_size) {
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+                std::fprintf(stderr,
+                             "PX4_OWNER_DIAG layer=fake-usb op=bulk_read endpoint=0x%02x capacity=%zu result=error error=%s bytes=0\n",
+                             static_cast<unsigned>(endpoint), output.size,
+                             error_string(Error::INVALID_ARGUMENT));
+#endif
                 return Result<std::size_t>::failure(Error::INVALID_ARGUMENT);
             }
             std::memset(output.data, 0, psb_purge_size);
             if (observation != nullptr) {
                 *observation = BulkReadObservation{Error::OK, psb_purge_size};
             }
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+            std::fprintf(stderr,
+                         "PX4_OWNER_DIAG layer=fake-usb op=bulk_read endpoint=0x%02x capacity=%zu result=ok bytes=%zu\n",
+                         static_cast<unsigned>(endpoint), output.size,
+                         psb_purge_size);
+#endif
             return Result<std::size_t>::success(psb_purge_size);
         }
         if (endpoint != kCommandInEndpoint || output.data == nullptr ||
             output.size < pending_length_ + 5U) {
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+            std::fprintf(stderr,
+                         "PX4_OWNER_DIAG layer=fake-usb op=bulk_read endpoint=0x%02x capacity=%zu pending=%zu result=error error=%s bytes=0\n",
+                         static_cast<unsigned>(endpoint), output.size,
+                         pending_length_, error_string(Error::INVALID_ARGUMENT));
+#endif
             return Result<std::size_t>::failure(Error::INVALID_ARGUMENT);
         }
         std::memset(output.data, 0, pending_length_ + 5U);
@@ -70,6 +91,12 @@ public:
         const std::uint16_t sum = checksum(output.data + 1U, response_size - 3U);
         output.data[response_size - 2U] = static_cast<std::uint8_t>(sum >> 8U);
         output.data[response_size - 1U] = static_cast<std::uint8_t>(sum);
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+        std::fprintf(stderr,
+                     "PX4_OWNER_DIAG layer=fake-usb op=bulk_read endpoint=0x%02x capacity=%zu command=0x%02x result=ok bytes=%zu\n",
+                     static_cast<unsigned>(endpoint), output.size,
+                     static_cast<unsigned>(last_command_), response_size);
+#endif
         return Result<std::size_t>::success(response_size);
     }
 
@@ -79,6 +106,12 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         if (endpoint != kCommandOutEndpoint || input.data == nullptr || input.size < 5U ||
             input.data[1U] != 0U) {
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+            std::fprintf(stderr,
+                         "PX4_OWNER_DIAG layer=fake-usb op=bulk_write endpoint=0x%02x bytes=%zu result=error error=%s\n",
+                         static_cast<unsigned>(endpoint), input.size,
+                         error_string(Error::INVALID_ARGUMENT));
+#endif
             return Result<std::size_t>::failure(Error::INVALID_ARGUMENT);
         }
         last_command_ = input.data[2U];
@@ -87,6 +120,14 @@ public:
                               ? input.data[4U] : 0U;
         if (last_command_ == 0x2bU && input.size > 7U)
             last_i2c_register_ = input.data[7U];
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+        std::fprintf(stderr,
+                     "PX4_OWNER_DIAG layer=fake-usb op=bulk_write endpoint=0x%02x bytes=%zu command=0x%02x sequence=%u register=0x%02x result=ok transferred=%zu\n",
+                     static_cast<unsigned>(endpoint), input.size,
+                     static_cast<unsigned>(last_command_),
+                     static_cast<unsigned>(sequence_),
+                     static_cast<unsigned>(last_i2c_register_), input.size);
+#endif
         return Result<std::size_t>::success(input.size);
     }
 
@@ -94,8 +135,16 @@ public:
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (active_ || config.endpoint != kTsInEndpoint || config.transfer_size !=
-                188U * 816U || config.transfer_count != 6U)
+                188U * 816U || config.transfer_count != 6U) {
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+            std::fprintf(stderr,
+                         "PX4_OWNER_DIAG layer=fake-usb op=start_stream endpoint=0x%02x size=%zu transfers=%zu active=%u result=error error=%s\n",
+                         static_cast<unsigned>(config.endpoint), config.transfer_size,
+                         config.transfer_count, active_ ? 1U : 0U,
+                         error_string(Error::INVALID_ARGUMENT));
+#endif
             return Result<void>::failure(Error::INVALID_ARGUMENT);
+        }
         stream_.fill(0xffU);
         for (std::size_t offset = 0U; offset + 188U <= stream_.size(); offset += 188U) {
             stream_[offset] = 0x47U;
@@ -105,6 +154,12 @@ public:
                 0x10U | ((offset / 188U) & 0x0fU));
         }
         active_ = true;
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+        std::fprintf(stderr,
+                     "PX4_OWNER_DIAG layer=fake-usb op=start_stream endpoint=0x%02x size=%zu transfers=%zu result=ok\n",
+                     static_cast<unsigned>(config.endpoint), config.transfer_size,
+                     config.transfer_count);
+#endif
         return Result<void>::success();
     }
 
@@ -113,7 +168,19 @@ public:
         std::this_thread::sleep_for(std::chrono::milliseconds(
             timeout.milliseconds > 2U ? 2U : timeout.milliseconds));
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!active_) return Result<StreamEvent>::failure(Error::NOT_READY);
+        if (!active_) {
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+            std::fprintf(stderr,
+                         "PX4_OWNER_DIAG layer=fake-usb op=wait_stream active=0 result=error error=%s\n",
+                         error_string(Error::NOT_READY));
+#endif
+            return Result<StreamEvent>::failure(Error::NOT_READY);
+        }
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+        std::fprintf(stderr,
+                     "PX4_OWNER_DIAG layer=fake-usb op=wait_stream active=1 result=ok bytes=%zu\n",
+                     stream_.size());
+#endif
         return Result<StreamEvent>::success(StreamEvent{
             StreamEventKind::short_transfer, stream_.data(), stream_.size()});
     }
@@ -122,6 +189,10 @@ public:
     {
         std::lock_guard<std::mutex> lock(mutex_);
         active_ = false;
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+        std::fprintf(stderr,
+                     "PX4_OWNER_DIAG layer=fake-usb op=cancel_stream result=ok\n");
+#endif
         return Result<void>::success();
     }
 

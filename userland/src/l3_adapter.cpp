@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "l3_adapter.h"
 
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+#include <cstdio>
+#endif
+
 namespace px4::userland {
 
 namespace {
@@ -34,9 +38,24 @@ dtv_l3_claim_result L3UsbProviderAdapter::claim_thunk(
 {
     L3UsbPort* port = context_from<L3UsbPort>(context);
     if (port == nullptr) {
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+        std::fprintf(stderr,
+                     "PX4_OWNER_DIAG layer=usb-provider-thunk op=claim claim=%u port=0 result=%u ownership=%u\n",
+                     static_cast<unsigned>(claim_index),
+                     static_cast<unsigned>(DTV_L3_INVALID),
+                     static_cast<unsigned>(DTV_L3_CLAIM_NONE));
+#endif
         return {DTV_L3_INVALID, DTV_L3_CLAIM_NONE};
     }
-    return port->claim(binding, claim_index);
+    const auto result = port->claim(binding, claim_index);
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+    std::fprintf(stderr,
+                 "PX4_OWNER_DIAG layer=usb-provider-thunk op=claim claim=%u port=1 result=%u ownership=%u\n",
+                 static_cast<unsigned>(claim_index),
+                 static_cast<unsigned>(result.result),
+                 static_cast<unsigned>(result.residual_state));
+#endif
+    return result;
 }
 
 dtv_l3_release_result L3UsbProviderAdapter::release_claim_thunk(
@@ -45,10 +64,26 @@ dtv_l3_release_result L3UsbProviderAdapter::release_claim_thunk(
 {
     L3UsbPort* port = context_from<L3UsbPort>(context);
     if (port == nullptr) {
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+        std::fprintf(stderr,
+                     "PX4_OWNER_DIAG layer=usb-provider-thunk op=release_claim claim=%u port=0 error=%u\n",
+                     static_cast<unsigned>(claim_index),
+                     static_cast<unsigned>(DTV_L3_INVALID));
+#endif
         return {DTV_L3_RELEASE_QUIESCENCE_UNKNOWN, DTV_L3_CLAIM_UNKNOWN,
                 DTV_L3_RESTORE_NOT_ATTEMPTED, DTV_L3_INVALID};
     }
-    return port->release_claim(binding, claim_index);
+    const auto result = port->release_claim(binding, claim_index);
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+    std::fprintf(stderr,
+                 "PX4_OWNER_DIAG layer=usb-provider-thunk op=release_claim claim=%u port=1 error=%u quiescence=%u ownership=%u restore=%u\n",
+                 static_cast<unsigned>(claim_index),
+                 static_cast<unsigned>(result.error),
+                 static_cast<unsigned>(result.quiescence),
+                 static_cast<unsigned>(result.residual_state),
+                 static_cast<unsigned>(result.restoration));
+#endif
+    return result;
 }
 
 dtv_l3_result L3UsbProviderAdapter::submit_thunk(
@@ -59,10 +94,28 @@ dtv_l3_result L3UsbProviderAdapter::submit_thunk(
 {
     L3UsbPort* port = context_from<L3UsbPort>(context);
     if (port == nullptr || request == nullptr || complete == nullptr) {
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+        std::fprintf(stderr,
+                     "PX4_OWNER_DIAG layer=usb-provider-thunk op=submit transfer=%llu port=%u request=%u complete=%u result=%u\n",
+                     static_cast<unsigned long long>(transfer_id),
+                     port != nullptr ? 1U : 0U, request != nullptr ? 1U : 0U,
+                     complete != nullptr ? 1U : 0U,
+                     static_cast<unsigned>(DTV_L3_INVALID));
+#endif
         return DTV_L3_INVALID;
     }
-    return port->submit(binding, transfer_id, request, complete,
-                        callback_context);
+    const auto result = port->submit(binding, transfer_id, request, complete,
+                                     callback_context);
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+    std::fprintf(stderr,
+                 "PX4_OWNER_DIAG layer=usb-provider-thunk op=submit transfer=%llu port=1 request=1 complete=1 claim=%u kind=%u endpoint=0x%02x out=%zu in=%zu result=%u\n",
+                 static_cast<unsigned long long>(transfer_id),
+                 static_cast<unsigned>(request->claim_index),
+                 static_cast<unsigned>(request->kind),
+                 static_cast<unsigned>(request->endpoint), request->out_size,
+                 request->in_capacity, static_cast<unsigned>(result));
+#endif
+    return result;
 }
 
 dtv_l3_result L3UsbProviderAdapter::cancel_thunk(
@@ -70,8 +123,16 @@ dtv_l3_result L3UsbProviderAdapter::cancel_thunk(
     std::uint64_t transfer_id) noexcept
 {
     L3UsbPort* port = context_from<L3UsbPort>(context);
-    return port == nullptr ? DTV_L3_INVALID
-                           : port->cancel(binding, transfer_id);
+    const auto result = port == nullptr
+                            ? DTV_L3_INVALID
+                            : port->cancel(binding, transfer_id);
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+    std::fprintf(stderr,
+                 "PX4_OWNER_DIAG layer=usb-provider-thunk op=cancel transfer=%llu port=%u result=%u\n",
+                 static_cast<unsigned long long>(transfer_id),
+                 port != nullptr ? 1U : 0U, static_cast<unsigned>(result));
+#endif
+    return result;
 }
 
 dtv_l3_result L3UsbProviderAdapter::claim_cancel_thunk(
@@ -79,8 +140,16 @@ dtv_l3_result L3UsbProviderAdapter::claim_cancel_thunk(
     std::uint32_t claim_index) noexcept
 {
     L3UsbPort* port = context_from<L3UsbPort>(context);
-    return port == nullptr ? DTV_L3_INVALID
-                           : port->claim_cancel(binding, claim_index);
+    const auto result = port == nullptr
+                            ? DTV_L3_INVALID
+                            : port->claim_cancel(binding, claim_index);
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+    std::fprintf(stderr,
+                 "PX4_OWNER_DIAG layer=usb-provider-thunk op=claim_cancel claim=%u port=%u result=%u\n",
+                 static_cast<unsigned>(claim_index),
+                 port != nullptr ? 1U : 0U, static_cast<unsigned>(result));
+#endif
+    return result;
 }
 
 L3ProductAdapter::L3ProductAdapter(

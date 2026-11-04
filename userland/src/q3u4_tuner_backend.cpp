@@ -188,20 +188,35 @@ Result<void> Q3U4FrontendTunerBackend::shutdown() noexcept
 Result<void> Q3U4FrontendTunerBackend::start_capture(
     std::uint8_t receiver, ipc::System system) noexcept
 {
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+    const auto mapping = Q3U4FrontendEnclosure::map_receiver(receiver);
+    const char* route = "invalid";
+#endif
     Result<void> result = Result<void>::failure(Error::INVALID_ARGUMENT);
     if (valid_receiver(receiver)) {
-        if (system == ipc::System::ISDB_T)
+        if (system == ipc::System::ISDB_T) {
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+            route = "terrestrial";
+#endif
             result = enclosure_.start_terrestrial_capture(receiver);
-        else if (system == ipc::System::ISDB_S)
+        } else if (system == ipc::System::ISDB_S) {
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+            route = "satellite";
+#endif
             result = enclosure_.start_satellite_capture(receiver);
+        }
     }
 #if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
-    if (!result) {
-        std::fprintf(stderr,
-                     "PX4_ATTACH_DIAG stage=backend-start-capture receiver=%u system=%u error=%s\n",
-                     static_cast<unsigned>(receiver),
-                     static_cast<unsigned>(system), error_string(result.error()));
-    }
+    std::fprintf(stderr,
+                 "PX4_OWNER_DIAG layer=tuner-backend op=start_capture receiver=%u system=%u receiver-valid=%u route=%s mapping-valid=%u bridge=%u local=%u mapped-system=%u result=%s error=%s\n",
+                 static_cast<unsigned>(receiver), static_cast<unsigned>(system),
+                 valid_receiver(receiver) ? 1U : 0U, route,
+                 mapping ? 1U : 0U,
+                 mapping ? static_cast<unsigned>(mapping.value().bridge) : 255U,
+                 mapping ? static_cast<unsigned>(mapping.value().local_receiver) : 255U,
+                 mapping ? static_cast<unsigned>(mapping.value().system) : 255U,
+                 result ? "ok" : "error",
+                 result ? "OK" : error_string(result.error()));
 #endif
     return result;
 }

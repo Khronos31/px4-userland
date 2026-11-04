@@ -1,0 +1,103 @@
+diff --git a/src/receiver_engine.cpp b/src/receiver_engine.cpp
+index eaf9400..eaf9400 100644
+--- a/src/receiver_engine.cpp
++++ b/src/receiver_engine.cpp
+@@ -3,6 +3,9 @@
+ 
+ #include <cassert>
+ #include <cstddef>
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++#include <cstdio>
++#endif
+ #include <limits>
+ 
+ namespace dtv::userland::detail {
+@@ -1157,13 +1160,35 @@ Result<void> ReceiverEngine::prepare_attach_v1(const StreamAttachTicket& ticket) noexcept
+     const ReceiverId receiver = receivers_[slot];
+     Attachment attachment = attachment_for(pending, pending.stream_reservation);
+     attachment.token = ticket.token;
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++    std::fprintf(stderr,
++                 "PX4_CORE_ATTACH callback=backend.start_capture phase=call epoch=%llu slot=%zu receiver=%u system=%u stream=%llu reservation=%llu\n",
++                 static_cast<unsigned long long>(ticket.epoch), slot,
++                 static_cast<unsigned>(receiver),
++                 static_cast<unsigned>(pending.system),
++                 static_cast<unsigned long long>(ticket.stream_id),
++                 static_cast<unsigned long long>(ticket.reservation));
++#endif
+     const auto started = backend_.start_capture(receiver, pending.system);
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++    std::fprintf(stderr,
++                 "PX4_CORE_ATTACH callback=backend.start_capture phase=return result=%u error=%u\n",
++                 started ? 0U : 1U,
++                 started ? 0U : static_cast<unsigned>(started.error()));
++#endif
+     observe_disconnect(slot, started.error());
+     Error data_error = Error::OK;
+     bool data_attached = false;
+     if (started && stream_control_ != nullptr) {
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++        std::fprintf(stderr,
++                     "PX4_CORE_ATTACH callback=stream_control.attach phase=call client=%llu lease=%llu attachment=%llu receiver=%u system=%u\n",
++                     static_cast<unsigned long long>(attachment.client_id),
++                     static_cast<unsigned long long>(attachment.lease_id),
++                     static_cast<unsigned long long>(attachment.attachment_id),
++                     static_cast<unsigned>(attachment.receiver),
++                     static_cast<unsigned>(attachment.system));
++#endif
+         const auto attached = stream_control_->attach(attachment);
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++        std::fprintf(stderr,
++                     "PX4_CORE_ATTACH callback=stream_control.attach phase=return result=%u error=%u\n",
++                     attached ? 0U : 1U,
++                     attached ? 0U : static_cast<unsigned>(attached.error()));
++#endif
+         observe_disconnect(slot, attached.error());
+         if (!attached)
+             data_error = attached.error();
+         else
+             data_attached = true;
++    } else {
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++        std::fprintf(stderr,
++                     "PX4_CORE_ATTACH callback=stream_control.attach phase=skip started=%u present=%u\n",
++                     started ? 1U : 0U, stream_control_ != nullptr ? 1U : 0U);
++#endif
+     }
+     const Error failure = !started ? started.error() : data_error;
+diff --git a/adapters/host_daemon/src/tuner_service.cpp b/adapters/host_daemon/src/tuner_service.cpp
+index eaf9400..eaf9400 100644
+--- a/adapters/host_daemon/src/tuner_service.cpp
++++ b/adapters/host_daemon/src/tuner_service.cpp
+@@ -8,6 +8,9 @@
+ #include <algorithm>
+ #include <cstddef>
+ #include <limits>
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++#include <cstdio>
++#endif
+ 
+ namespace px4::userland {
+ namespace {
+@@ -279,7 +282,22 @@ Result<void> TunerService::BackendAdapter::start_capture(
+     engine::ReceiverId receiver, engine::ReceiverSystem system) noexcept
+ {
+-    return backend_.start_capture(to_legacy(receiver), to_legacy(system));
++    const auto legacy_receiver = to_legacy(receiver);
++    const auto legacy_system = to_legacy(system);
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++    std::fprintf(stderr,
++                 "PX4_CORE_ATTACH callback=product_backend.start_capture phase=convert engine_receiver=%u engine_system=%u legacy_receiver=%u legacy_system=%u\n",
++                 static_cast<unsigned>(receiver), static_cast<unsigned>(system),
++                 static_cast<unsigned>(legacy_receiver),
++                 static_cast<unsigned>(legacy_system));
++#endif
++    const auto result = backend_.start_capture(legacy_receiver, legacy_system);
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++    std::fprintf(stderr,
++                 "PX4_CORE_ATTACH callback=product_backend.start_capture phase=return result=%u error=%u\n",
++                 result ? 0U : 1U,
++                 result ? 0U : static_cast<unsigned>(result.error()));
++#endif
++    return result;
+ }
