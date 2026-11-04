@@ -9,6 +9,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -449,10 +450,22 @@ public:
     Result<void> attach(const TunerAttachment& attachment) noexcept
     {
         if (attachment.owner_client_id == 0U || attachment.lease_id == 0U ||
-            attachment.attachment_id == 0U || !valid_receiver(attachment.receiver))
+            attachment.attachment_id == 0U || !valid_receiver(attachment.receiver)) {
+            std::fprintf(stderr,
+                         "PX4_ATTACH_DIAG stream-validation receiver=%u owner=%llu lease=%llu attachment=%llu\n",
+                         static_cast<unsigned>(attachment.receiver),
+                         static_cast<unsigned long long>(attachment.owner_client_id),
+                         static_cast<unsigned long long>(attachment.lease_id),
+                         static_cast<unsigned long long>(attachment.attachment_id));
             return Result<void>::failure(Error::INVALID_ARGUMENT);
-        if (!valid_system(attachment.receiver, attachment.system))
+        }
+        if (!valid_system(attachment.receiver, attachment.system)) {
+            std::fprintf(stderr,
+                         "PX4_ATTACH_DIAG stream-system receiver=%u system=%u\n",
+                         static_cast<unsigned>(attachment.receiver),
+                         static_cast<unsigned>(attachment.system));
             return Result<void>::failure(Error::INVALID_ARGUMENT);
+        }
 
         Bridge& bridge = bridges_[bridge_index(attachment.receiver)];
         std::unique_lock<std::mutex> lifecycle(bridge.lifecycle);

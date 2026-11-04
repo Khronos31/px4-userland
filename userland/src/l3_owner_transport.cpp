@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 
 namespace px4::userland {
 
@@ -256,6 +257,12 @@ Result<void> L3OwnerTransport::start_stream(
         for (std::size_t index = 0U; index < config.transfer_count; ++index) {
             const auto started = start_stream_operation();
             if (!started) {
+                std::fprintf(stderr,
+                             "PX4_ATTACH_DIAG L3-transfer-start claim=%u endpoint=0x%02x timeout=0 capacity=%zu slot=%zu error=%s\n",
+                             static_cast<unsigned>(claim_index_),
+                             static_cast<unsigned>(config.endpoint),
+                             config.transfer_size, index,
+                             error_string(started.error()));
                 stream_active_ = false;
                 start_error = started.error();
                 break;

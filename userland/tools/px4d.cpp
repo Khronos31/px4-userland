@@ -525,9 +525,10 @@ bool wait_l3_releasable(dtv_l3_context* owner)
     return false;
 }
 
-int run_q3u4_l3(const Px4dArguments& arguments, Q3U4Runtime& runtime,
-                const FirmwareImage& firmware,
-                const std::string& base_serial) noexcept
+int run_q3u4_l3_session(const Px4dArguments& arguments, Q3U4Runtime& runtime,
+                        const FirmwareImage& firmware,
+                        const std::string& base_serial,
+                        dtv_l3_context*& owner, bool& releasable) noexcept
 {
     const DeviceProfile& profile = device_profile(runtime.model());
     L3Q3U4OwnerBackend product(profile, arguments.allow_lnb_power,
@@ -555,8 +556,14 @@ int run_q3u4_l3(const Px4dArguments& arguments, Q3U4Runtime& runtime,
     if (opened.result != DTV_L3_ACCEPTED || opened.owner == nullptr ||
         opened.op == nullptr) {
         std::fprintf(stderr, "L3 open: %d\n", static_cast<int>(opened.result));
+        owner = opened.owner;
+        if (owner != nullptr) {
+            (void)dtv_l3_close(owner, 2000U);
+            releasable = wait_l3_releasable(owner);
+        }
         return exit_status(Error::INTERNAL);
     }
+    owner = opened.owner;
     dtv_l3_op_result open_result{};
     if (dtv_l3_op_wait(opened.op, 30000U) != DTV_L3_OK ||
         dtv_l3_op_poll(opened.op, &open_result) != DTV_L3_OK ||
@@ -564,11 +571,10 @@ int run_q3u4_l3(const Px4dArguments& arguments, Q3U4Runtime& runtime,
         dtv_l3_op_release(opened.op) != DTV_L3_OK) {
         std::fprintf(stderr, "L3 initialize: %d\n",
                      static_cast<int>(open_result.result));
-        (void)dtv_l3_close(opened.owner, 2000U);
-        (void)dtv_l3_context_release(opened.owner);
+        (void)dtv_l3_close(owner, 2000U);
+        releasable = wait_l3_releasable(owner);
         return exit_status(Error::INTERNAL);
     }
-    dtv_l3_context* owner = opened.owner;
 
     DaemonTime time;
     Q3U4CardBackend card_backend(product.dev1(), product.enclosure());
@@ -577,13 +583,29 @@ int run_q3u4_l3(const Px4dArguments& arguments, Q3U4Runtime& runtime,
     CardT1TimeAdapter card_time_adapter(time);
     CardT1Session card_session(card_hardware_adapter, card_time_adapter);
     CardT1ProtocolSession protocol(card_session);
-    const int result = serve_core(
+    const int serve_result = serve_core(
         arguments, base_serial, profile.model, runtime,
         product.tuner_backend(), card_backend, protocol, time,
         product.stream_plane(), 2U);
 
     (void)dtv_l3_close(owner, 5000U);
-    if (!wait_l3_releasable(owner) ||
+    releasable = wait_l3_releasable(owner);
+    if (!releasable) {
+        std::fprintf(stderr, "L3 release failed\n");
+        return exit_status(Error::INTERNAL);
+    }
+    return serve_result;
+}
+
+int run_q3u4_l3(const Px4dArguments& arguments, Q3U4Runtime& runtime,
+                const FirmwareImage& firmware,
+                const std::string& base_serial) noexcept
+{
+    dtv_l3_context* owner = nullptr;
+    bool releasable = false;
+    const int result = run_q3u4_l3_session(
+        arguments, runtime, firmware, base_serial, owner, releasable);
+    if (owner != nullptr && releasable &&
         dtv_l3_context_release(owner) != DTV_L3_OK) {
         std::fprintf(stderr, "L3 release failed\n");
         return exit_status(Error::INTERNAL);
