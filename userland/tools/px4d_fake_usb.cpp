@@ -86,7 +86,7 @@ public:
             return Result<void>::failure(Error::INVALID_ARGUMENT);
         stream_.fill(0xffU);
         for (std::size_t offset = 0U; offset + 188U <= stream_.size(); offset += 188U) {
-            stream_[offset] = static_cast<std::uint8_t>((3U << 4U) | 0x07U);
+            stream_[offset] = 0x47U;
             stream_[offset + 1U] = 0x01U;
             stream_[offset + 2U] = 0x00U;
             stream_[offset + 3U] = static_cast<std::uint8_t>(

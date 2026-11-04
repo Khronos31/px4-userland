@@ -42,15 +42,17 @@ if [ "$ready" -ne 1 ]; then
     exit 1
 fi
 
-"$build/px4-ts" \
+if ! "$build/px4-ts" \
     --device serial:00001205000960 \
     --instance l3-owner-stream-test \
     --runtime-dir "$test_root/runtime" \
     --receiver 2 \
-    --freq 473143000 \
-    --system isdb-t \
+    --channel T13 \
     --time 1 \
-    --output "$test_root/capture.ts"
+    --output "$test_root/capture.ts"; then
+    cat "$test_root/daemon.log" >&2
+    exit 1
+fi
 
 capture_bytes=$(wc -c <"$test_root/capture.ts" | tr -d ' ')
 if [ "$capture_bytes" -lt 188 ]; then
