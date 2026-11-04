@@ -12,7 +12,7 @@ index eaf9400..eaf9400 100644
  #include <limits>
  
  namespace dtv::userland::detail {
-@@ -1157,13 +1160,35 @@ Result<void> ReceiverEngine::prepare_attach_v1(const StreamAttachTicket& ticket) noexcept
+@@ -1157,16 +1160,52 @@ Result<void> ReceiverEngine::prepare_attach_v1(const StreamAttachTicket& ticket) noexcept
      const ReceiverId receiver = receivers_[slot];
      Attachment attachment = attachment_for(pending, pending.stream_reservation);
      attachment.token = ticket.token;
@@ -39,7 +39,7 @@ index eaf9400..eaf9400 100644
 +#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
 +        std::fprintf(stderr,
 +                     "PX4_CORE_ATTACH callback=stream_control.attach phase=call client=%llu lease=%llu attachment=%llu receiver=%u system=%u\n",
-+                     static_cast<unsigned long long>(attachment.client_id),
++                     static_cast<unsigned long long>(attachment.owner_client_id),
 +                     static_cast<unsigned long long>(attachment.lease_id),
 +                     static_cast<unsigned long long>(attachment.attachment_id),
 +                     static_cast<unsigned>(attachment.receiver),
@@ -79,7 +79,7 @@ index eaf9400..eaf9400 100644
  
  namespace px4::userland {
  namespace {
-@@ -279,7 +282,22 @@ Result<void> TunerService::BackendAdapter::start_capture(
+@@ -279,4 +282,20 @@ Result<void> TunerService::BackendAdapter::start_capture(
      engine::ReceiverId receiver, engine::ReceiverSystem system) noexcept
  {
 -    return backend_.start_capture(to_legacy(receiver), to_legacy(system));
