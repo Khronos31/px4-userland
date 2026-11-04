@@ -1651,24 +1651,55 @@ Q3U4Runtime::Q3U4Runtime(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(
 {
 }
 
+Result<std::unique_ptr<Q3U4Runtime>> RuntimeTestAccess::create_fake_q3u4(
+    std::unique_ptr<Transport> dev1, std::unique_ptr<Transport> dev2,
+    std::string_view base_serial) noexcept
+{
+    if (!dev1 || !dev2 || !valid_device_instance(base_serial)) {
+        return Result<std::unique_ptr<Q3U4Runtime>>::failure(Error::INVALID_ARGUMENT);
+    }
+    std::unique_ptr<Q3U4Runtime::Impl> impl(new (std::nothrow) Q3U4Runtime::Impl);
+    if (!impl) {
+        return Result<std::unique_ptr<Q3U4Runtime>>::failure(Error::INTERNAL);
+    }
+    impl->test_transports_[0U] = std::move(dev1);
+    impl->test_transports_[1U] = std::move(dev2);
+    impl->base_serial_ = std::string(base_serial);
+    impl->model_ = DeviceModel::px_q3u4;
+    std::unique_ptr<Q3U4Runtime> runtime(
+        new (std::nothrow) Q3U4Runtime(std::move(impl)));
+    if (!runtime) {
+        return Result<std::unique_ptr<Q3U4Runtime>>::failure(Error::INTERNAL);
+    }
+    return Result<std::unique_ptr<Q3U4Runtime>>::success(std::move(runtime));
+}
+
 Transport& Q3U4Runtime::dev1() noexcept
 {
-    return *impl_->transports_[0U];
+    return impl_->test_transports_[0U] != nullptr
+               ? *impl_->test_transports_[0U]
+               : *impl_->transports_[0U];
 }
 
 Transport& Q3U4Runtime::dev2() noexcept
 {
-    return *impl_->transports_[1U];
+    return impl_->test_transports_[1U] != nullptr
+               ? *impl_->test_transports_[1U]
+               : *impl_->transports_[1U];
 }
 
 const Transport& Q3U4Runtime::dev1() const noexcept
 {
-    return *impl_->transports_[0U];
+    return impl_->test_transports_[0U] != nullptr
+               ? *impl_->test_transports_[0U]
+               : *impl_->transports_[0U];
 }
 
 const Transport& Q3U4Runtime::dev2() const noexcept
 {
-    return *impl_->transports_[1U];
+    return impl_->test_transports_[1U] != nullptr
+               ? *impl_->test_transports_[1U]
+               : *impl_->transports_[1U];
 }
 
 std::string_view Q3U4Runtime::base_serial() const noexcept
@@ -1790,6 +1821,8 @@ Q3U4Runtime::Impl::~Impl() noexcept
     // transport-before-session/API invariant auditable and deterministic.
     transports_[1U].reset();
     transports_[0U].reset();
+    test_transports_[1U].reset();
+    test_transports_[0U].reset();
     if (state_ != nullptr && state_->abandoned.load()) {
         // A pending callback may still reach the leaked transfer state. Keep only the
         // API/context/gate graph alive; acquisition-time FdSyscalls is never callback-owned.

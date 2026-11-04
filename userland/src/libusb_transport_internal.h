@@ -408,6 +408,7 @@ struct Q3U4Runtime::Impl final {
     std::unique_ptr<FdSyscalls> syscalls_;
     // transports_[1] is null for a single-bridge model.
     std::array<std::unique_ptr<LibusbTransport>, 2U> transports_;
+    std::array<std::unique_ptr<Transport>, 2U> test_transports_;
     std::array<UsbLocation, 2U> locations_{};
     std::string base_serial_;
     DeviceModel model_ = DeviceModel::px_q3u4;
@@ -427,6 +428,9 @@ public:
     static Result<std::unique_ptr<Q3U4Runtime>> create_shutdown_fixture(
         std::unique_ptr<LibusbApi> api,
         const std::array<LibusbApi::Handle, 2U>& handles) noexcept;
+    static Result<std::unique_ptr<Q3U4Runtime>> create_fake_q3u4(
+        std::unique_ptr<Transport> dev1, std::unique_ptr<Transport> dev2,
+        std::string_view base_serial) noexcept;
 };
 
 }  // namespace px4::userland

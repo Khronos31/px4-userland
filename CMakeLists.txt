@@ -432,7 +432,7 @@ if(PX4_BUILD_L3_ADAPTER)
     )
     target_compile_features(px4_l3_owner_stream_fixture PRIVATE cxx_std_17)
     target_link_libraries(px4_l3_owner_stream_fixture PRIVATE
-        px4_l3_adapter Threads::Threads)
+        px4_l3_adapter px4_userland_host_libusb_transport Threads::Threads)
     px4_enable_project_warnings(px4_l3_owner_stream_fixture)
     add_test(NAME px4_l3_owner_stream_fixture
              COMMAND px4_l3_owner_stream_fixture)
@@ -1313,6 +1313,49 @@ endif()
 if(PX4_BUILD_L3_ADAPTER AND TARGET px4d)
     target_link_libraries(px4d PRIVATE px4_l3_adapter)
     target_compile_definitions(px4d PRIVATE PX4_L3_DAEMON=1)
+
+    if(UNIX AND PX4_BUILD_TESTS)
+        add_executable(px4d-l3-fake-usb
+            userland/tools/px4d.cpp
+            userland/tools/px4d_fake_usb.cpp
+            userland/tools/px4d_list_format.cpp
+            userland/tools/px4d_listener_error.cpp
+            userland/tools/px4ctl_format.cpp
+            userland/tools/px4d_signals.cpp
+            userland/src/px4d_args.cpp
+            userland/src/it930x_test_access.cpp
+            userland/src/q3u4_stream.cpp
+        )
+        target_link_libraries(px4d-l3-fake-usb PRIVATE
+            px4_userland_host_backends
+            px4_userland_host_libusb_transport
+            px4_l3_adapter
+            dtv::host_listener_context
+            dtv::host_card_t1
+            dtv::identity
+            dtv::json
+        )
+        target_include_directories(px4d-l3-fake-usb PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/tools
+            ${dtv_userland_core_SOURCE_DIR}/adapters/host_facade/include
+            ${dtv_userland_core_SOURCE_DIR}/adapters/host_daemon/include
+            ${dtv_userland_core_SOURCE_DIR}/include
+        )
+        target_compile_definitions(px4d-l3-fake-usb PRIVATE
+            PX4_USERLAND_PRODUCT_VERSION="${PROJECT_VERSION}"
+            DTV_USERLAND_CORE_VERSION="${DTV_USERLAND_CORE_VERSION}"
+            PX4_L3_DAEMON=1
+            PX4_L3_FAKE_USB_DAEMON=1
+        )
+        target_compile_features(px4d-l3-fake-usb PRIVATE cxx_std_17)
+        px4_enable_project_warnings(px4d-l3-fake-usb)
+
+        add_test(NAME px4_l3_owner_stream_ipc_fixture COMMAND sh
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test-l3-owner-stream-ipc.sh"
+            "${CMAKE_CURRENT_BINARY_DIR}")
+    endif()
 endif()
 
 if(PX4_BUILD_TOOLS)

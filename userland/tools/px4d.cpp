@@ -39,6 +39,11 @@
 #include "l3_q3u4_owner_backend.h"
 #include "l3_runtime_usb_port.h"
 #endif
+#if defined(PX4_L3_FAKE_USB_DAEMON)
+#include "px4d_fake_usb.h"
+#include "it930x_test_access.h"
+#include "libusb_transport_internal.h"
+#endif
 
 #include <dtv/userland/host_listener_context/enclosure_context.h>
 #include <dtv/userland/host_runtime/family.h>
@@ -54,6 +59,10 @@
 #include <string_view>
 #include <thread>
 #include <vector>
+#if defined(PX4_L3_FAKE_USB_DAEMON)
+#include <poll.h>
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -413,6 +422,21 @@ int serve_core(const Px4dArguments& arguments, const std::string& base_serial,
         std::fprintf(stderr, "signal setup failed\n");
         return 70;
     }
+#if defined(PX4_L3_FAKE_USB_DAEMON)
+    std::thread stdin_eof_monitor([] {
+        char byte = 0;
+        while (!px4::userland::px4d::stop_requested()) {
+            pollfd input{STDIN_FILENO, POLLIN | POLLHUP, 0};
+            const int ready = ::poll(&input, 1U, 100);
+            if (ready < 0) continue;
+            if (ready == 0) continue;
+            if (::read(STDIN_FILENO, &byte, 1U) == 0) {
+                px4::userland::px4d::request_stop();
+                break;
+            }
+        }
+    });
+#endif
 #if defined(_WIN32)
     px4::userland::cli::StdinEofMonitor eof_monitor;
     if (arguments.exit_on_stdin_eof &&
@@ -431,6 +455,9 @@ int serve_core(const Px4dArguments& arguments, const std::string& base_serial,
             break;
         }
     }
+#if defined(PX4_L3_FAKE_USB_DAEMON)
+    stdin_eof_monitor.join();
+#endif
     for (;;) {
         const auto closed = context.value()->close(Timeout{100U});
         if (!closed) {
@@ -503,7 +530,12 @@ int run_q3u4_l3(const Px4dArguments& arguments, Q3U4Runtime& runtime,
                 const std::string& base_serial) noexcept
 {
     const DeviceProfile& profile = device_profile(runtime.model());
-    L3Q3U4OwnerBackend product(profile, arguments.allow_lnb_power, true,
+    L3Q3U4OwnerBackend product(profile, arguments.allow_lnb_power,
+#if defined(PX4_L3_FAKE_USB_DAEMON)
+                               false,
+#else
+                               true,
+#endif
                                &firmware);
     L3RuntimeUsbPort usb_port(runtime);
     L3ProductAdapter product_adapter(product);
@@ -881,17 +913,25 @@ int main(int argc, char** argv)
 
     Logger logger(arguments.verbose ? LogLevel::debug : LogLevel::info, log_to_stderr);
     logger.log(LogLevel::debug, "loading firmware");
+#if defined(PX4_L3_FAKE_USB_DAEMON)
+    const FirmwareImage firmware = FirmwareTestAccess::make_image(ByteView{nullptr, 0U});
+#else
     FirmwareProvider firmware_provider(arguments.firmware);
-    const auto firmware = firmware_provider.load();
-    if (!firmware) {
+    const auto firmware_result = firmware_provider.load();
+    if (!firmware_result) {
         std::fprintf(stderr, "%s\n",
-                     tools::format_firmware_error(firmware.error()).c_str());
-        return exit_status(firmware.error());
+                     tools::format_firmware_error(firmware_result.error()).c_str());
+        return exit_status(firmware_result.error());
     }
+    const FirmwareImage firmware = firmware_result.value();
+#endif
     Result<std::unique_ptr<Q3U4Runtime>> runtime =
         Result<std::unique_ptr<Q3U4Runtime>>::failure(Error::INTERNAL);
     const Px4dOpenMode mode = px4d_open_mode(arguments);
     logger.log(LogLevel::debug, "opening USB enclosure");
+#if defined(PX4_L3_FAKE_USB_DAEMON)
+    runtime = make_fake_q3u4_runtime();
+#else
     if (mode == Px4dOpenMode::file_descriptors) {
         const std::vector<int> file_descriptors(
             arguments.file_descriptors.begin(),
@@ -908,6 +948,7 @@ int main(int argc, char** argv)
                 static_cast<std::ptrdiff_t>(arguments.usb_path_count));
         runtime = Q3U4Runtime::open_native(requested_base_serial, usb_paths);
     }
+#endif
     if (!runtime) {
         if (arguments.usb_selector && runtime.error() == Error::INVALID_ARGUMENT) {
             std::fprintf(stderr, "%s\n",
@@ -955,12 +996,12 @@ int main(int argc, char** argv)
     if (device_profile(model).bridge_count == 1U &&
         !device_profile(model).dual_system &&
         device_profile(model).receiver_count == ipc::kW3U4ReceiverCount) {
-        return run_w3u4(arguments, *runtime.value(), firmware.value(), base_serial);
+        return run_w3u4(arguments, *runtime.value(), firmware, base_serial);
     }
-    if (!single_bridge) return run_q3u4(arguments, *runtime.value(), firmware.value(), base_serial);
+    if (!single_bridge) return run_q3u4(arguments, *runtime.value(), firmware, base_serial);
     const DeviceProfile& profile = device_profile(model);
     if (profile.receiver_count == 1U)
-        return run_single_receiver(arguments, *runtime.value(), firmware.value(), base_serial);
-    return run_mlt5pe(arguments, *runtime.value(), firmware.value(), base_serial,
+        return run_single_receiver(arguments, *runtime.value(), firmware, base_serial);
+    return run_mlt5pe(arguments, *runtime.value(), firmware, base_serial,
                       profile.receiver_count, profile.dual_system);
 }
