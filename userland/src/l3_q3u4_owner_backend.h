@@ -10,6 +10,11 @@
 
 namespace px4::userland {
 
+class It930xController;
+class Q3U4FrontendEnclosure;
+class Q3U4StreamDataPlane;
+class TunerServiceBackend;
+
 // Production Q3U4 construction using owner-backed controller transports.
 // Standard px4d keeps its existing direct-runtime construction; this class is
 // the L3 build's controller/transport instance connection.
@@ -58,6 +63,13 @@ public:
     dtv_l3_result lnb_restore(std::uint32_t scope_id,
                               dtv_l3_restore_result* out) noexcept override;
     void abandon() noexcept;
+
+    // Assembly accessors for the standard daemon.  They expose the already
+    // owner-backed instances; they do not create another transport.
+    It930xController& dev1() noexcept;
+    Q3U4FrontendEnclosure& enclosure() noexcept;
+    TunerServiceBackend& tuner_backend() noexcept;
+    Q3U4StreamDataPlane& stream_plane() noexcept;
 
 private:
     struct Impl;

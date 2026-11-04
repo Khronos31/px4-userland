@@ -277,6 +277,26 @@ dtv_l3_result L3Q3U4OwnerBackend::lnb_set(
                : impl_->backend->lnb_set(scope_id, command, deadline_ns, out);
 }
 
+It930xController& L3Q3U4OwnerBackend::dev1() noexcept
+{
+    return *impl_->dev1;
+}
+
+Q3U4FrontendEnclosure& L3Q3U4OwnerBackend::enclosure() noexcept
+{
+    return *impl_->enclosure;
+}
+
+TunerServiceBackend& L3Q3U4OwnerBackend::tuner_backend() noexcept
+{
+    return *impl_->tuner;
+}
+
+Q3U4StreamDataPlane& L3Q3U4OwnerBackend::stream_plane() noexcept
+{
+    return *impl_->stream;
+}
+
 dtv_l3_result L3Q3U4OwnerBackend::lnb_restore(
     std::uint32_t scope_id, dtv_l3_restore_result* out) noexcept
 {

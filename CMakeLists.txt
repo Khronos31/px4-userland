@@ -358,6 +358,7 @@ if(PX4_BUILD_L3_ADAPTER)
         userland/src/l3_lnb_port.cpp
         userland/src/l3_owner_transport.cpp
         userland/src/l3_q3u4_owner_backend.cpp
+        userland/src/l3_runtime_usb_port.cpp
     )
     target_include_directories(px4_l3_adapter
         PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
@@ -1293,6 +1294,11 @@ if(TARGET px4_userland_posix_ipc)
         target_compile_features(px4d PRIVATE cxx_std_17)
         px4_enable_project_warnings(px4d)
     endif()
+endif()
+
+if(PX4_BUILD_L3_ADAPTER AND TARGET px4d)
+    target_link_libraries(px4d PRIVATE px4_l3_adapter)
+    target_compile_definitions(px4d PRIVATE PX4_L3_DAEMON=1)
 endif()
 
 if(PX4_BUILD_TOOLS)

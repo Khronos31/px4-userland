@@ -34,6 +34,12 @@
 #include "px4d_receiver_records.h"
 #include "px4d_signals.h"
 
+#if defined(PX4_L3_DAEMON)
+#include "l3_adapter.h"
+#include "l3_q3u4_owner_backend.h"
+#include "l3_runtime_usb_port.h"
+#endif
+
 #include <dtv/userland/host_listener_context/enclosure_context.h>
 #include <dtv/userland/host_runtime/family.h>
 #include <dtv/userland/records.h>
@@ -445,9 +451,121 @@ int serve_core(const Px4dArguments& arguments, const std::string& base_serial,
     return exit_status(loop_error);
 }
 
+
+#if defined(PX4_L3_DAEMON)
+struct L3DaemonFactoryContext final {
+    const dtv_l3_product_adapter* adapter = nullptr;
+    L3Q3U4OwnerBackend* product = nullptr;
+};
+
+dtv_l3_result l3_daemon_factory_create(
+    void* context, const dtv_l3_open_args*,
+    const dtv_l3_product_adapter** adapter_out, uint32_t* claim_count_out,
+    void** owner_out)
+{
+    auto* factory = static_cast<L3DaemonFactoryContext*>(context);
+    if (factory == nullptr || factory->adapter == nullptr ||
+        adapter_out == nullptr || claim_count_out == nullptr ||
+        owner_out == nullptr) {
+        return DTV_L3_INVALID;
+    }
+    *adapter_out = factory->adapter;
+    *claim_count_out = 2U;
+    *owner_out = factory;
+    return DTV_L3_OK;
+}
+
+void l3_daemon_factory_release(void* owner)
+{
+    auto* factory = static_cast<L3DaemonFactoryContext*>(owner);
+    if (factory != nullptr && factory->product != nullptr) {
+        factory->product->abandon();
+    }
+}
+
+bool wait_l3_releasable(dtv_l3_context* owner)
+{
+    dtv_l3_close_status status{};
+    for (unsigned int attempt = 0U; attempt < 1000U; ++attempt) {
+        if (dtv_l3_close_status_get(owner, &status) != DTV_L3_OK) {
+            return false;
+        }
+        if (status.releasable) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return false;
+}
+
+int run_q3u4_l3(const Px4dArguments& arguments, Q3U4Runtime& runtime,
+                const FirmwareImage& firmware,
+                const std::string& base_serial) noexcept
+{
+    const DeviceProfile& profile = device_profile(runtime.model());
+    L3Q3U4OwnerBackend product(profile, arguments.allow_lnb_power, true,
+                               &firmware);
+    L3RuntimeUsbPort usb_port(runtime);
+    L3ProductAdapter product_adapter(product);
+    L3UsbProviderAdapter usb_adapter(usb_port);
+    const dtv_l3_usb_provider usb = usb_adapter.provider();
+    const dtv_l3_product_adapter adapter = product_adapter.adapter();
+    L3DaemonFactoryContext factory_context{&adapter, &product};
+    const dtv_l3_factory factory{sizeof(dtv_l3_factory), &factory_context,
+                                 &l3_daemon_factory_create,
+                                 &l3_daemon_factory_release};
+    dtv_l3_open_args open_args{};
+    open_args.struct_size = sizeof(open_args);
+    open_args.usb_provider = &usb;
+    open_args.factory = &factory;
+    open_args.power_permission = arguments.allow_lnb_power ? 1U : 0U;
+    const dtv_l3_open_result opened = dtv_l3_open_with_args(&open_args);
+    if (opened.result != DTV_L3_ACCEPTED || opened.owner == nullptr ||
+        opened.op == nullptr) {
+        std::fprintf(stderr, "L3 open: %d\n", static_cast<int>(opened.result));
+        return exit_status(Error::INTERNAL);
+    }
+    dtv_l3_op_result open_result{};
+    if (dtv_l3_op_wait(opened.op, 30000U) != DTV_L3_OK ||
+        dtv_l3_op_poll(opened.op, &open_result) != DTV_L3_OK ||
+        open_result.result != DTV_L3_OK ||
+        dtv_l3_op_release(opened.op) != DTV_L3_OK) {
+        std::fprintf(stderr, "L3 initialize: %d\n",
+                     static_cast<int>(open_result.result));
+        (void)dtv_l3_close(opened.owner, 2000U);
+        (void)dtv_l3_context_release(opened.owner);
+        return exit_status(Error::INTERNAL);
+    }
+    dtv_l3_context* owner = opened.owner;
+
+    DaemonTime time;
+    Q3U4CardBackend card_backend(product.dev1(), product.enclosure());
+    It930xCardHardware card_hardware(product.dev1());
+    CardT1HardwareAdapter card_hardware_adapter(card_hardware);
+    CardT1TimeAdapter card_time_adapter(time);
+    CardT1Session card_session(card_hardware_adapter, card_time_adapter);
+    CardT1ProtocolSession protocol(card_session);
+    const int result = serve_core(
+        arguments, base_serial, profile.model, runtime,
+        product.tuner_backend(), card_backend, protocol, time,
+        product.stream_plane(), 2U);
+
+    (void)dtv_l3_close(owner, 5000U);
+    if (!wait_l3_releasable(owner) ||
+        dtv_l3_context_release(owner) != DTV_L3_OK) {
+        std::fprintf(stderr, "L3 release failed\n");
+        return exit_status(Error::INTERNAL);
+    }
+    return result;
+}
+#endif
+
 int run_q3u4(const Px4dArguments& arguments, Q3U4Runtime& runtime,
              const FirmwareImage& firmware, const std::string& base_serial) noexcept
 {
+#if defined(PX4_L3_DAEMON)
+    return run_q3u4_l3(arguments, runtime, firmware, base_serial);
+#else
     It930xController dev1(runtime.dev1());
     It930xController dev2(runtime.dev2());
     const auto initialized1 = dev1.initialize_q3u4(
@@ -493,6 +611,7 @@ int run_q3u4(const Px4dArguments& arguments, Q3U4Runtime& runtime,
     }
     return serve_core(arguments, base_serial, runtime.model(), runtime, tuner_backend,
                       backend, protocol, time, *stream.value(), 2U);
+#endif
 }
 
 // PX-W3U4 has no second bridge.  The Q3U4 coordinator still describes two
