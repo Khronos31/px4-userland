@@ -10,7 +10,71 @@ index eaf9400..eaf9400 100644
  #include <memory>
  #include <new>
  #include <utility>
-@@ -207,6 +207,13 @@ Result<void> roundtrip(ClientTransport& transport, std::uint16_t opcode,
+@@ -65,6 +66,11 @@ Result<void> exchange(ClientTransport& transport, std::uint16_t opcode,
+     if (!encoded) {
+         return Result<void>::failure(encoded.error());
+     }
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++    std::fprintf(stderr, "PX4_IPC_DIAG request begin opcode=0x%04x request=%u bytes=%zu\n",
++                 static_cast<unsigned int>(opcode), static_cast<unsigned int>(request_id),
++                 payload.size);
++#endif
+     const auto sent = transport.write_all(ByteView{workspace.outgoing.data(), encoded.value()});
+     if (!sent) {
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++        std::fprintf(stderr, "PX4_IPC_DIAG request write-error opcode=0x%04x error=%s\n",
++                     static_cast<unsigned int>(opcode), error_string(sent.error()));
++#endif
+         return Result<void>::failure(sent.error());
+     }
+@@ -83,6 +89,10 @@ Result<void> exchange(ClientTransport& transport, std::uint16_t opcode,
+     while (!reply.seen) {
+         const auto read = transport.read_some(
+             MutableByteView{workspace.input.data(), workspace.input.size()});
+         if (!read) {
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++            std::fprintf(stderr, "PX4_IPC_DIAG request read-error opcode=0x%04x error=%s\n",
++                         static_cast<unsigned int>(opcode), error_string(read.error()));
++#endif
+             if (read.error() == Error::DISCONNECTED) {
+                 const auto ended = receiver.finish();
+@@ -92,6 +102,10 @@ Result<void> exchange(ClientTransport& transport, std::uint16_t opcode,
+             return Result<void>::failure(read.error());
+         }
+         if (read.value() == 0U) {
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++            std::fprintf(stderr, "PX4_IPC_DIAG request eof opcode=0x%04x\n",
++                         static_cast<unsigned int>(opcode));
++#endif
+             const auto ended = receiver.finish();
+             return Result<void>::failure(ended ? Error::DISCONNECTED : ended.error());
+@@ -103,6 +117,10 @@ Result<void> exchange(ClientTransport& transport, std::uint16_t opcode,
+         }
+         const auto fed = receiver.feed(ByteView{workspace.input.data(), read.value()}, handler);
+         if (!fed) {
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++            std::fprintf(stderr, "PX4_IPC_DIAG request frame-error opcode=0x%04x error=%s\n",
++                         static_cast<unsigned int>(opcode), error_string(fed.error()));
++#endif
+             return Result<void>::failure(fed.error());
+         }
+     }
+     const auto finished = receiver.finish();
+     if (!finished) {
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++        std::fprintf(stderr, "PX4_IPC_DIAG request finish-error opcode=0x%04x error=%s\n",
++                     static_cast<unsigned int>(opcode), error_string(finished.error()));
++#endif
+         return Result<void>::failure(finished.error());
+     }
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++    std::fprintf(stderr, "PX4_IPC_DIAG request response opcode=0x%04x kind=%u bytes=%zu\n",
++                 static_cast<unsigned int>(opcode),
++                 static_cast<unsigned int>(reply.header.kind), reply.length);
++#endif
+     return Result<void>::success();
+ }
+@@ -207,6 +229,13 @@ Result<void> roundtrip(ClientTransport& transport, std::uint16_t opcode,
          if (!error) {
              return Result<void>::failure(error.error());
          }
@@ -24,7 +88,7 @@ index eaf9400..eaf9400 100644
          if (expected_epoch != nullptr && error.value().epoch != *expected_epoch) {
              return Result<void>::failure(Error::PROTOCOL_ERROR);
          }
-@@ -399,6 +399,10 @@ void fetch_status_with_required_features(ClientTransport& transport,
+@@ -399,6 +428,10 @@ void fetch_status_with_required_features(ClientTransport& transport,
      const Error list_error = decode_list_response_into(
          ByteView{workspace->payload.data(), reply.length}, result.snapshot.list);
      if (list_error != Error::OK) {
@@ -35,7 +99,7 @@ index eaf9400..eaf9400 100644
          fail(list_error);
          return;
      }
-@@ -412,5 +416,9 @@ void fetch_status_with_required_features(ClientTransport& transport,
+@@ -412,5 +445,9 @@ void fetch_status_with_required_features(ClientTransport& transport,
      const Error list_valid = validate_list_response(result.snapshot.list);
      if (list_valid != Error::OK) {
 +#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
@@ -45,7 +109,7 @@ index eaf9400..eaf9400 100644
          fail(list_valid);
          return;
      }
-@@ -446,6 +454,10 @@ void fetch_status_with_required_features(ClientTransport& transport,
+@@ -446,6 +483,10 @@ void fetch_status_with_required_features(ClientTransport& transport,
      const Error status_error = decode_status_response_into(
          ByteView{workspace->payload.data(), reply.length}, result.snapshot.status);
      if (status_error != Error::OK) {
@@ -56,7 +120,7 @@ index eaf9400..eaf9400 100644
          fail(status_error);
          return;
      }
-@@ -473,5 +485,9 @@ void fetch_status_with_required_features(ClientTransport& transport,
+@@ -473,5 +514,9 @@ void fetch_status_with_required_features(ClientTransport& transport,
      const Error status_valid = validate_status_response(result.snapshot.status, context);
      if (status_valid != Error::OK) {
 +#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
@@ -66,3 +130,38 @@ index eaf9400..eaf9400 100644
          fail(status_valid);
          return;
      }
+diff --git a/adapters/host_ts/px4_ts_core.cpp b/adapters/host_ts/px4_ts_core.cpp
+index eaf9400..eaf9400 100644
+--- a/adapters/host_ts/px4_ts_core.cpp
++++ b/adapters/host_ts/px4_ts_core.cpp
+@@ -1218,8 +1218,16 @@ static Result<Px4TsRunResult> run_wire_profile(
+     Px4TsFailureKind local_failure_kind = Px4TsFailureKind::ipc;
+     Px4TsFailureKind& result_failure_kind =
+         failure_kind != nullptr ? *failure_kind : local_failure_kind;
+-    if (!arguments.valid || !valid_arguments(arguments))
++    const bool run_arguments_valid = valid_arguments(arguments);
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++    std::fprintf(stderr, "PX4_IPC_DIAG runner validate input=%u product_cli=%u valid=%u\n",
++                 arguments.valid ? 1U : 0U, arguments.product_cli ? 1U : 0U,
++                 run_arguments_valid ? 1U : 0U);
++#endif
++    if (!arguments.valid || !run_arguments_valid)
+         return Result<Px4TsRunResult>::failure(Error::INVALID_ARGUMENT);
+@@ -1431,7 +1439,12 @@ static Result<Px4TsRunResult> run_wire_profile(
+     auto control = SocketStream::connect(
+         control_endpoint, Timeout{2000U},
+         diagnostics != nullptr ? &diagnostics->endpoint_connect : nullptr);
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++    std::fprintf(stderr, "PX4_IPC_DIAG control-connect result=%s\n",
++                 control ? "ok" : error_string(control.error()));
++#endif
+     if (!control) return Result<Px4TsRunResult>::failure(control.error());
+@@ -1477,6 +1490,11 @@ static Result<Px4TsRunResult> run_wire_profile(
+         : wire::begin_recording(control_transport, options,
+                                 Timeout{arguments.tune_timeout_ms + 6000U});
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++    std::fprintf(stderr, "PX4_IPC_DIAG begin-recording result=%s remote=%u\n",
++                 started ? "ok" : error_string(started.error),
++                 static_cast<unsigned int>(started.remote_error_code));
++#endif
+     if (!started) {
