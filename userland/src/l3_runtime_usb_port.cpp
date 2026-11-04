@@ -11,6 +11,13 @@
 
 namespace px4::userland {
 
+namespace {
+
+constexpr std::size_t kPendingRequestCount = 64U;
+constexpr std::uint32_t kStreamEventWaitMs = 50U;
+
+}  // namespace
+
 struct L3RuntimeUsbPort::Request final {
     dtv_l3_provider_binding* binding = nullptr;
     std::uint64_t transfer_id = 0U;
@@ -28,18 +35,12 @@ struct L3RuntimeUsbPort::Request final {
 struct L3RuntimeUsbPort::WorkerState final {
     std::mutex mutex;
     std::condition_variable changed;
-    std::array<std::unique_ptr<Request>, 64U> pending{};
+    std::array<std::unique_ptr<Request>, kPendingRequestCount + 1U> pending{};
     Request* active = nullptr;
     std::uint64_t next_sequence = 0U;
     bool stopping = false;
     std::unique_ptr<std::thread> thread;
 };
-
-namespace {
-
-constexpr std::uint32_t kStreamEventWaitMs = 50U;
-
-}  // namespace
 
 L3RuntimeUsbPort::L3RuntimeUsbPort(Q3U4Runtime& runtime) noexcept
     : L3RuntimeUsbPort(runtime.dev1(), runtime.dev2())
@@ -250,14 +251,14 @@ dtv_l3_result L3RuntimeUsbPort::submit(
         if (state->stopping) {
             return finish(DTV_L3_DISCONNECTED);
         }
-        std::size_t free_slot = state->pending.size();
-        for (std::size_t index = 0U; index < state->pending.size(); ++index) {
+        std::size_t free_slot = kPendingRequestCount;
+        for (std::size_t index = 0U; index < kPendingRequestCount; ++index) {
             if (state->pending[index] == nullptr) {
                 free_slot = index;
                 break;
             }
         }
-        if (free_slot == state->pending.size()) {
+        if (free_slot == kPendingRequestCount) {
             return finish(DTV_L3_BUSY);
         }
         pending->sequence = state->next_sequence++;
@@ -392,6 +393,7 @@ void L3RuntimeUsbPort::run(std::uint32_t claim_index) noexcept
         const bool stream_request = request->endpoint == kTsInEndpoint &&
                                     request->out_size == 0U;
         bool cancelled = false;
+        bool yielded_stream_request = false;
         {
             std::lock_guard<std::mutex> lock(state.mutex);
             cancelled = request->cancelled;
@@ -442,6 +444,33 @@ void L3RuntimeUsbPort::run(std::uint32_t claim_index) noexcept
                     Timeout{kStreamEventWaitMs});
                 if (!event) {
                     if (event.error() == Error::TIMEOUT) {
+                        std::lock_guard<std::mutex> lock(state.mutex);
+                        if (state.active == request.get()) {
+                            state.active = nullptr;
+                        }
+                        if (request->cancelled || state.stopping) {
+                            result = DTV_L3_CANCELLED;
+                        } else {
+                            std::size_t free_slot = state.pending.size();
+                            for (std::size_t index = 0U;
+                                 index < state.pending.size(); ++index) {
+                                if (state.pending[index] == nullptr) {
+                                    free_slot = index;
+                                    break;
+                                }
+                            }
+                            if (free_slot == state.pending.size()) {
+                                result = DTV_L3_BUSY;
+                            } else {
+                                request->sequence = state.next_sequence++;
+                                state.pending[free_slot] = std::move(request);
+                                yielded_stream_request = true;
+                            }
+                        }
+                        if (yielded_stream_request) {
+                            state.changed.notify_one();
+                            break;
+                        }
                         continue;
                     }
                     std::lock_guard<std::mutex> lock(state.mutex);
@@ -498,6 +527,10 @@ void L3RuntimeUsbPort::run(std::uint32_t claim_index) noexcept
                 transferred = read.value();
                 ++read_calls;
             }
+        }
+
+        if (yielded_stream_request) {
+            continue;
         }
 
         {

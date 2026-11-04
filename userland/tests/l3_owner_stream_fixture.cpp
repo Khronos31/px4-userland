@@ -22,11 +22,20 @@ using namespace px4::userland;
 
 class FakeStreamTransport final : public Transport {
 public:
-    Result<std::size_t> bulk_read(std::uint8_t, MutableByteView,
+    Result<std::size_t> bulk_read(std::uint8_t endpoint, MutableByteView output,
                                   Timeout,
                                   BulkReadObservation*) noexcept override
     {
-        return Result<std::size_t>::failure(Error::UNSUPPORTED);
+        if (endpoint != 0x81U || output.size == 0U || output.data == nullptr) {
+            return Result<std::size_t>::failure(Error::UNSUPPORTED);
+        }
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            output.data[0U] = 0x5aU;
+            ++bulk_read_calls;
+            changed_.notify_all();
+        }
+        return Result<std::size_t>::success(1U);
     }
 
     Result<std::size_t> bulk_write(std::uint8_t, ByteView,
@@ -49,13 +58,18 @@ public:
         return Result<void>::success();
     }
 
-    Result<StreamEvent> wait_stream(Timeout) noexcept override
+    Result<StreamEvent> wait_stream(Timeout timeout) noexcept override
     {
         std::unique_lock<std::mutex> lock(mutex_);
         ++wait_calls;
         wait_entered_ = true;
         changed_.notify_all();
-        changed_.wait(lock, [this] { return !active_ || !block_wait_; });
+        const bool resumed = changed_.wait_for(
+            lock, std::chrono::milliseconds(timeout.milliseconds),
+            [this] { return !active_ || !block_wait_; });
+        if (!resumed) {
+            return Result<StreamEvent>::failure(Error::TIMEOUT);
+        }
         if (!active_) {
             return Result<StreamEvent>::failure(Error::NOT_READY);
         }
@@ -103,10 +117,26 @@ public:
         });
     }
 
+    bool wait_until_bulk_read(std::chrono::milliseconds timeout) noexcept
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        return changed_.wait_for(lock, timeout, [this] {
+            return bulk_read_calls.load() != 0U;
+        });
+    }
+
+    void release_blocked_wait() noexcept
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        block_wait_ = false;
+        changed_.notify_all();
+    }
+
     std::atomic<unsigned int> start_calls{0U};
     std::atomic<unsigned int> wait_calls{0U};
     std::atomic<unsigned int> completed_calls{0U};
     std::atomic<unsigned int> cancel_calls{0U};
+    std::atomic<unsigned int> bulk_read_calls{0U};
 
 private:
     mutable std::mutex mutex_;
@@ -245,6 +275,8 @@ int main()
     bool stream_started = false;
     bool stream_read = false;
     bool stream_stopped = false;
+    bool control_read_progress = false;
+    bool control_read_ok = false;
     bool cancel_started = false;
     bool cancel_drained = false;
     if (opened_ok && product.transport != nullptr) {
@@ -255,6 +287,32 @@ int main()
                       event.value().data[0U] == 0x47U &&
                       usb_port.submit_calls == 7U;
         stream_stopped = static_cast<bool>(product.transport->stop_stream());
+
+        dev1.block_next_wait();
+        const bool timed_stream_started = static_cast<bool>(
+            product.transport->start_stream(StreamConfig{kTsInEndpoint, 188U, 6U}));
+        const bool timed_stream_wait_entered =
+            timed_stream_started && dev1.wait_until_entered();
+        std::array<std::uint8_t, 8U> control_data{};
+        Result<std::size_t> control_result =
+            Result<std::size_t>::failure(Error::INTERNAL);
+        std::thread control_reader([&product, &control_data, &control_result] {
+            if (product.transport != nullptr) {
+                control_result = product.transport->bulk_read(
+                    0x81U, MutableByteView{control_data.data(), control_data.size()},
+                    Timeout{2000U});
+            }
+        });
+        control_read_progress = timed_stream_wait_entered &&
+            dev1.wait_until_bulk_read(std::chrono::milliseconds(750U));
+        if (!control_read_progress) {
+            dev1.release_blocked_wait();
+        }
+        control_reader.join();
+        control_read_ok = control_read_progress && control_result &&
+                          control_result.value() == 1U &&
+                          control_data[0U] == 0x5aU;
+        const auto timed_stream_stopped = product.transport->stop_stream();
 
         dev1.block_next_wait();
         cancel_started = static_cast<bool>(product.transport->start_stream(
@@ -268,7 +326,8 @@ int main()
         const auto cancel_result = product.transport->cancel_stream();
         waiter.join();
         const auto stop_result = product.transport->stop_stream();
-        cancel_drained = entered && cancel_result && stop_result &&
+        cancel_drained = timed_stream_stopped && control_read_ok && entered &&
+                         cancel_result && stop_result &&
                          usb_port.completion_calls == usb_port.submit_calls &&
         dev1.cancel_calls.load() != 0U;
     }
@@ -281,16 +340,19 @@ int main()
                   release_context(opened.owner);
     }
     const bool ok = opened_ok && stream_started && stream_read &&
-                    stream_stopped && cancel_started && cancel_drained &&
+                    stream_stopped && control_read_progress && control_read_ok &&
+                    cancel_started && cancel_drained &&
                     cleaned;
     std::printf(
         "{\"open\":%s,\"start\":%s,\"read\":%s,\"stop\":%s,"
+        "\"control_progress\":%s,\"control_read\":%s,"
         "\"cancel_start\":%s,\"cancel_drain\":%s,\"submits\":%u,"
         "\"completions\":%u,\"urb_starts\":%u,\"urb_waits\":%u,"
         "\"cleaned\":%s,\"ok\":%s}\n",
         opened_ok ? "true" : "false", stream_started ? "true" : "false",
         stream_read ? "true" : "false", stream_stopped ? "true" : "false",
-        cancel_started ? "true" : "false",
+        control_read_progress ? "true" : "false",
+        control_read_ok ? "true" : "false", cancel_started ? "true" : "false",
         cancel_drained ? "true" : "false", usb_port.submit_calls.load(),
         usb_port.completion_calls.load(), dev1.start_calls.load(),
         dev1.wait_calls.load(),
