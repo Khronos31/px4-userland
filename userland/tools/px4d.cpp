@@ -98,17 +98,16 @@ void log_to_stderr(const LogRecord& record, void*) noexcept
                  static_cast<int>(record.message.size()), record.message.data());
 }
 
-int exit_status(Error error) noexcept
+constexpr int exit_status(Error error) noexcept
 {
     switch (error) {
     case Error::OK: return 0;
     case Error::INVALID_ARGUMENT: return 2;
     case Error::NOT_FOUND:
     case Error::NOT_READY:
-    case Error::NO_CARD:
     case Error::UNSUPPORTED: return 3;
-    case Error::BUSY:
-    case Error::RESOURCE_LIMIT: return 4;
+    case Error::NO_CARD: return 9;
+    case Error::BUSY: return 4;
     case Error::TIMEOUT: return 5;
     case Error::VERSION_MISMATCH:
     case Error::PROTOCOL_ERROR: return 6;
@@ -118,10 +117,14 @@ int exit_status(Error error) noexcept
     case Error::CARD_REMOVED:
     case Error::BUFFER_TOO_SMALL: return 9;
     case Error::FIRMWARE_REJECTED: return 10;
+    case Error::RESOURCE_LIMIT: return 70;
     case Error::INTERNAL: return 70;
     }
     return 70;
 }
+
+static_assert(exit_status(Error::NO_CARD) == 9);
+static_assert(exit_status(Error::RESOURCE_LIMIT) == 70);
 
 // `px4d --models`: static supported-model table; touches no USB device.
 int list_models() noexcept
