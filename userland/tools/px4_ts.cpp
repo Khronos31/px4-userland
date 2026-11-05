@@ -119,6 +119,10 @@ int main(int argc, char** argv)
         &matches_px4_serial_identity};
     const Px4TsArguments arguments =
         parse_px4_ts_product_arguments(argc, const_cast<const char* const*>(argv), profile);
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+    std::fprintf(stderr, "PX4_IPC_DIAG cli parsed valid=%u error=%s\n",
+                 arguments.valid ? 1U : 0U, arguments.error.c_str());
+#endif
     if (!arguments.valid) {
         std::fprintf(stderr, "argument error: %s\n", arguments.error.c_str());
         print_px4_ts_usage(profile, stderr);
@@ -154,6 +158,9 @@ int main(int argc, char** argv)
     PosixSignal signal;
     Px4TsFailureKind failure_kind = Px4TsFailureKind::ipc;
     Px4TsRunDiagnostics diagnostics;
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+    std::fprintf(stderr, "PX4_IPC_DIAG cli runner-enter\n");
+#endif
     const auto result = Px4TsRunner::run_wire(arguments, profile, output, clock, signal,
                                               &failure_kind, &diagnostics);
     const auto flushed = output.finish(signal);

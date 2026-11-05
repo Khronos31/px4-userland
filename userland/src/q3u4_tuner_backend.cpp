@@ -2,6 +2,10 @@
 #include "q3u4_tuner_backend.h"
 #include "px4_tuner_hz.h"
 
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+#include <cstdio>
+#endif
+
 namespace px4::userland {
 
 namespace {
@@ -103,15 +107,32 @@ Result<void> Q3U4FrontendTunerBackend::select_satellite_tsid(
 Result<void> Q3U4FrontendTunerBackend::close_receiver(
     std::uint8_t receiver) noexcept
 {
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+    std::fprintf(stderr,
+                 "PX4_OWNER_DIAG layer=tuner-backend op=close_receiver phase=call receiver=%u valid=%u satellite=%u\n",
+                 static_cast<unsigned>(receiver), valid_receiver(receiver) ? 1U : 0U,
+                 is_satellite(receiver) ? 1U : 0U);
+#endif
     Error first = Error::OK;
     if (is_satellite(receiver)) {
         const auto released = lnb_power_.release_receiver(receiver);
         if (!released) first = released.error();
-        if (released.error() == Error::DISCONNECTED)
+        if (released.error() == Error::DISCONNECTED) {
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+            std::fprintf(stderr,
+                         "PX4_OWNER_DIAG layer=tuner-backend op=close_receiver phase=return error=%s stage=lnb-release\n",
+                         error_string(first));
+#endif
             return Result<void>::failure(first);
+        }
     }
     const auto closed = enclosure_.close_receiver(receiver);
     if (!closed && first == Error::OK) first = closed.error();
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+    std::fprintf(stderr,
+                 "PX4_OWNER_DIAG layer=tuner-backend op=close_receiver phase=return error=%s stage=enclosure-close\n",
+                 error_string(first));
+#endif
     return first == Error::OK ? Result<void>::success()
                               : Result<void>::failure(first);
 }
@@ -184,25 +205,62 @@ Result<void> Q3U4FrontendTunerBackend::shutdown() noexcept
 Result<void> Q3U4FrontendTunerBackend::start_capture(
     std::uint8_t receiver, ipc::System system) noexcept
 {
-    if (!valid_receiver(receiver))
-        return Result<void>::failure(Error::INVALID_ARGUMENT);
-    if (system == ipc::System::ISDB_T)
-        return enclosure_.start_terrestrial_capture(receiver);
-    if (system == ipc::System::ISDB_S)
-        return enclosure_.start_satellite_capture(receiver);
-    return Result<void>::failure(Error::INVALID_ARGUMENT);
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+    const auto mapping = Q3U4FrontendEnclosure::map_receiver(receiver);
+    const char* route = "invalid";
+#endif
+    Result<void> result = Result<void>::failure(Error::INVALID_ARGUMENT);
+    if (valid_receiver(receiver)) {
+        if (system == ipc::System::ISDB_T) {
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+            route = "terrestrial";
+#endif
+            result = enclosure_.start_terrestrial_capture(receiver);
+        } else if (system == ipc::System::ISDB_S) {
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+            route = "satellite";
+#endif
+            result = enclosure_.start_satellite_capture(receiver);
+        }
+    }
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+    std::fprintf(stderr,
+                 "PX4_OWNER_DIAG layer=tuner-backend op=start_capture receiver=%u system=%u receiver-valid=%u route=%s mapping-valid=%u bridge=%u local=%u mapped-system=%u result=%s error=%s\n",
+                 static_cast<unsigned>(receiver), static_cast<unsigned>(system),
+                 valid_receiver(receiver) ? 1U : 0U, route,
+                 mapping ? 1U : 0U,
+                 mapping ? static_cast<unsigned>(mapping.value().bridge) : 255U,
+                 mapping ? static_cast<unsigned>(mapping.value().local_receiver) : 255U,
+                 mapping ? static_cast<unsigned>(mapping.value().system) : 255U,
+                 result ? "ok" : "error",
+                 result ? "OK" : error_string(result.error()));
+#endif
+    return result;
 }
 
 Result<void> Q3U4FrontendTunerBackend::stop_capture(
     std::uint8_t receiver, ipc::System system) noexcept
 {
-    if (!valid_receiver(receiver))
-        return Result<void>::failure(Error::INVALID_ARGUMENT);
-    if (system == ipc::System::ISDB_T)
-        return enclosure_.stop_terrestrial_capture(receiver);
-    if (system == ipc::System::ISDB_S)
-        return enclosure_.stop_satellite_capture(receiver);
-    return Result<void>::failure(Error::INVALID_ARGUMENT);
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+    std::fprintf(stderr,
+                 "PX4_OWNER_DIAG layer=tuner-backend op=stop_capture phase=call receiver=%u system=%u valid=%u\n",
+                 static_cast<unsigned>(receiver), static_cast<unsigned>(system),
+                 valid_receiver(receiver) ? 1U : 0U);
+#endif
+    Result<void> result = Result<void>::failure(Error::INVALID_ARGUMENT);
+    if (valid_receiver(receiver)) {
+        if (system == ipc::System::ISDB_T)
+            result = enclosure_.stop_terrestrial_capture(receiver);
+        else if (system == ipc::System::ISDB_S)
+            result = enclosure_.stop_satellite_capture(receiver);
+    }
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+    std::fprintf(stderr,
+                 "PX4_OWNER_DIAG layer=tuner-backend op=stop_capture phase=return result=%s error=%s\n",
+                 result ? "ok" : "error",
+                 result ? "OK" : error_string(result.error()));
+#endif
+    return result;
 }
 
 }  // namespace px4::userland

@@ -10,6 +10,9 @@
 
 #include "q3u4_frontend.h"
 
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+#include <cstdio>
+#endif
 #include <array>
 #include <vector>
 
@@ -731,20 +734,75 @@ Result<void> Q3U4FrontendBank::start_capture(std::uint8_t local_receiver,
 {
     std::lock_guard<std::mutex> lock(mutex_);
     begin_operation();
-    if (disconnected_) return Result<void>::failure(Error::DISCONNECTED);
-    if (!valid_local_receiver(local_receiver))
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+    const auto trace = [local_receiver, system](const char* stage,
+                                                 const Result<void>& result) noexcept {
+        std::fprintf(stderr,
+                     "PX4_OWNER_DIAG layer=frontend-bank op=start_capture stage=%s local=%u system=%u result=%s error=%s\n",
+                     stage, static_cast<unsigned>(local_receiver),
+                     static_cast<unsigned>(system), result ? "ok" : "error",
+                     result ? "OK" : error_string(result.error()));
+    };
+    const auto fail = [&trace](const char* stage, Error error) noexcept {
+        const auto result = Result<void>::failure(error);
+        trace(stage, result);
+        return result;
+    };
+    std::fprintf(stderr,
+                 "PX4_OWNER_DIAG layer=frontend-bank op=start_capture stage=enter local=%u system=%u state=%u disconnected=%u capturing=%u satellite-selected=%u\n",
+                 static_cast<unsigned>(local_receiver),
+                 static_cast<unsigned>(system),
+                 valid_local_receiver(local_receiver)
+                     ? static_cast<unsigned>(receiver_state_[local_receiver]) : 255U,
+                 disconnected_ ? 1U : 0U,
+                 valid_local_receiver(local_receiver) && any_capturing_locked()
+                     ? 1U : 0U,
+                 valid_local_receiver(local_receiver) &&
+                         satellite_selected_[local_receiver] ? 1U : 0U);
+#endif
+    if (disconnected_) {
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+        return fail("disconnected", Error::DISCONNECTED);
+#else
+        return Result<void>::failure(Error::DISCONNECTED);
+#endif
+    }
+    if (!valid_local_receiver(local_receiver)) {
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+        return fail("receiver-validation", Error::INVALID_ARGUMENT);
+#else
         return Result<void>::failure(Error::INVALID_ARGUMENT);
+#endif
+    }
     if (local_receiver < 2U ? system != Tc90522System::isdb_s
-                            : system != Tc90522System::isdb_t)
+                            : system != Tc90522System::isdb_t) {
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+        return fail("system-validation", Error::UNSUPPORTED);
+#else
         return Result<void>::failure(Error::UNSUPPORTED);
-    if (receiver_state_[local_receiver] != Q3U4ReceiverState::tuned)
+#endif
+    }
+    if (receiver_state_[local_receiver] != Q3U4ReceiverState::tuned) {
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+        return fail("tuned-state-validation", Error::NOT_READY);
+#else
         return Result<void>::failure(Error::NOT_READY);
-    if (system == Tc90522System::isdb_s && !satellite_selected_[local_receiver])
+#endif
+    }
+    if (system == Tc90522System::isdb_s && !satellite_selected_[local_receiver]) {
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+        return fail("satellite-selection-validation", Error::NOT_READY);
+#else
         return Result<void>::failure(Error::NOT_READY);
+#endif
+    }
 
     if (!any_capturing_locked() && purger_ != nullptr) {
         attempt(DiagnosticStage::psb_purge);
         const auto purged = purger_->purge();
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+        trace("psb-purge", purged);
+#endif
         if (!purged) {
             remember_failure(purged);
             return purged;
@@ -759,10 +817,16 @@ Result<void> Q3U4FrontendBank::start_capture(std::uint8_t local_receiver,
         // contract by treating a failed pin write as capture-pending.
         receiver_state_[local_receiver] = Q3U4ReceiverState::capturing;
         const auto result = tc_[local_receiver].enable_ts_pins_s(true);
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+        trace("satellite-ts-pin-enable", result);
+#endif
         if (!result) remember_failure(result);
         return result;
     }
     const auto result = tc_[local_receiver].enable_ts_pins_t(true);
+#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
+    trace("terrestrial-ts-pin-enable", result);
+#endif
     if (!result) remember_failure(result);
     if (result) receiver_state_[local_receiver] = Q3U4ReceiverState::capturing;
     return result;

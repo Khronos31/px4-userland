@@ -1,0 +1,134 @@
+diff --git a/adapters/host_listener_context/src/enclosure_context.cpp b/adapters/host_listener_context/src/enclosure_context.cpp
+index eaf9400..eaf9400 100644
+--- a/adapters/host_listener_context/src/enclosure_context.cpp
++++ b/adapters/host_listener_context/src/enclosure_context.cpp
+@@ -8,6 +8,7 @@
+ #include <array>
+ #include <atomic>
+ #include <chrono>
++#include <cstdio>
+ #include <limits>
+ #include <new>
+ #include <thread>
+@@ -86,7 +87,16 @@ struct EnclosureContext::Impl final {
+         bool close_after_write = false;
+         bool buffer_counted = false;
+         Result<void> on_frame(const wire::Frame& frame) noexcept override
+         {
+-            return owner->on_data_frame(index, frame);
++            const auto result = owner->on_data_frame(index, frame);
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++            if (!result)
++                std::fprintf(stderr, "PX4_IPC_DIAG server data-frame-error slot=%zu opcode=0x%04x request=%u error=%s\n",
++                             index, static_cast<unsigned int>(frame.header.opcode),
++                             static_cast<unsigned int>(frame.header.request_id),
++                             error_string(result.error()));
++#endif
++            return result;
+         }
+     };
+@@ -371,6 +381,10 @@ struct EnclosureContext::Impl final {
+     void close_control(std::size_t index) noexcept
+     {
+         ControlSlot& slot = controls[index];
+         if (!slot.used) return;
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++        std::fprintf(stderr, "PX4_IPC_DIAG server control-close slot=%zu waiting=%u response=%u close-after=%u\n",
++                     index, slot.waiting_response ? 1U : 0U,
++                     slot.response_pending ? 1U : 0U, slot.close_after_write ? 1U : 0U);
++#endif
+         if (slot.response_pending)
+             (void)bridge->response_sent(slot.bridge_slot, false);
+@@ -425,14 +439,26 @@ struct EnclosureContext::Impl final {
+         const auto read = io->read_some(slot.connection,
+             MutableByteView{input.data(), input.size()});
+         if (read.status == detail::IoStatus::would_block) return;
+         if (read.status == detail::IoStatus::eof) {
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++            std::fprintf(stderr, "PX4_IPC_DIAG server control-eof slot=%zu\n", index);
++#endif
+             (void)slot.receiver->finish();
+             close_control(index);
+             return;
+         }
+         if (read.status != detail::IoStatus::progress || read.transferred == 0U ||
+             read.transferred > input.size()) {
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++            std::fprintf(stderr, "PX4_IPC_DIAG server control-read-error slot=%zu status=%u bytes=%zu\n",
++                         index, static_cast<unsigned int>(read.status), read.transferred);
++#endif
+             close_control(index);
+             return;
+         }
+         const auto fed = slot.receiver->feed(
+             ByteView{input.data(), read.transferred}, slot);
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++        if (!fed)
++            std::fprintf(stderr, "PX4_IPC_DIAG server control-frame-error slot=%zu error=%s\n",
++                         index, error_string(fed.error()));
++#endif
+         if (!fed) close_control(index);
+@@ -455,8 +481,14 @@ struct EnclosureContext::Impl final {
+         const auto written = io->write_some(slot.connection,
+             ByteView{slot.output.data + slot.output_offset, remaining});
+         if (written.status == detail::IoStatus::would_block) return;
+         if (written.status != detail::IoStatus::progress || written.transferred == 0U ||
+             written.transferred > remaining) {
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++            std::fprintf(stderr, "PX4_IPC_DIAG server control-write-error slot=%zu status=%u bytes=%zu remaining=%zu\n",
++                         index, static_cast<unsigned int>(written.status),
++                         written.transferred, remaining);
++#endif
+             close_control(index);
+             return;
+@@ -469,6 +501,11 @@ struct EnclosureContext::Impl final {
+         slot.response_pending = false;
+         slot.close_after_write = false;
+         if (completed != Error::OK || close_after) {
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++            std::fprintf(stderr, "PX4_IPC_DIAG server control-response-finished slot=%zu error=%s close-after=%u\n",
++                         index, error_string(completed), close_after ? 1U : 0U);
++#endif
+             close_control(index);
+             return;
+@@ -570,6 +607,10 @@ struct EnclosureContext::Impl final {
+         slot.buffer_counted = true;
+         const std::size_t current = ts_buffer_current.fetch_add(
+             kDataBufferBytes, std::memory_order_relaxed) + kDataBufferBytes;
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++        std::fprintf(stderr, "PX4_IPC_DIAG server data-accepted slot=%zu\n", index);
++#endif
+         std::size_t high = ts_buffer_high_water.load(std::memory_order_relaxed);
+@@ -585,10 +626,18 @@ struct EnclosureContext::Impl final {
+     Result<void> on_data_frame(std::size_t index, const wire::Frame& frame) noexcept
+     {
+         DataSlot& slot = data_slots[index];
+         if (!slot.used || slot.attach_pending || slot.attached ||
+             slot.output_size != 0U || frame.header.kind != wire::Kind::request ||
+             frame.header.opcode != wire::kOpcodeAttachStream)
+             return Result<void>::failure(Error::PROTOCOL_ERROR);
+         const auto request = wire::decode_attach_request(frame.payload);
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++        std::fprintf(stderr, "PX4_IPC_DIAG server attach-request slot=%zu opcode=0x%04x request=%u decode=%s\n",
++                     index, static_cast<unsigned int>(frame.header.opcode),
++                     static_cast<unsigned int>(frame.header.request_id),
++                     request ? "ok" : error_string(request.error()));
++#endif
+         if (!request) return Result<void>::failure(request.error());
+@@ -601,6 +650,10 @@ struct EnclosureContext::Impl final {
+         const Error prepared = bridge->prepare_data_attach(
+             slot.bridge, slot.control_slot, request.value(), family->time().monotonic_ms());
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++        std::fprintf(stderr, "PX4_IPC_DIAG server attach-prepare slot=%zu result=%s\n",
++                     index, error_string(prepared));
++#endif
+         if (prepared != Error::OK) {
+@@ -638,6 +691,10 @@ struct EnclosureContext::Impl final {
+             const auto attached = bridge->take_data_attach_result(slot.bridge);
+             if (!attached.ready) continue;
+             slot.attach_pending = false;
++#if defined(DTV_USERLAND_IPC_DIAGNOSTICS)
++            std::fprintf(stderr, "PX4_IPC_DIAG server attach-result slot=%zu error=%s\n",
++                         i, error_string(attached.error));
++#endif
+             if (attached.error != Error::OK) {

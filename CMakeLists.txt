@@ -27,6 +27,8 @@ option(PX4_RELEASE_PX4D_NO_BUILD_ID
 option(PX4_BUILD_PCSC_IFD "Build the POSIX PC/SC IFD Handler when headers are available" ON)
 option(PX4_REQUIRE_PCSC_IFD "Fail configuration when the PC/SC IFD Handler cannot be built" OFF)
 option(PX4_BUILD_WINSCARD "Build the Windows B25-compatible app-local WinSCard DLL" ON)
+option(PX4_BUILD_L3_ADAPTER
+    "Build the experimental common L3 adapter and its contract tests" OFF)
 set(PX4_ANDROID_NDK_ROOT_MAP "" CACHE PATH
     "Android NDK root to remove from compiler debug paths")
 set(PX4_ANDROID_LINK_MAP_DIR "" CACHE PATH
@@ -149,6 +151,10 @@ if(WIN32 AND PX4_BUILD_WINSCARD)
     set(DTV_USERLAND_BUILD_WINDOWS_WINSCARD ON)
 else()
     set(DTV_USERLAND_BUILD_WINDOWS_WINSCARD OFF)
+endif()
+if(PX4_BUILD_L3_ADAPTER)
+    set(DTV_USERLAND_BUILD_L3_OWNER ON CACHE BOOL
+        "Build the isolated Core L3 owner/product integration library" FORCE)
 endif()
 px4_add_dtv_userland_core()
 file(STRINGS "${dtv_userland_core_SOURCE_DIR}/CMakeLists.txt" DTV_CORE_PROJECT_LINE
@@ -336,6 +342,145 @@ if(PX4_ENABLE_LIBUSB)
     target_compile_features(px4_userland_host_backends PRIVATE cxx_std_17)
     target_link_libraries(px4_userland_host_backends PRIVATE px4_userland_device_core)
     px4_enable_project_warnings(px4_userland_host_backends)
+endif()
+
+if(PX4_BUILD_L3_ADAPTER)
+    enable_language(C)
+    if(NOT TARGET dtv_userland_l3_owner)
+        message(FATAL_ERROR
+            "PX4_BUILD_L3_ADAPTER requires the shared Core L3 owner target; "
+            "use the Core branch that provides dtv_userland_l3_owner")
+    endif()
+
+    add_library(px4_l3_adapter STATIC
+        userland/src/l3_adapter.cpp
+        userland/src/l3_backend_product.cpp
+        userland/src/l3_lnb_port.cpp
+        userland/src/l3_owner_transport.cpp
+        userland/src/l3_q3u4_owner_backend.cpp
+        userland/src/l3_runtime_usb_port.cpp
+    )
+    target_include_directories(px4_l3_adapter
+        PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
+            ${dtv_userland_core_SOURCE_DIR}/adapters/host_daemon/include
+            ${dtv_userland_core_SOURCE_DIR}/include
+    )
+    target_compile_features(px4_l3_adapter PUBLIC cxx_std_17)
+    target_link_libraries(px4_l3_adapter
+        PUBLIC px4_userland_core dtv_userland_l3_owner Threads::Threads
+    )
+    px4_enable_project_warnings(px4_l3_adapter)
+
+    add_executable(px4_l3_contract_tests
+        userland/tests/l3_strict_consumer.c
+        userland/tests/l3_test_harness.cpp
+    )
+    target_include_directories(px4_l3_contract_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/tests
+    )
+    target_compile_features(px4_l3_contract_tests PRIVATE cxx_std_17)
+    target_link_libraries(px4_l3_contract_tests PRIVATE
+        px4_l3_adapter Threads::Threads)
+    set_target_properties(px4_l3_contract_tests PROPERTIES
+        C_STANDARD 11
+        C_STANDARD_REQUIRED YES
+        C_EXTENSIONS NO
+    )
+    enable_testing()
+    add_test(NAME px4_l3_contract_tests COMMAND px4_l3_contract_tests)
+
+    add_executable(px4_l3_lnb_inheritance_tests
+        userland/tests/l3_lnb_inheritance_tests.cpp
+    )
+    target_include_directories(px4_l3_lnb_inheritance_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
+    )
+    target_compile_features(px4_l3_lnb_inheritance_tests PRIVATE cxx_std_17)
+    target_link_libraries(px4_l3_lnb_inheritance_tests PRIVATE
+        px4_l3_adapter Threads::Threads)
+    px4_enable_project_warnings(px4_l3_lnb_inheritance_tests)
+    add_test(NAME px4_l3_lnb_inheritance_tests
+             COMMAND px4_l3_lnb_inheritance_tests)
+
+    # G1/G2 fixture: adapter initialization performs one control transfer
+    # through the common owner before READY, plus an initialize-failure cleanup.
+    add_executable(px4_l3_owner_control_fixture
+        userland/tests/l3_owner_control_fixture.cpp
+    )
+    target_include_directories(px4_l3_owner_control_fixture PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
+    )
+    target_compile_features(px4_l3_owner_control_fixture PRIVATE cxx_std_17)
+    target_link_libraries(px4_l3_owner_control_fixture PRIVATE
+        px4_l3_adapter Threads::Threads)
+    px4_enable_project_warnings(px4_l3_owner_control_fixture)
+    add_test(NAME px4_l3_owner_control_fixture
+             COMMAND px4_l3_owner_control_fixture)
+
+    add_executable(px4_l3_owner_stream_fixture
+        userland/tests/l3_owner_stream_fixture.cpp
+    )
+    target_include_directories(px4_l3_owner_stream_fixture PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
+    )
+    target_compile_features(px4_l3_owner_stream_fixture PRIVATE cxx_std_17)
+    target_link_libraries(px4_l3_owner_stream_fixture PRIVATE
+        px4_l3_adapter px4_userland_host_libusb_transport Threads::Threads)
+    px4_enable_project_warnings(px4_l3_owner_stream_fixture)
+    add_test(NAME px4_l3_owner_stream_fixture
+             COMMAND px4_l3_owner_stream_fixture)
+
+    add_executable(px4_l3_owner_usb_backend_tests
+        userland/tests/l3_owner_usb_backend_fixture.cpp
+    )
+    target_include_directories(px4_l3_owner_usb_backend_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
+    )
+    target_compile_features(px4_l3_owner_usb_backend_tests PRIVATE cxx_std_17)
+    target_link_libraries(px4_l3_owner_usb_backend_tests PRIVATE
+        px4_l3_adapter px4_userland_device_core Threads::Threads)
+    px4_enable_project_warnings(px4_l3_owner_usb_backend_tests)
+    add_test(NAME px4_l3_owner_usb_backend_tests
+             COMMAND px4_l3_owner_usb_backend_tests)
+
+    add_executable(px4_l3_owner_q3u4_tune_lnb_tests
+        userland/tests/l3_owner_q3u4_tune_lnb_fixture.cpp
+    )
+    target_include_directories(px4_l3_owner_q3u4_tune_lnb_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
+    )
+    target_compile_features(px4_l3_owner_q3u4_tune_lnb_tests PRIVATE cxx_std_17)
+    target_link_libraries(px4_l3_owner_q3u4_tune_lnb_tests PRIVATE
+        px4_l3_adapter px4_userland_device_core Threads::Threads)
+    px4_enable_project_warnings(px4_l3_owner_q3u4_tune_lnb_tests)
+    add_test(NAME px4_l3_owner_q3u4_tune_lnb_tests
+             COMMAND px4_l3_owner_q3u4_tune_lnb_tests)
+
+    if(PX4_ENABLE_LIBUSB)
+        add_executable(px4_l3_real_probe userland/tests/l3_real_probe.cpp)
+        target_include_directories(px4_l3_real_probe PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
+            ${dtv_userland_core_SOURCE_DIR}/adapters/host_daemon/include
+            ${dtv_userland_core_SOURCE_DIR}/include
+        )
+        target_compile_features(px4_l3_real_probe PRIVATE cxx_std_17)
+        target_link_libraries(px4_l3_real_probe PRIVATE
+            px4_l3_adapter
+            px4_userland_host_backends
+            px4_userland_libusb_transport
+        )
+        px4_enable_project_warnings(px4_l3_real_probe)
+    endif()
 endif()
 
 # Filesystem AF_UNIX is a POSIX adapter, including Android API 24.  Keep its
@@ -1162,6 +1307,54 @@ if(TARGET px4_userland_posix_ipc)
         )
         target_compile_features(px4d PRIVATE cxx_std_17)
         px4_enable_project_warnings(px4d)
+    endif()
+endif()
+
+if(PX4_BUILD_L3_ADAPTER AND TARGET px4d)
+    target_link_libraries(px4d PRIVATE px4_l3_adapter)
+    target_compile_definitions(px4d PRIVATE PX4_L3_DAEMON=1)
+
+    if(UNIX AND PX4_BUILD_TESTS)
+        add_executable(px4d-l3-fake-usb
+            userland/tools/px4d.cpp
+            userland/tools/px4d_fake_usb.cpp
+            userland/tools/px4d_list_format.cpp
+            userland/tools/px4d_listener_error.cpp
+            userland/tools/px4ctl_format.cpp
+            userland/tools/px4d_signals.cpp
+            userland/src/px4d_args.cpp
+            userland/src/it930x_test_access.cpp
+            userland/src/q3u4_stream.cpp
+        )
+        target_link_libraries(px4d-l3-fake-usb PRIVATE
+            px4_userland_host_backends
+            px4_userland_host_libusb_transport
+            px4_l3_adapter
+            dtv::host_listener_context
+            dtv::host_card_t1
+            dtv::identity
+            dtv::json
+        )
+        target_include_directories(px4d-l3-fake-usb PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/src
+            ${CMAKE_CURRENT_SOURCE_DIR}/userland/tools
+            ${dtv_userland_core_SOURCE_DIR}/adapters/host_facade/include
+            ${dtv_userland_core_SOURCE_DIR}/adapters/host_daemon/include
+            ${dtv_userland_core_SOURCE_DIR}/include
+        )
+        target_compile_definitions(px4d-l3-fake-usb PRIVATE
+            PX4_USERLAND_PRODUCT_VERSION="${PROJECT_VERSION}"
+            DTV_USERLAND_CORE_VERSION="${DTV_USERLAND_CORE_VERSION}"
+            PX4_L3_DAEMON=1
+            PX4_L3_FAKE_USB_DAEMON=1
+        )
+        target_compile_features(px4d-l3-fake-usb PRIVATE cxx_std_17)
+        px4_enable_project_warnings(px4d-l3-fake-usb)
+
+        add_test(NAME px4_l3_owner_stream_ipc_fixture COMMAND sh
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test-l3-owner-stream-ipc.sh"
+            "${CMAKE_CURRENT_BINARY_DIR}")
     endif()
 endif()
 
